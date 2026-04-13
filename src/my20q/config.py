@@ -21,7 +21,7 @@ class Config:
         default_taxonomy = Path(__file__).parent / "taxonomy" / "data" / "tree.yaml"
         return cls(
             ollama_base_url=os.environ.get("MY20Q_OLLAMA_URL", "http://localhost:11434"),
-            ollama_model=os.environ.get("MY20Q_OLLAMA_MODEL", "llama3.2:3b"),
+            ollama_model=os.environ.get("MY20Q_OLLAMA_MODEL", "gemma3:12b"),
             ollama_timeout_s=float(os.environ.get("MY20Q_OLLAMA_TIMEOUT", "30")),
             taxonomy_path=Path(os.environ.get("MY20Q_TAXONOMY", str(default_taxonomy))),
             llm_enabled=os.environ.get("MY20Q_LLM", "1") != "0",

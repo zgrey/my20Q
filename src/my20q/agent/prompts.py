@@ -32,7 +32,12 @@ def rephrase_question_messages(question: str) -> list[LLMMessage]:
             "role": "user",
             "content": (
                 "Rephrase this yes/no question in simpler words for someone "
-                f"with aphasia. Keep it very short.\n\nQuestion: {question}"
+                "with aphasia. Keep it under six words if possible.\n\n"
+                "Preserve the original meaning exactly. If the question asks "
+                'about a desire or need ("need", "want", "would you like"), '
+                'do NOT change it to describe an ongoing action ("are you '
+                'taking", "are you doing").\n\n'
+                f"Question: {question}"
             ),
         },
     ]
