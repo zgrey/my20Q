@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "my20q"
+version = "0.1.0-beta"
+description = "Assistive game-based agent for accelerating communication in individuals with aphasia"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Zach Grey", email = "zachary.grey@nist.gov" }]
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+my20q = "my20q.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/my20q"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/my20q/taxonomy/data" = "my20q/taxonomy/data"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

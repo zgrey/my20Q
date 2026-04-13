@@ -1,0 +1,110 @@
+id: root
+label: What do you need?
+question: ""
+description: Top-level entry point. The patient picks one of the four categories.
+children:
+  - id: mental_health
+    label: Feelings
+    image: categories/mental_health.png
+    question: Is this about how you are feeling?
+    description: Emotional / mental state the patient wants to communicate.
+    children:
+      - id: mh_anxious
+        label: Worried or scared
+        image: arasaac/anxious.png
+        question: Are you feeling worried or scared?
+      - id: mh_sad
+        label: Sad
+        image: arasaac/sad.png
+        question: Are you feeling sad?
+      - id: mh_lonely
+        label: Lonely
+        image: arasaac/lonely.png
+        question: Would you like someone to be with you?
+      - id: mh_confused
+        label: Confused
+        image: arasaac/confused.png
+        question: Are things feeling confusing right now?
+  - id: physical_health
+    label: My body
+    image: categories/physical_health.png
+    question: Is this about your body?
+    description: Physical needs or discomfort.
+    children:
+      - id: ph_pain
+        label: Pain
+        image: arasaac/pain.png
+        question: Are you in pain?
+      - id: ph_tired
+        label: Tired
+        image: arasaac/tired.png
+        question: Are you feeling tired?
+      - id: ph_hungry
+        label: Hungry
+        image: arasaac/hungry.png
+        question: Are you hungry?
+      - id: ph_thirsty
+        label: Thirsty
+        image: arasaac/thirsty.png
+        question: Are you thirsty?
+      - id: ph_bathroom
+        label: Bathroom
+        image: arasaac/bathroom.png
+        question: Do you need the bathroom?
+      - id: ph_medication
+        label: Medicine
+        image: arasaac/medication.png
+        question: Do you need your medicine?
+  - id: emergency
+    label: Get help now
+    image: categories/emergency.png
+    question: Do you need help right now?
+    emergency: true
+    description: Urgent needs. The app short-circuits the dialogue and shows a help screen.
+    children:
+      - id: em_fall
+        label: I fell
+        image: arasaac/fall.png
+        question: Did you fall?
+        emergency: true
+      - id: em_chest
+        label: Chest pain
+        image: arasaac/chest_pain.png
+        question: Does your chest hurt?
+        emergency: true
+      - id: em_breathing
+        label: Trouble breathing
+        image: arasaac/breathing.png
+        question: Is it hard to breathe?
+        emergency: true
+      - id: em_call_family
+        label: Call family
+        image: arasaac/phone.png
+        question: Do you want to call family?
+        emergency: true
+  - id: general
+    label: Other
+    image: categories/general.png
+    question: Is it something else?
+    description: General comfort and engagement needs.
+    children:
+      - id: gen_hot
+        label: Too hot
+        image: arasaac/hot.png
+        question: Are you too hot?
+      - id: gen_cold
+        label: Too cold
+        image: arasaac/cold.png
+        question: Are you too cold?
+      - id: gen_talk
+        label: Want to talk
+        image: arasaac/talk.png
+        question: Would you like to talk with someone?
+      - id: gen_entertainment
+        label: Something to do
+        image: arasaac/activity.png
+        question: Would you like something to do?
+      - id: gen_tv
+        label: Watch TV
+        image: arasaac/tv.png
+        question: Would you like to watch television?
