@@ -15,6 +15,12 @@ class LLMUnavailable(RuntimeError):
 
 
 class LLMBackend(Protocol):
-    async def chat(self, messages: list[LLMMessage], *, max_tokens: int = 200) -> str: ...
+    async def chat(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int = 200,
+        json_mode: bool = False,
+    ) -> str: ...
 
     async def health(self) -> bool: ...

@@ -3,9 +3,9 @@ from my20q.taxonomy import Node, load_taxonomy
 
 def test_real_taxonomy_loads(real_taxonomy: Node) -> None:
     assert real_taxonomy.id == "root"
-    assert len(real_taxonomy.children) == 4
+    assert len(real_taxonomy.children) == 5
     top_ids = {c.id for c in real_taxonomy.children}
-    assert top_ids == {"mental_health", "physical_health", "emergency", "general"}
+    assert top_ids == {"mental_health", "physical_health", "emergency", "general", "my_people"}
 
 
 def test_emergency_flag_propagates_only_where_set(real_taxonomy: Node) -> None:

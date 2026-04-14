@@ -38,7 +38,7 @@ treatment recommendations.
 
 | Topic | Choice | Rationale |
 |-------|--------|-----------|
-| LLM runtime | **Ollama** | Simple HTTP API, easy model swap (Llama 3.2, Phi-4, Qwen) |
+| LLM runtime | **Ollama** | Simple HTTP API, easy model swap (default `gemma3:12b`; also Llama 3.2, Phi-4) |
 | LLM interface | **Abstracted behind `LLMBackend`** | llama.cpp / vLLM swap-in later if needed |
 | Backend framework | **FastAPI** | Async, typed, easy SSE, good Pydantic integration |
 | Frontend (Phase 2) | **PWA (Vite + vanilla TS or preact)** | Works on any tablet w/ browser; kiosk-friendly |
@@ -60,9 +60,15 @@ my20Q/
 │   └── clinical/                 # AAC references, aphasia literature
 ├── src/my20q/
 │   ├── __init__.py
-│   ├── api/                      # FastAPI app (Phase 2)
-│   ├── agent/                    # dialogue engine, prompt templates
-│   ├── llm/                      # Ollama client + abstract interface
+│   ├── __main__.py               # `python -m my20q` entry point
+│   ├── api/                      # FastAPI app (Phase 2, not yet present)
+│   ├── agent/
+│   │   ├── dialogue.py           # session state machine (reasoning + fallback)
+│   │   ├── reasoner.py           # LLM-driven action proposer (strict JSON)
+│   │   ├── prompts.py            # system prompts + templating
+│   │   └── safety.py             # emergency detector + output sanitizer
+│   ├── cli.py                    # Rich-based developer harness
+│   ├── llm/                      # LLMBackend protocol + Ollama + mock
 │   ├── taxonomy/                 # category/question tree + YAML data
 │   └── config.py
 ├── web/                          # PWA frontend (Phase 2)
@@ -79,19 +85,46 @@ my20Q/
 ## Development Workflow
 
 ```bash
-# Phase 1+ (once pyproject.toml exists):
 pip install -e ".[dev]"
-pytest
+pytest                           # 21 tests + 1 integration (gated)
 ruff check .
-python -m my20q.cli              # CLI dialogue harness
+python -m my20q                  # CLI harness, reasoning mode
+python -m my20q --no-llm         # CLI harness, fallback tree-walk mode
 ```
 
-Local LLM prerequisite (on cerberus):
+Local LLM prerequisite (on `cerberus` for Phase 2; on dev machines during
+Phase 1 iteration):
 
 ```bash
 ollama serve &
-ollama pull llama3.2:3b          # or phi-4-mini, qwen2.5:3b
+ollama pull gemma3:12b           # default; llama3.2:3b and phi4-mini also work
 ```
+
+Gate the integration test against a real Ollama instance:
+
+```bash
+MY20Q_INTEGRATION=1 pytest tests/test_llm_backends.py
+```
+
+## Dialogue Modes
+
+The session state machine in `agent/dialogue.py` dispatches through a single
+`DialogueSession.answer()` API but operates in one of two modes:
+
+- **Reasoning mode** (active when an `LLMBackend` is wired in). Each turn,
+  `Reasoner.next_action()` asks the LLM for a strict-JSON action —
+  `{"action": "question"|"guess", "content": "...", "rationale": "..."}` —
+  given the category and accumulated history. A `yes` answer on a `guess`
+  ends the session; the final turn is forced to `guess`. On malformed or
+  unsafe output the session transparently degrades to fallback mode.
+- **Fallback mode** (LLM unavailable or explicitly disabled). Deterministic
+  breadth-first walk of the taxonomy subtree under the chosen top category.
+  `yes` descends, `no` prunes, `not_sure` defers to end of queue, `kinda` is
+  treated as `yes`.
+
+Emergency categories/descendants short-circuit both modes to a hard-coded
+caregiver screen. Every LLM-originated patient-facing string is run through
+`safety.sanitize_llm_text()`.
 
 ## Git Workflow
 
@@ -105,7 +138,9 @@ These are **binding** design constraints — deviations require explicit discuss
 
 - **One question per screen.** Never multiple questions, never scrolling text.
 - **Huge tap targets.** Minimum 88 × 88 px; prefer filling a quadrant of the screen.
-- **Yes / No / Not sure.** Three buttons max. No free-text input from the patient.
+- **Yes / No / Kinda / Not sure.** Four buttons max. No free-text input from
+  the patient. `kinda` = "you're warm" — the reasoner uses it to stay in a
+  semantic neighborhood; in fallback mode it behaves like `yes`.
 - **High contrast, large type.** Target WCAG AAA (contrast ≥ 7:1). Minimum 24 px body.
 - **No time pressure.** No countdowns, no auto-advance, no "you've been idle" prompts.
 - **Pictograms + short text.** Every question and answer has a pictogram; text is a

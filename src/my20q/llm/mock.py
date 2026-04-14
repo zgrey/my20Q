@@ -12,7 +12,13 @@ class MockBackend:
         self.responder = responder or (lambda _msgs: "Okay.")
         self.calls: list[list[LLMMessage]] = []
 
-    async def chat(self, messages: list[LLMMessage], *, max_tokens: int = 200) -> str:
+    async def chat(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int = 200,
+        json_mode: bool = False,
+    ) -> str:
         self.calls.append(messages)
         return self.responder(messages)
 

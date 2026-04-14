@@ -1,10 +1,37 @@
 id: root
 label: What do you need?
 question: ""
-description: Top-level entry point. The patient picks one of the four categories.
+description: Top-level entry point. The patient picks one of the top-level categories.
 children:
+  - id: emergency
+    label: Get help now
+    image: categories/emergency.png
+    question: Do you need help right now?
+    emergency: true
+    description: Urgent needs. Always shown first. The app short-circuits the dialogue and shows a help screen.
+    children:
+      - id: em_fall
+        label: I fell
+        image: arasaac/fall.png
+        question: Did you fall?
+        emergency: true
+      - id: em_chest
+        label: Chest pain
+        image: arasaac/chest_pain.png
+        question: Does your chest hurt?
+        emergency: true
+      - id: em_breathing
+        label: Trouble breathing
+        image: arasaac/breathing.png
+        question: Is it hard to breathe?
+        emergency: true
+      - id: em_call_family
+        label: Call family
+        image: arasaac/phone.png
+        question: Do you want to call family?
+        emergency: true
   - id: mental_health
-    label: Feelings
+    label: My feelings
     image: categories/mental_health.png
     question: Is this about how you are feeling?
     description: Emotional / mental state the patient wants to communicate.
@@ -55,38 +82,49 @@ children:
         label: Medicine
         image: arasaac/medication.png
         question: Do you need your medicine?
-  - id: emergency
-    label: Get help now
-    image: categories/emergency.png
-    question: Do you need help right now?
-    emergency: true
-    description: Urgent needs. The app short-circuits the dialogue and shows a help screen.
+  - id: my_people
+    label: My People
+    image: categories/my_people.png
+    question: Is this about someone in your family?
+    description: Immediate-family titles. Replace per-patient in Phase 3 with actual names.
     children:
-      - id: em_fall
-        label: I fell
-        image: arasaac/fall.png
-        question: Did you fall?
-        emergency: true
-      - id: em_chest
-        label: Chest pain
-        image: arasaac/chest_pain.png
-        question: Does your chest hurt?
-        emergency: true
-      - id: em_breathing
-        label: Trouble breathing
-        image: arasaac/breathing.png
-        question: Is it hard to breathe?
-        emergency: true
-      - id: em_call_family
-        label: Call family
-        image: arasaac/phone.png
-        question: Do you want to call family?
-        emergency: true
+      - id: fam_spouse_wife
+        label: Wife
+        image: arasaac/wife.png
+        question: Do you want your wife?
+      - id: fam_spouse_husband
+        label: Husband
+        image: arasaac/husband.png
+        question: Do you want your husband?
+      - id: fam_mother
+        label: Mother
+        image: arasaac/mother.png
+        question: Do you want your mother?
+      - id: fam_father
+        label: Father
+        image: arasaac/father.png
+        question: Do you want your father?
+      - id: fam_daughter
+        label: Daughter
+        image: arasaac/daughter.png
+        question: Do you want your daughter?
+      - id: fam_son
+        label: Son
+        image: arasaac/son.png
+        question: Do you want your son?
+      - id: fam_sister
+        label: Sister
+        image: arasaac/sister.png
+        question: Do you want your sister?
+      - id: fam_brother
+        label: Brother
+        image: arasaac/brother.png
+        question: Do you want your brother?
   - id: general
     label: Other
     image: categories/general.png
     question: Is it something else?
-    description: General comfort and engagement needs.
+    description: General comfort and engagement needs. Always shown last as a catch-all.
     children:
       - id: gen_hot
         label: Too hot

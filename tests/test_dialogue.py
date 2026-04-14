@@ -9,7 +9,7 @@ def test_yes_path_reaches_confirmed_leaf(tiny_taxonomy: Node) -> None:
     assert r.node.id == "a1"  # first child probed
 
     r = session.answer(Answer.YES)
-    assert r.kind == "confirm_leaf"
+    assert r.kind == "guess"
     assert r.node.id == "a1"
 
     r = session.answer(Answer.YES)
@@ -30,12 +30,12 @@ def test_no_on_probe_advances_to_next_sibling(tiny_taxonomy: Node) -> None:
 def test_leaf_rejection_backs_up_and_tries_sibling(tiny_taxonomy: Node) -> None:
     session = DialogueSession(tiny_taxonomy, llm=None)
     session.select_category("cat_a")       # probe a1
-    session.answer(Answer.YES)              # descend into a1 (confirm_leaf)
+    session.answer(Answer.YES)              # descend into a1 (leaf guess)
     r = session.answer(Answer.NO)           # reject a1 leaf — probe next sibling
     assert r.kind == "question"
     assert r.node.id == "a2"
-    r = session.answer(Answer.YES)          # descend into a2 → confirm
-    assert r.kind == "confirm_leaf"
+    r = session.answer(Answer.YES)          # descend into a2 → guess
+    assert r.kind == "guess"
     assert r.node.id == "a2"
 
 

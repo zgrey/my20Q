@@ -18,13 +18,21 @@ class OllamaBackend:
         self.model = model
         self.timeout_s = timeout_s
 
-    async def chat(self, messages: list[LLMMessage], *, max_tokens: int = 200) -> str:
-        payload = {
+    async def chat(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int = 200,
+        json_mode: bool = False,
+    ) -> str:
+        payload: dict = {
             "model": self.model,
             "messages": messages,
             "stream": False,
             "options": {"num_predict": max_tokens, "temperature": 0.4},
         }
+        if json_mode:
+            payload["format"] = "json"
         try:
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 resp = await client.post(f"{self.base_url}/api/chat", json=payload)

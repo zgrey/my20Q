@@ -5,17 +5,13 @@ independently testable and produces a usable artifact.
 
 ## Phase 0 — Repo scaffolding ✅
 
-**Status**: in progress (this commit).
-
 Deliverables:
 
 - `CLAUDE.md` at repo root documenting architecture, decisions, UX/safety
   principles, and future ideas.
 - `docs/ROADMAP.md` (this file).
 
-No runnable code yet.
-
-## Phase 1 — Python backend MVP (CLI-testable)
+## Phase 1 — Python backend MVP (CLI-testable) ✅
 
 **Goal**: a working dialogue engine with Ollama, exercised from a terminal
 before any UI is built.
@@ -25,28 +21,36 @@ before any UI is built.
 2. `src/my20q/llm/ollama_client.py` — thin async client over `/api/chat`.
    Abstract `LLMBackend` Protocol so llama.cpp or vLLM swap in later.
 3. `src/my20q/taxonomy/` — initial YAML tree:
-   - 4 top categories: mental health, physical health, emergency, general
-     assistance.
-   - ~3 sublevels each, each node carrying `id`, `label`, `image_ref`,
-     `example_questions`, `terminal_actions`, optional `emergency: true`.
-4. `src/my20q/agent/dialogue.py` — session state machine:
-   - Seeded from current taxonomy node.
-   - Each turn: LLM proposes a yes/no/not-sure question scoped by the current
-     subtree. Candidate questions re-ranked by information gain (prefer
-     splits that halve the remaining leaves).
-   - `yes` → descend; `no` → prune; `not sure` → mark uncertain, try another
-     axis.
-   - Converge when one leaf remains or user accepts a proposed answer.
-5. `src/my20q/agent/prompts.py` — templated system prompt: short questions,
-   concrete concepts, no medical advice, always-available start-over hint.
-6. `python -m my20q.cli` — Rich-based CLI for fast iteration before UI exists.
-7. Safety layer — emergency detector surfaces a hard-coded caregiver/911
-   screen regardless of LLM state.
-8. Tests — unit tests with a mock LLM; optional integration test with a tiny
-   local model, gated by `MY20Q_INTEGRATION=1`.
+   - 5 top categories: `emergency` (pinned first), `mental_health`
+     ("My feelings"), `physical_health` ("My body"), `my_people`
+     (immediate-family titles), `general` ("Other", always pinned last).
+   - Each node carries `id`, `label`, `image`, `question`, optional
+     `description` and `emergency: true` flag.
+4. `src/my20q/agent/dialogue.py` — session state machine with two modes:
+   - **Reasoning mode** (LLM available): `Reasoner` drives the game. Each
+     turn, the LLM proposes a `question` or a concrete `guess` as strict JSON
+     given the accumulated history; the user answers `yes`/`no`/`kinda`/
+     `not_sure`. A `yes` on a guess ends the session.
+   - **Fallback mode** (LLM unreachable): deterministic breadth-first walk of
+     the taxonomy subtree under the chosen category. `yes` descends, `no`
+     prunes, `not_sure` defers, `kinda` is treated as `yes`.
+   - Emergency categories/descendants short-circuit to a hard-coded screen in
+     both modes. On final-turn or dead-end, a caregiver-facing summary is
+     generated via a constrained LLM call (or a static fallback).
+5. `src/my20q/agent/reasoner.py` — LLM-driven action proposer. Strict JSON
+   output, sanitized, with explicit "final turn must be a guess" enforcement.
+6. `src/my20q/agent/prompts.py` — templated system prompts for rephrasing,
+   path summaries, reasoning-mode action proposals, and game summaries.
+7. `python -m my20q` — Rich-based CLI harness with a **play again** loop,
+   `--no-llm` and `--max-turns` flags.
+8. Safety layer — emergency detector, LLM-output sanitizer (length / URL /
+   medical-advice filtering) shared across modes.
+9. Tests — unit tests with a mock LLM backend; integration test gated by
+   `MY20Q_INTEGRATION=1`.
 
-**Verification**: `pytest` passes; `python -m my20q.cli` completes a full
-dialogue against `llama3.2:3b` (or `phi-4-mini`) running via Ollama.
+**Verification**: `pytest` (21 passed, 1 integration skipped); `python -m
+my20q` completes a full dialogue against `gemma3:12b` via Ollama, or in
+`--no-llm` fallback mode against the bundled taxonomy.
 
 ## Phase 2 — Web UI (PWA) + FastAPI service
 
