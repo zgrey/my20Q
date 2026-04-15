@@ -83,10 +83,58 @@ children:
         image: arasaac/medication.png
         question: Do you need your medicine?
   - id: my_people
-    label: My People
+    label: My people
     image: categories/my_people.png
     question: Is this about someone in your family?
     description: Immediate-family titles. Replace per-patient in Phase 3 with actual names.
+    reasoning_hint: |
+      HARD EXCLUSION: never ask about physical or descriptive
+      attributes of these people — appearance, age, height, weight,
+      build, clothing, hair, where they live, etc. The patient
+      knows them well; those questions reveal nothing. If you
+      catch yourself forming such a question, discard it and ask
+      from the list below instead.
+
+      Every question in this category must fit exactly one of four
+      buckets about the patient's intent toward the person:
+
+        1. I need to do something TO or FOR them.
+           (call them, visit them, give them something, help them,
+           thank them, apologize, take them somewhere.)
+        2. They need to do something FOR or TO me.
+           (bring something, help me, stay with me, fix something,
+           take me somewhere.)
+        3. I need to convey information TO them.
+           (tell them news, share how I feel, warn them, remind
+           them of something, say I love them.)
+        4. I have a question FOR them.
+           (where are they, when are they coming, did they do X,
+           how are they feeling.)
+
+      Reasoning flow for each turn:
+
+      STEP A — if it is not yet clear which of the four buckets
+      applies, ask a yes/no question that splits among them. Good
+      splits: "Do you want to do something for them?" (1 vs 2-4),
+      "Do you need them to do something?" (2 vs 1,3,4), "Do you
+      want to tell them something?" (3 vs 4), "Do you want to ask
+      them something?" (4 vs 3).
+
+      STEP B — once the bucket is known, narrow on the specific
+      action (buckets 1-2) or the specific piece of information
+      (buckets 3-4) the patient wants to exchange.
+
+      STEP C — if the specific person (wife, husband, mother,
+      father, daughter, son, sister, brother) is not yet known
+      and it matters for the action or information in question,
+      ask a relation-splitting question (parent vs spouse vs
+      child vs sibling; male vs female relation). Never split
+      the person by physical traits.
+
+      Never guess "Your <relation>?" as a terminal answer — the
+      relation alone is never the answer. The answer is always a
+      specific action or a specific piece of information tied to
+      a person.
     children:
       - id: fam_spouse_wife
         label: Wife

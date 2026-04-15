@@ -88,6 +88,27 @@ HOW TO READ THE ANSWERS (in history):
   or a refinement of what got the "kinda".
 - "not_sure" — no information gained. Try a different axis entirely.
 
+EXPLORE vs EXPLOIT — the core dialogue philosophy:
+Every turn is a balance of two moves, like a reinforcement-learning policy:
+- EXPLOIT what this PASS has revealed: the CURRENT GAME's history, plus
+  any free-form seed context supplied up front (which may, at the
+  caregiver's explicit opt-in, include context carried in from earlier
+  passes of this same round), plus any caregiver-configured patient
+  profile (persistent, patient-specific priors). Bias toward the region
+  these signals point at.
+- EXPLORE an under-sampled dimension. Insert at least one question on
+  a facet you have not probed yet, to avoid getting stuck in a local
+  optimum that looked promising but was not the real target.
+- Rule of thumb: after 2-3 turns exploiting one direction, ask an
+  exploratory question on a different axis before exploiting further.
+- Each pass is independent by default. Do NOT assume the patient's
+  need this pass matches an earlier pass's outcome — if earlier
+  context is relevant, it will appear explicitly in the seed context
+  block below.
+- Never echo a known subject back as a guess. If seed context or a
+  category identifies WHAT the subject is, your job is to learn what
+  is still unclear ABOUT that subject — not to confirm the subject.
+
 GAME PACING:
 - Mix questions and guesses. A reasonable rhythm is 2-4 narrowing
   questions, then a guess, then adapt.
@@ -122,6 +143,7 @@ def game_reason_messages(
     *,
     final: bool = False,
     seed_context: str = "",
+    category_hint: str = "",
 ) -> list[LLMMessage]:
     """Ask the LLM for the next 20Q action given the game state.
 
@@ -130,18 +152,41 @@ def game_reason_messages(
     user (e.g. from the "Other" category prompt) describing what they
     want to communicate. When present, the LLM should use it to guide
     early guesses rather than asking redundant narrowing questions.
+    `category_hint` is optional category-scoped reasoning guidance
+    attached to the starting taxonomy node.
     """
     instruction = (
         f"Starting category: {category_label}\n"
         f"Turn {turn} of {max_turns}\n\n"
     )
+    if category_hint:
+        instruction += (
+            "CATEGORY-SCOPED REASONING GUIDANCE (applies to this entire "
+            "game):\n"
+            f"{category_hint.strip()}\n\n"
+        )
     if seed_context:
         instruction += (
             "The user provided this free-form context up front:\n"
             f'  "{seed_context}"\n\n'
-            "Use it to guide your next action. If the context already "
-            "identifies what they want, propose that as a guess early "
-            "instead of asking redundant questions.\n\n"
+            "TREAT THIS CONTEXT AS THE SUBJECT, NOT THE ANSWER. The subject "
+            "is already known - do NOT guess the subject back at the user "
+            "and do NOT ask whether they want the subject. Your job is to "
+            "learn what is still unclear ABOUT the subject so you can help "
+            "them communicate the specific thing they need or feel.\n\n"
+            "Before each turn, ask yourself: \"I know the subject. What do "
+            "I still not understand?\" Then ask a narrowing question about "
+            "the unknown dimension - for example the feeling, concern, "
+            "request, desired outcome, specific person, time, or object tied "
+            "to the subject. A guess is only appropriate once a concrete "
+            "specific beyond the subject itself has been narrowed down.\n\n"
+            "Anti-examples (do NOT do this):\n"
+            '  - context "wants to talk to son about something specific" -> '
+            'guess "Talk to your son?" (this just echoes the subject)\n'
+            "Good patterns:\n"
+            '  - question "Is it about their health?"\n'
+            '  - question "Do you want to share good news?"\n'
+            '  - question "Are you worried about something they are doing?"\n\n'
         )
     instruction += f"History so far:\n{_format_history(history)}\n\n"
     if final:

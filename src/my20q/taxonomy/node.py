@@ -23,6 +23,14 @@ class Node(BaseModel):
         default=None,
         description="Short context for the LLM; never shown to the patient.",
     )
+    reasoning_hint: str | None = Field(
+        default=None,
+        description=(
+            "Category-scoped guidance threaded into the reasoning-mode "
+            "prompt when this node is the starting category. Never shown "
+            "to the patient."
+        ),
+    )
     emergency: bool = False
     children: list[Node] = Field(default_factory=list)
 

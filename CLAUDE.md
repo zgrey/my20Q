@@ -126,6 +126,64 @@ Emergency categories/descendants short-circuit both modes to a hard-coded
 caregiver screen. Every LLM-originated patient-facing string is run through
 `safety.sanitize_llm_text()`.
 
+## Dialogue Philosophy — Explore vs Exploit
+
+Reasoning mode is shaped by a single cross-cutting principle, written into
+`GAME_SYSTEM_PROMPT` so every turn inherits it:
+
+> Given what I have learned about the subject at hand, always ask some new
+> exploratory questions while also exploiting what I have learned from the
+> current game plus any previous successes. Much like a reinforcement
+> learning policy.
+
+Concretely:
+
+**Terminology** (used throughout this doc, prompts, and memory):
+- A **round** is one `python -m my20q` process lifetime — from launch to quit.
+- A **pass** is a single play within a round (one iteration of the Play Again
+  loop, terminating in a confirmed guess, dead-end, or turn-limit).
+- A round contains one or more passes; separate CLI launches are separate rounds.
+
+Concretely:
+
+- **Exploit** this pass's signals: the CURRENT PASS's history, any free-form
+  seed context supplied up front, and — when configured — the
+  **caregiver-managed patient profile** (see below). Within a round, a
+  caregiver may also opt in (via the "Other" menu) to include context from
+  earlier successful passes — this is an explicit manual selection, never
+  automatic.
+- **Explore** at least one under-sampled dimension every 2-3 turns, even
+  when exploit signals are coherent — this is what prevents the agent from
+  converging on a false local optimum.
+- **Passes are independent by default.** Earlier passes in the same round
+  do NOT automatically become priors for the next pass. A patient's need
+  now may be unrelated to what they communicated ten minutes ago, and
+  implicit bleed-through could bury the real signal. The only cross-pass
+  carry is the explicit opt-in menu on the "Other" path.
+- **Rounds do not persist.** Nothing learned in one round (one CLI launch)
+  carries into the next round. There is no on-disk session history piped
+  back to the LLM. The only cross-round channel is the caregiver-configured
+  patient profile, which is patient-specific rather than session-specific.
+- **Never echo a known subject as a guess.** If the category or seed
+  context identifies *what* the subject is, the agent's job is to narrow
+  what is still unclear *about* it.
+
+### Patient priors: the caregiver profile (not past passes or past rounds)
+
+Patient-level priors — family names, medications, hobbies, dietary needs,
+frequent topics, sensory/comfort preferences — live in a
+**caregiver-configured profile** loaded at the start of every round. The
+profile is persistent across rounds for one patient and is the sanctioned
+channel for patient context reaching the LLM. Past pass outcomes are not
+used as implicit priors for subsequent passes, and past rounds never leak
+into later rounds — a patient's need changes freely from one interaction
+to the next, so letting history bleed through would bury the current signal.
+
+Status: the profile loader is Phase 3 scope (see `docs/ROADMAP.md`).
+Until it lands, patient context enters a pass only via the "Other"
+free-form prompt (caregiver-typed, per-pass, opt-in — with the option to
+pull in prior passes from the same round).
+
 ## Git Workflow
 
 - `main` is the protected deployment branch.

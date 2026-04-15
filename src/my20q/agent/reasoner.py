@@ -60,6 +60,7 @@ class Reasoner:
         max_turns: int,
         final: bool = False,
         seed_context: str = "",
+        category_hint: str = "",
     ) -> ReasonerAction:
         messages = prompts.game_reason_messages(
             category_label,
@@ -68,6 +69,7 @@ class Reasoner:
             max_turns,
             final=final,
             seed_context=seed_context,
+            category_hint=category_hint,
         )
         try:
             raw = await self.llm.chat(messages, max_tokens=200, json_mode=True)

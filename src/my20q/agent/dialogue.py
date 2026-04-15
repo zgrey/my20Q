@@ -161,6 +161,7 @@ class DialogueSession:
                     max_turns=self.max_turns,
                     final=final,
                     seed_context=self.seed_context,
+                    category_hint=self._category.reasoning_hint or "",
                 )
             )
         except ReasonerError as exc:

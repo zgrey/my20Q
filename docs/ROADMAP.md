@@ -30,7 +30,11 @@ before any UI is built.
    - **Reasoning mode** (LLM available): `Reasoner` drives the game. Each
      turn, the LLM proposes a `question` or a concrete `guess` as strict JSON
      given the accumulated history; the user answers `yes`/`no`/`kinda`/
-     `not_sure`. A `yes` on a guess ends the session.
+     `not_sure`. A `yes` on a guess ends the session. Turn-to-turn behavior
+     is governed by an explicit **explore / exploit** policy (see
+     `CLAUDE.md` → Dialogue Philosophy) — every turn mixes exploitation of
+     current-game signals (plus seed context and prior successes as
+     **priors**) with exploration of an under-sampled dimension.
    - **Fallback mode** (LLM unreachable): deterministic breadth-first walk of
      the taxonomy subtree under the chosen category. `yes` descends, `no`
      prunes, `not_sure` defers, `kinda` is treated as `yes`.
@@ -83,9 +87,20 @@ then from the tablet in kiosk mode. Lighthouse accessibility audit ≥ 95.
 1. Local-only session logging for caregiver review — taxonomy paths +
    timestamps, never free text.
 2. TTS output via `piper` (local, fast).
-3. Expand taxonomy with caregiver input; per-patient customization (family
-   names, medications, hobbies, favorite topics).
-4. Latency budget: < 1.5 s per question on cerberus-class hardware.
+3. **Caregiver-configured patient profile** — a per-patient config file
+   (YAML, e.g. `config/patients/<id>.yaml`) holding family names,
+   medications, hobbies, dietary/sensory preferences, frequent-need
+   shortcuts. Loaded at the start of every round (CLI launch) via
+   `--profile <id>` / env var, threaded into the reasoning prompt as
+   **persistent patient-level priors**. This is the sanctioned channel
+   for patient context across rounds; it replaces any temptation to
+   persist pass- or round-level history to disk as implicit priors
+   (see `CLAUDE.md` → Dialogue Philosophy for the round/pass
+   terminology and why cross-round bleed-through is excluded).
+4. Expand taxonomy with caregiver input. Per-patient taxonomy overlays
+   (e.g. the `my_people` category swaps in real family names from the
+   profile).
+5. Latency budget: < 1.5 s per question on cerberus-class hardware.
 
 ## Phase 4 — Native Linux tablet app (stretch)
 
