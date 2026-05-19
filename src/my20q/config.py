@@ -5,25 +5,63 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+Mode = Literal["training", "operational"]
+BackendChoice = Literal["ollama", "anthropic"]
 
 
 @dataclass(frozen=True)
 class Config:
+    """Process-wide settings. See `from_env` for the environment variables.
+
+    The privacy invariant (recording => real patient => local LLM) is
+    enforced at backend-selection time, not here — this object only
+    carries the raw settings.
+    """
+
     ollama_base_url: str
     ollama_model: str
     ollama_timeout_s: float
-    taxonomy_path: Path
+    anthropic_api_key: str | None
+    anthropic_model: str
+    llm_backend: BackendChoice
+    topics_path: Path
+    profile_path: Path | None
     llm_enabled: bool
-    max_turns: int
+    max_queries: int
+    mode: Mode
+    recording_dir: Path
+    recording_threshold_bytes: int
 
     @classmethod
     def from_env(cls) -> Config:
-        default_taxonomy = Path(__file__).parent / "taxonomy" / "data" / "tree.yaml"
+        default_topics = Path(__file__).parent / "topics" / "data" / "topics.yaml"
+
+        mode = os.environ.get("MY20Q_MODE", "training").strip().lower()
+        if mode not in ("training", "operational"):
+            raise ValueError(f"MY20Q_MODE must be 'training' or 'operational', got {mode!r}")
+
+        backend = os.environ.get("MY20Q_BACKEND", "ollama").strip().lower()
+        if backend not in ("ollama", "anthropic"):
+            raise ValueError(f"MY20Q_BACKEND must be 'ollama' or 'anthropic', got {backend!r}")
+
+        profile_env = os.environ.get("MY20Q_PROFILE", "").strip()
+
         return cls(
             ollama_base_url=os.environ.get("MY20Q_OLLAMA_URL", "http://localhost:11434"),
             ollama_model=os.environ.get("MY20Q_OLLAMA_MODEL", "gemma3:12b"),
             ollama_timeout_s=float(os.environ.get("MY20Q_OLLAMA_TIMEOUT", "30")),
-            taxonomy_path=Path(os.environ.get("MY20Q_TAXONOMY", str(default_taxonomy))),
+            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
+            anthropic_model=os.environ.get("MY20Q_ANTHROPIC_MODEL", "claude-opus-4-7"),
+            llm_backend=backend,  # type: ignore[arg-type]
+            topics_path=Path(os.environ.get("MY20Q_TOPICS", str(default_topics))),
+            profile_path=Path(profile_env) if profile_env else None,
             llm_enabled=os.environ.get("MY20Q_LLM", "1") != "0",
-            max_turns=int(os.environ.get("MY20Q_MAX_TURNS", "20")),
+            max_queries=int(os.environ.get("MY20Q_MAX_QUERIES", "20")),
+            mode=mode,  # type: ignore[arg-type]
+            recording_dir=Path(os.environ.get("MY20Q_DATA_DIR", "patient_data")),
+            recording_threshold_bytes=(
+                int(os.environ.get("MY20Q_RECORDING_THRESHOLD_MB", "25")) * 1024 * 1024
+            ),
         )

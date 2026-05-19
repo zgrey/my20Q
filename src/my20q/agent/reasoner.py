@@ -1,9 +1,11 @@
-"""LLM-driven 20 Questions agent.
+"""LLM-driven reasoner for a round.
 
-Given the game category and accumulated history, asks the LLM to propose
-the next action (a yes/no question or a specific guess) as strict JSON.
-Output is validated and sanitized; malformed or unsafe output raises
-`ReasonerError` so the caller can fall back gracefully.
+Given the topic and the round's history, asks the LLM for the next
+action — a yes/no `query` or a `synthesis` — as strict JSON. Output is
+validated, sanitized, and (for queries) run through the format auditor:
+a query that fails the audit triggers a bounded re-prompt loop with the
+auditor's reason fed back to the model. Output that still cannot be used
+raises `ReasonerError` so the engine degrades to fallback mode.
 """
 
 from __future__ import annotations
@@ -11,23 +13,28 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
 from my20q.agent import prompts
-from my20q.agent.safety import sanitize_llm_text
+from my20q.agent.auditor import audit_query
+from my20q.agent.safety import sanitize_llm_text, sanitize_utterance
 from my20q.llm.base import LLMBackend, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
+#: How many times a query failing the format audit is re-proposed.
+MAX_AUDIT_RETRIES = 2
+
 
 class ReasonerError(RuntimeError):
-    """Raised when the LLM output cannot be used. Caller should fall back."""
+    """Raised when LLM output cannot be used — the engine should fall back."""
 
 
 @dataclass
 class ReasonerAction:
-    kind: Literal["question", "guess"]
+    kind: Literal["query", "synthesis"]
     content: str
     rationale: str = ""
 
@@ -54,53 +61,117 @@ class Reasoner:
     async def next_action(
         self,
         *,
-        category_label: str,
+        topic_label: str,
         history: list[dict],
-        turn: int,
-        max_turns: int,
+        query_index: int,
+        max_queries: int,
         final: bool = False,
         seed_context: str = "",
-        category_hint: str = "",
+        profile_context: str = "",
+        topic_hint: str = "",
+        emotional_state: dict | None = None,
+        on_phase: Callable[[str], None] | None = None,
     ) -> ReasonerAction:
-        messages = prompts.game_reason_messages(
-            category_label,
+        """Propose the next action, re-prompting if a query fails the audit.
+
+        `on_phase`, when given, is called with a short progress label
+        ("thinking", "re-asking") — the API forwards these to the SSE
+        channel so the cockpit can show live progress.
+        """
+        corrections: list[str] = []
+        action: ReasonerAction | None = None
+        for attempt in range(MAX_AUDIT_RETRIES + 1):
+            if on_phase is not None:
+                on_phase("re-asking" if attempt else "thinking")
+            action = await self._propose(
+                topic_label=topic_label,
+                history=history,
+                query_index=query_index,
+                max_queries=max_queries,
+                final=final,
+                seed_context=seed_context,
+                profile_context=profile_context,
+                topic_hint=topic_hint,
+                emotional_state=emotional_state,
+                corrections=corrections,
+            )
+            if action.kind != "query":
+                return action  # a synthesis is a statement — no format audit
+            verdict = audit_query(action.content)
+            if verdict.ok:
+                if corrections:
+                    action.rationale = (
+                        f"(re-asked — {corrections[-1]}) {action.rationale}".strip()
+                    )
+                return action
+            log.info("auditor rejected query (%s) — re-prompting", verdict.reason)
+            corrections.append(verdict.reason)
+
+        # Retries exhausted — accept the best effort rather than dead-end the
+        # round, but flag it in the rationale so the caregiver sees it.
+        assert action is not None
+        log.warning(
+            "auditor: query still failing after %d retries — accepting", MAX_AUDIT_RETRIES
+        )
+        action.rationale = f"(auditor: not a clean yes/no) {action.rationale}".strip()
+        return action
+
+    async def _propose(
+        self,
+        *,
+        topic_label: str,
+        history: list[dict],
+        query_index: int,
+        max_queries: int,
+        final: bool,
+        seed_context: str,
+        profile_context: str,
+        topic_hint: str,
+        emotional_state: dict | None,
+        corrections: list[str],
+    ) -> ReasonerAction:
+        """One LLM call → a validated, sanitized action (no audit)."""
+        messages = prompts.reason_messages(
+            topic_label,
             history,
-            turn,
-            max_turns,
+            query_index,
+            max_queries,
             final=final,
             seed_context=seed_context,
-            category_hint=category_hint,
+            profile_context=profile_context,
+            topic_hint=topic_hint,
+            emotional_state=emotional_state,
+            corrections=corrections,
         )
         try:
-            raw = await self.llm.chat(messages, max_tokens=200, json_mode=True)
+            raw = await self.llm.chat(messages, max_tokens=240, json_mode=True)
         except LLMUnavailable as exc:
             raise ReasonerError(f"llm unreachable: {exc}") from exc
 
-        data: dict | None
         try:
-            data = json.loads(raw)
+            data: dict | None = json.loads(raw)
             if not isinstance(data, dict):
                 data = None
         except json.JSONDecodeError:
             data = _extract_json(raw)
-
         if data is None:
             raise ReasonerError(f"invalid JSON from LLM: {raw!r}")
 
         kind = data.get("action")
         content = data.get("content", "")
-        rationale = data.get("rationale", "") or ""
-        if kind not in ("question", "guess"):
-            raise ReasonerError(f"invalid action kind: {kind!r}")
+        rationale = str(data.get("rationale", "") or "")
+        if kind not in ("query", "synthesis"):
+            raise ReasonerError(f"invalid action: {kind!r}")
         if not isinstance(content, str) or not content.strip():
             raise ReasonerError("empty content")
+        if final and kind != "synthesis":
+            raise ReasonerError(f"final action must be a synthesis, got {kind!r}")
 
-        cleaned = sanitize_llm_text(content)
+        cleaned = (
+            sanitize_utterance(content)
+            if kind == "synthesis"
+            else sanitize_llm_text(content)
+        )
         if not cleaned:
             raise ReasonerError(f"sanitizer rejected content: {content!r}")
-
-        if final and kind != "guess":
-            # Enforce "final turn must be a guess".
-            raise ReasonerError(f"final-turn action was not a guess: {kind}")
-
-        return ReasonerAction(kind=kind, content=cleaned, rationale=str(rationale))
+        return ReasonerAction(kind=kind, content=cleaned, rationale=rationale[:240])

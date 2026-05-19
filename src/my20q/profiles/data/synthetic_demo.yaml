@@ -1,0 +1,11 @@
+# Synthetic development persona — NOT a real patient.
+#
+# `synthetic: true` is the privacy pivot: it permits the cloud (Opus)
+# backend and disables recording. Real patient profiles live outside the
+# package, in the git-ignored `patient_profiles/` directory.
+id: synthetic_demo
+display_name: Demo Persona
+synthetic: true
+context: >-
+  An older adult recovering from a stroke, living at home with a spouse.
+  Enjoys gardening and old films. For development trials only.

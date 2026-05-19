@@ -1,11 +1,12 @@
-"""Rich-based CLI harness for iterating on the dialogue engine.
+"""Rich CLI harness for the my20Q dialogue engine.
 
-Not patient-facing — this is a developer tool. The PWA (Phase 2) is
-what a patient actually uses.
+A developer tool, not patient-facing — the caregiver cockpit (web) is the
+real interface. Plays rounds against the engine: pick a topic, answer
+y/n/k/s (u to undo, q to quit), watch the reasoning, see the synthesized
+utterance.
 
-Each session plays until a terminal outcome (confirmed answer, 20-turn
-limit, emergency, or dead-end), then offers "play again?" so the agent
-loops back to the category picker instead of exiting.
+    python -m my20q              # reasoning mode (needs Ollama)
+    python -m my20q --no-llm     # deterministic fallback mode
 """
 
 from __future__ import annotations
@@ -13,105 +14,54 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from dataclasses import replace
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from my20q.agent.dialogue import Answer, DialogueSession, TurnResult
+from my20q.agent.dialogue import Answer, RoundEvent, Session
 from my20q.agent.safety import EMERGENCY_SCREEN
 from my20q.config import Config
-from my20q.llm.base import LLMBackend
-from my20q.llm.ollama_client import OllamaBackend
-from my20q.taxonomy import Node, load_taxonomy
+from my20q.llm import BackendRefused, select_backend
+from my20q.profiles import load_profile
+from my20q.topics import Topic, load_topics
 
 console = Console()
 
-
-def _build_llm(cfg: Config) -> LLMBackend | None:
-    if not cfg.llm_enabled:
-        console.print(
-            "[dim]LLM disabled. Using deterministic taxonomy walk "
-            "(questions only, no reasoning).[/dim]"
-        )
-        return None
-    backend = OllamaBackend(cfg.ollama_base_url, cfg.ollama_model, cfg.ollama_timeout_s)
-    if not asyncio.run(backend.health()):
-        console.print(
-            "[yellow]Ollama not reachable at "
-            f"{cfg.ollama_base_url} - continuing in fallback mode.[/yellow]"
-        )
-        return None
-    console.print(f"[green]Using Ollama model [bold]{cfg.ollama_model}[/bold][/green]")
-    return backend
+_ANSWERS = {"y": Answer.YES, "n": Answer.NO, "k": Answer.KINDA, "s": Answer.NOT_SURE}
 
 
-FREEFORM_CATEGORY_ID = "general"
+class _Quit(Exception):
+    """Raised when the user asks to quit at a prompt."""
 
 
-def _pick_category(root: Node) -> Node | None:
-    console.print(Panel.fit("[bold]my20Q[/bold] - what do you need/want?", style="cyan"))
-    for idx, child in enumerate(root.children, start=1):
-        tag = " [red](emergency)[/red]" if child.emergency else ""
-        console.print(f"  {idx}. {child.label}{tag}  [dim]({child.id})[/dim]")
+def _pick_topic(topics: list[Topic]) -> Topic:
+    console.print(Panel.fit("[bold]my20Q[/bold] — pick a topic", style="cyan"))
+    for i, topic in enumerate(topics, start=1):
+        tag = " [red](emergency)[/red]" if topic.emergency else ""
+        console.print(f"  {i}. {topic.label}{tag}  [dim]({topic.id})[/dim]")
     console.print("  q. quit")
-    choices = [str(i) for i in range(1, len(root.children) + 1)] + ["q"]
-    choice = Prompt.ask("Pick a category number (or q to quit)", choices=choices)
+    choices = [str(i) for i in range(1, len(topics) + 1)] + ["q"]
+    choice = Prompt.ask("Topic", choices=choices)
     if choice == "q":
-        return None
-    return root.children[int(choice) - 1]
+        raise _Quit
+    return topics[int(choice) - 1]
 
 
-def _truncate(text: str, limit: int = 60) -> str:
-    text = text.strip()
-    return text if len(text) <= limit else text[: limit - 3] + "..."
-
-
-def _gather_freeform_context(prior_contexts: list[str]) -> str:
-    """Prompt the user for the "Other" category seed, optionally prepending
-    one or more successful contexts carried over from earlier rounds.
-    Entering `q` at any prompt raises _QuitRequested."""
-    preamble = ""
-    if prior_contexts:
-        console.print("\n[bold]Include context from previous rounds?[/bold]")
-        for idx, ctx in enumerate(prior_contexts, start=1):
-            console.print(f"  {idx}. {_truncate(ctx)}")
-        console.print("  a. All of the above")
-        console.print("  n. None")
-        console.print("  q. quit")
-        choices = [str(i) for i in range(1, len(prior_contexts) + 1)] + ["a", "n", "q"]
-        choice = Prompt.ask("Pick one (q to quit)", choices=choices, default="n")
-        if choice == "q":
-            raise _QuitRequested()
-        if choice == "a":
-            preamble = " | ".join(prior_contexts)
-        elif choice != "n":
-            preamble = prior_contexts[int(choice) - 1]
-
-    detail = Prompt.ask(
-        "[bold]Explain the topic in any level of detail[/bold] [dim](q to quit)[/dim]",
-        default="",
-    ).strip()
-    if detail.lower() == "q":
-        raise _QuitRequested()
-    parts = [p for p in (preamble, detail) if p]
-    return " | ".join(parts)
-
-
-def _ask_answer() -> Answer:
-    raw = Prompt.ask(
-        "[bold]yes / no / kinda / not sure[/bold] [dim](q to quit)[/dim]",
-        choices=["y", "n", "k", "s", "q"],
-        default="y",
-    )
-    if raw == "q":
-        raise _QuitRequested()
-    return {
-        "y": Answer.YES,
-        "n": Answer.NO,
-        "k": Answer.KINDA,
-        "s": Answer.NOT_SURE,
-    }[raw]
+def _render_event(event: RoundEvent) -> None:
+    if event.kind == "query":
+        body = f"[dim]query {event.query_index} · {event.engine}[/dim]\n[bold]{event.text}[/bold]"
+        if event.rationale:
+            body += f"\n[dim italic]{event.rationale}[/dim italic]"
+        console.print(Panel.fit(body, style="cyan"))
+    elif event.kind == "synthesis":
+        console.print(
+            Panel.fit(
+                f"[dim]proposed message — 'y' confirms[/dim]\n[bold]“{event.text}”[/bold]",
+                style="magenta",
+            )
+        )
 
 
 def _render_emergency() -> None:
@@ -120,89 +70,65 @@ def _render_emergency() -> None:
     console.print(Panel(body, style="red", title="GET HELP"))
 
 
-def _render_turn(result: TurnResult) -> None:
-    tag = "Guess" if result.kind == "guess" else "Question"
-    header = f"[dim]turn {result.turn} - {tag}[/dim]"
-    body = f"{header}\n[bold]{result.content}[/bold]"
-    if result.rationale:
-        body += f"\n[dim italic]why: {result.rationale}[/dim italic]"
-    console.print(Panel.fit(body, style="cyan"))
-
-
-def _render_outcome(result: TurnResult) -> None:
-    path_labels = " > ".join(n.label for n in result.path if n.id != "root")
-    console.print(
-        Panel.fit(
-            f"[bold]Summary for caregiver:[/bold]\n{result.summary}\n\n"
-            f"[dim]Final: {result.content or path_labels}[/dim]",
-            style="green",
-        )
+def _ask_answer() -> str:
+    raw = Prompt.ask(
+        "[bold]y/n/k/s[/bold] [dim](u undo · q quit)[/dim]",
+        choices=["y", "n", "k", "s", "u", "q"],
+        default="y",
     )
+    if raw == "q":
+        raise _Quit
+    return raw
 
 
-def _play_one(
-    root: Node,
-    llm: LLMBackend | None,
-    max_turns: int,
-    prior_contexts: list[str],
-) -> TurnResult | None:
-    """Play one round. Returns the terminal TurnResult (or None when the
-    round ended in emergency/dead_end). Raises _QuitRequested if the user
-    selected quit at the category picker."""
-    chosen = _pick_category(root)
-    if chosen is None:
-        raise _QuitRequested()
-
-    seed_context = ""
-    if chosen.id == FREEFORM_CATEGORY_ID:
-        seed_context = _gather_freeform_context(prior_contexts)
-
-    session = DialogueSession(root, llm=llm, max_turns=max_turns, seed_context=seed_context)
-    result = session.select_category(chosen.id)
-
+async def _play_round(session: Session, topic: Topic) -> None:
+    rnd = session.start_round(topic.id)
+    event = await rnd.open()
     while True:
-        if result.kind == "emergency":
+        if event.kind == "emergency":
             _render_emergency()
-            return None
-        if result.kind == "dead_end":
+            return
+        if event.kind == "synthesized":
             console.print(
-                Panel(
-                    "I wasn't able to figure out what you need this round. "
-                    "Let's try again.",
-                    style="yellow",
-                )
+                Panel.fit(f"[bold]Synthesized:[/bold] “{event.text}”", style="green")
             )
-            return None
-        if result.kind == "answer":
-            _render_outcome(result)
-            return result
-        if result.kind in ("question", "guess"):
-            _render_turn(result)
-            result = session.answer(_ask_answer())
-            continue
-        raise AssertionError(f"unhandled turn kind: {result.kind}")
+            return
+        if event.kind == "abandoned":
+            console.print(
+                Panel("Round ended without a confirmed message.", style="yellow")
+            )
+            return
+        _render_event(event)
+        raw = _ask_answer()
+        event = await (rnd.undo() if raw == "u" else rnd.answer(_ANSWERS[raw]))
 
 
-class _QuitRequested(Exception):
-    pass
-
-
-def _run(cfg: Config) -> int:
+async def _run(cfg: Config) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
-    root = load_taxonomy(cfg.taxonomy_path)
-    llm = _build_llm(cfg)
-    successes: list[str] = []
+    topics = load_topics(cfg.topics_path)
+    profile = load_profile(cfg.profile_path)
+    try:
+        backend = select_backend(cfg, profile)
+    except BackendRefused as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
 
+    if backend is None:
+        console.print("[dim]No LLM — deterministic fallback mode.[/dim]")
+    elif not await backend.health():
+        console.print("[yellow]LLM backend unreachable — using fallback mode.[/yellow]")
+        backend = None
+    else:
+        console.print("[green]LLM backend ready.[/green]")
+
+    session = Session(topics, llm=backend, config=cfg, profile=profile)
     while True:
         try:
-            result = _play_one(root, llm, cfg.max_turns, successes)
-        except _QuitRequested:
+            await _play_round(session, _pick_topic(topics))
+        except _Quit:
             console.print("[dim]goodbye[/dim]")
             return 0
-        if result is not None and result.content:
-            successes.append(result.content)
-        again = Prompt.ask("\n[bold]Play again?[/bold]", choices=["y", "n"], default="y")
-        if again == "n":
+        if Prompt.ask("\n[bold]Play again?[/bold]", choices=["y", "n"], default="y") == "n":
             console.print("[dim]goodbye[/dim]")
             return 0
 
@@ -210,28 +136,20 @@ def _run(cfg: Config) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="my20q", description=__doc__)
     parser.add_argument(
-        "--no-llm",
-        action="store_true",
-        help="Disable Ollama (deterministic fallback mode only)",
+        "--no-llm", action="store_true", help="Disable the LLM (fallback mode only)"
     )
     parser.add_argument(
-        "--max-turns",
-        type=int,
-        default=None,
-        help="Override the 20-turn game budget",
+        "--max-queries", type=int, default=None, help="Override the per-round query budget"
     )
     args = parser.parse_args(argv)
 
     cfg = Config.from_env()
-    overrides: dict = {}
     if args.no_llm:
-        overrides["llm_enabled"] = False
-    if args.max_turns is not None:
-        overrides["max_turns"] = args.max_turns
-    if overrides:
-        cfg = Config(**{**cfg.__dict__, **overrides})
+        cfg = replace(cfg, llm_enabled=False)
+    if args.max_queries is not None:
+        cfg = replace(cfg, max_queries=args.max_queries)
     try:
-        return _run(cfg)
+        return asyncio.run(_run(cfg))
     except KeyboardInterrupt:
         console.print("\n[dim]cancelled[/dim]")
         return 130

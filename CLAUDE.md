@@ -2,102 +2,167 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Beta retool in progress.** The live plan is
+> [`docs/design/beta-retool.md`](docs/design/beta-retool.md) — read it before
+> working on this repo. It supersedes parts of this file where they conflict.
+> `docs/ROADMAP.md` has been restructured to match it.
+
 ## Project Summary
 
-`my20Q` is an **assistive game-based agent** for accelerating communication in
-individuals suffering from aphasia. A patient interacts with a tablet; the system
-plays a 20-questions-style dialogue, pairing each yes/no question with
-AAC-appropriate imagery, to help the patient converge on what they need to
-express (a need, a feeling, a request for help, an emergency).
+`my20Q` is a **context-driven speech emulator** for an individual with aphasia.
+It plays a question-and-answer dialogue — pairing each question with
+AAC-appropriate imagery — to converge on what the person needs to express (a
+need, a feeling, a request for help, an emergency) and synthesize that as a
+short spoken utterance.
 
-**Clinical intent**: assistive, **not** diagnostic. The tool helps a user
-communicate a need to a caregiver — it does not offer medical advice, triage, or
-treatment recommendations.
+It is **patient-specific, not global, universal, or medical**. It is a digital
+voice that reflects one person — not a clinical average. The real interface is a
+**caregiver cockpit**: the caregiver and patient use the tool *together*. The
+patient never operates the cockpit alone.
+
+**Clinical intent**: assistive, **not** diagnostic. It helps a person
+communicate a need to a caregiver — no medical advice, triage, or treatment
+recommendations.
 
 ## Architecture
 
 ```
- [ Android tablet, kiosk browser ]          [ cerberus, home server ]
+ [ caregiver cockpit, web browser ]         [ cerberus, home server ]
          │                                          │
          │  Tailscale VPN (HTTPS)                   │
          │────────────────────────────────────────► │  FastAPI backend
-         │                                          │    ├─ dialogue/session state
-         │   PWA (web app) — static imagery         │    ├─ prompt + retrieval layer
-         │                                          │    └─ Ollama HTTP client
-         │                                          │         └─ local LLM
+         │   4-tile cockpit:                        │    ├─ dialogue / round state
+         │   conversation · pictogram ·             │    ├─ prompt + retrieval layer
+         │   live reasoning · input                 │    ├─ recording / dataset writer
+         │                                          │    └─ LLMBackend → Ollama (local)
+ [ aphasia-oriented input — secondary,              │
+   supplemental, later phase ]                      │
 ```
 
 - **Backend**: Python (FastAPI) on `cerberus`, calling a local LLM via Ollama.
-- **Frontend**: Progressive Web App (PWA) served by the backend; tablet runs a
-  locked-down kiosk browser pointed at `https://cerberus.<tailnet>.ts.net`.
-- **Network**: Tailscale VPN only — no public exposure, no cloud APIs.
+- **Caregiver cockpit**: web app served by the backend — the primary interface.
+- **Aphasia-oriented UX**: a secondary, supplemental *input* surface feeding the
+  cockpit. Built in a later phase.
+- **Network**: Tailscale VPN only — no public exposure.
 - **Imagery**: static, curated library + open AAC pictogram sets (ARASAAC,
-  Mulberry Symbols). No on-the-fly image generation.
+  Mulberry Symbols), **retrieved by intent — never generated on the fly**.
+
+## Terminology
+
+A three-tier scale (replaces the retired "round/pass" terms):
+
+- **Session** — one open→close of the tool.
+- **Round** — one convergence attempt under a single high-level context (topic).
+  Ends on **synthesis**, topic change, query-budget exhaustion, or session end.
+- **Query** — one generated question within a round.
+
+Nesting: Session ⊃ Rounds ⊃ Queries. The query budget (the old "20") is a soft
+safety cap, not the primary terminator.
+
+## Modes
+
+Two **orthogonal** axes:
+
+- **Reasoning vs. fallback** — is the LLM reachable? Reasoning mode lets the
+  `Reasoner` drive; fallback is a deterministic degraded path.
+- **Training vs. operational** — do we trust the input? *Training* is
+  caregiver-driven with reliable input (**the beta builds this only**).
+  *Operational* is patient-solo with noisy input, leaning on the knowledge
+  graph (deferred).
+
+"Testing" is not a mode — it is training mode run against a *synthetic persona*
+for development.
 
 ## Locked Technical Decisions
 
 | Topic | Choice | Rationale |
 |-------|--------|-----------|
-| LLM runtime | **Ollama** | Simple HTTP API, easy model swap (default `gemma3:12b`; also Llama 3.2, Phi-4) |
-| LLM interface | **Abstracted behind `LLMBackend`** | llama.cpp / vLLM swap-in later if needed |
-| Backend framework | **FastAPI** | Async, typed, easy SSE, good Pydantic integration |
-| Frontend (Phase 2) | **PWA (Vite + vanilla TS or preact)** | Works on any tablet w/ browser; kiosk-friendly |
-| Icon sources | **ARASAAC + Mulberry Symbols** | Designed for AAC/aphasia; open licenses |
-| Tablet OS | **Repurposed Android in kiosk browser** | Lowest friction; Linux-native app is a later phase |
+| LLM runtime | **Ollama** | Simple HTTP API, easy model swap (default `gemma3:12b`) |
+| LLM interface | **Abstracted behind `LLMBackend`** | llama.cpp / vLLM / Anthropic swap-in |
+| Dev-trial backend | **Anthropic (Opus)** | Strong model for iterating agentic logic — **synthetic personas only**, see Privacy |
+| Backend framework | **FastAPI** | Async, typed, SSE/WebSocket streaming |
+| Caregiver cockpit | **Web app, local server** | Browser-based; rich but simple |
+| Icon sources | **ARASAAC + Mulberry Symbols** | Designed for AAC/aphasia; open licenses; retrieved not generated |
 | Transport | **Tailscale VPN** | Privacy, no cert gymnastics, MagicDNS |
+
+## Privacy & Safety
+
+Privacy is foundational — the tool conditions on broad, sensitive patient
+context, so storage and communication must be tightly controlled.
+
+**The privacy invariant.** A single flag — `real_patient_profile_loaded` — gates
+both the backend and recording:
+
+| Real patient profile loaded | LLM backend | Recording |
+|---|---|---|
+| **true** | **Local only** (Ollama); Anthropic backend unavailable | **On** (caregiver may pause) |
+| **false** (synthetic persona) | Anthropic/Opus permitted | Off |
+
+→ **recording ⟹ real patient ⟹ local LLM.** The cloud backend and the recorded
+dataset can never coexist.
+
+- All real-patient storage (profile, knowledge graph, recorded dataset) is
+  **local, encrypted at rest, never leaves the network, caregiver-purgeable**.
+  *(This replaces the obsolete "no PII stored" rule — the graph and dataset
+  require local storage by design.)*
+- No third-party APIs for real patients, no telemetry, no external crash
+  reporting.
+- **Emergency short-circuit.** Picking the "Emergency" topic, or any descendant
+  flagged `emergency: true`, bypasses the LLM entirely for a hard-coded
+  caregiver-call / 911 screen.
+- **LLM output is never shown raw to the patient.** Patient-facing strings
+  (questions, and the synthesized utterance) pass through a sanitizer enforcing
+  max length, no URLs, no medical-advice keywords, template match.
+- **No diagnostic language.** Asks about needs and feelings, never "do you have
+  X condition?".
+- **Failure modes are soft.** If the LLM is unreachable, the dialogue degrades
+  to fallback mode — the app always keeps working.
 
 ## Directory Layout (target — populated incrementally by phase)
 
 ```
 my20Q/
 ├── CLAUDE.md
-├── README.md
-├── LICENSE
-├── pyproject.toml
+├── README.md · LICENSE · pyproject.toml
 ├── docs/
-│   ├── ROADMAP.md                # phased plan (source of truth for scope)
-│   ├── design/                   # UX sketches, dialogue trees, taxonomy notes
+│   ├── ROADMAP.md                # phased plan (scope source of truth)
+│   ├── design/                   # design docs — beta-retool.md is the live plan
 │   └── clinical/                 # AAC references, aphasia literature
 ├── src/my20q/
-│   ├── __init__.py
 │   ├── __main__.py               # `python -m my20q` entry point
-│   ├── api/                      # FastAPI app (Phase 2, not yet present)
+│   ├── api/                      # FastAPI app + cockpit endpoints (Phase 2)
 │   ├── agent/
-│   │   ├── dialogue.py           # session state machine (reasoning + fallback)
+│   │   ├── dialogue.py           # round state machine (rewindable history)
 │   │   ├── reasoner.py           # LLM-driven action proposer (strict JSON)
 │   │   ├── prompts.py            # system prompts + templating
 │   │   └── safety.py             # emergency detector + output sanitizer
-│   ├── cli.py                    # Rich-based developer harness
-│   ├── llm/                      # LLMBackend protocol + Ollama + mock
-│   ├── taxonomy/                 # category/question tree + YAML data
+│   ├── cli.py                    # Rich-based developer harness (retained)
+│   ├── llm/                      # LLMBackend protocol + Ollama + Anthropic + mock
+│   ├── topics/                   # flat editable topic list + YAML data
+│   ├── recording/                # 3-tier session/round/query dataset writer
+│   ├── profiles/                 # patient-profile loader
 │   └── config.py
-├── web/                          # PWA frontend (Phase 2)
-├── assets/
-│   ├── arasaac/                  # fetched (CC BY-NC-SA)
-│   ├── mulberry/                 # fetched (CC0)
-│   └── categories/               # hand-picked top-level imagery
+├── web/                          # caregiver cockpit frontend (Phase 2)
+├── assets/                       # ARASAAC / Mulberry pictograms + attribution
 ├── tests/
 └── scripts/
-    ├── fetch_icons.py
-    └── run_local.sh
 ```
 
 ## Development Workflow
 
 ```bash
 pip install -e ".[dev]"
-pytest                           # 21 tests + 1 integration (gated)
+pytest
 ruff check .
-python -m my20q                  # CLI harness, reasoning mode
-python -m my20q --no-llm         # CLI harness, fallback tree-walk mode
+python -m my20q                  # CLI harness — reasoning mode
+python -m my20q --no-llm         # CLI harness — fallback mode
 ```
 
-Local LLM prerequisite (on `cerberus` for Phase 2; on dev machines during
-Phase 1 iteration):
+Local LLM prerequisite:
 
 ```bash
 ollama serve &
-ollama pull gemma3:12b           # default; llama3.2:3b and phi4-mini also work
+ollama pull gemma3:12b           # default
 ```
 
 Gate the integration test against a real Ollama instance:
@@ -106,83 +171,51 @@ Gate the integration test against a real Ollama instance:
 MY20Q_INTEGRATION=1 pytest tests/test_llm_backends.py
 ```
 
-## Dialogue Modes
+## Dialogue Philosophy — two-layer persistence
 
-The session state machine in `agent/dialogue.py` dispatches through a single
-`DialogueSession.answer()` API but operates in one of two modes:
+The tool gets better over time by accumulating patient-specific context — but
+strictly along two separated layers:
 
-- **Reasoning mode** (active when an `LLMBackend` is wired in). Each turn,
-  `Reasoner.next_action()` asks the LLM for a strict-JSON action —
-  `{"action": "question"|"guess", "content": "...", "rationale": "..."}` —
-  given the category and accumulated history. A `yes` answer on a `guess`
-  ends the session; the final turn is forced to `guess`. On malformed or
-  unsafe output the session transparently degrades to fallback mode.
-- **Fallback mode** (LLM unavailable or explicitly disabled). Deterministic
-  breadth-first walk of the taxonomy subtree under the chosen top category.
-  `yes` descends, `no` prunes, `not_sure` defers to end of queue, `kinda` is
-  treated as `yes`.
+- **Stable layer — persists and grows.** Who the patient is: the caregiver
+  profile and the knowledge graph. It informs *how* the agent asks — never
+  *what* it guesses.
+- **Volatile layer — never persists.** The current need is inferred fresh each
+  round. Today's need is not predicted by last week's; letting past needs bleed
+  through as guess-priors would bury the current signal.
 
-Emergency categories/descendants short-circuit both modes to a hard-coded
-caregiver screen. Every LLM-originated patient-facing string is run through
-`safety.sanitize_llm_text()`.
+Within a round, reasoning mode balances **exploiting** current-round signals
+(history, caregiver context typed mid-round, the profile) against **exploring**
+an under-sampled dimension — an RL-style policy. Never echo a known subject as a
+guess: the topic identifies *what* the subject is; the job is to narrow what is
+unclear *about* it.
 
-## Dialogue Philosophy — Explore vs Exploit
+The **knowledge graph is written only via the caregiver interview tool** — there
+is no automated write path, which makes automated poisoning impossible. See
+`docs/design/beta-retool.md` §9.
 
-Reasoning mode is shaped by a single cross-cutting principle, written into
-`GAME_SYSTEM_PROMPT` so every turn inherits it:
+## Caregiver Cockpit
 
-> Given what I have learned about the subject at hand, always ask some new
-> exploratory questions while also exploiting what I have learned from the
-> current game plus any previous successes. Much like a reinforcement
-> learning policy.
+A rich-but-simple web interface — **caregiver-only**. Four tiles + a persistent
+topic dropdown + a recording light. Full spec in `docs/design/beta-retool.md`
+§6. The aphasia UX constraints below do **not** apply to the cockpit — they
+govern the future patient-facing interface.
 
-Concretely:
+## Patient-Interface UX Principles
 
-**Terminology** (used throughout this doc, prompts, and memory):
-- A **round** is one `python -m my20q` process lifetime — from launch to quit.
-- A **pass** is a single play within a round (one iteration of the Play Again
-  loop, terminating in a confirmed guess, dead-end, or turn-limit).
-- A round contains one or more passes; separate CLI launches are separate rounds.
+These are **binding** constraints for the *patient-facing* interface (the
+secondary aphasia-oriented input surface, and the future operational-mode
+interface). They do not constrain the caregiver cockpit.
 
-Concretely:
-
-- **Exploit** this pass's signals: the CURRENT PASS's history, any free-form
-  seed context supplied up front, and — when configured — the
-  **caregiver-managed patient profile** (see below). Within a round, a
-  caregiver may also opt in (via the "Other" menu) to include context from
-  earlier successful passes — this is an explicit manual selection, never
-  automatic.
-- **Explore** at least one under-sampled dimension every 2-3 turns, even
-  when exploit signals are coherent — this is what prevents the agent from
-  converging on a false local optimum.
-- **Passes are independent by default.** Earlier passes in the same round
-  do NOT automatically become priors for the next pass. A patient's need
-  now may be unrelated to what they communicated ten minutes ago, and
-  implicit bleed-through could bury the real signal. The only cross-pass
-  carry is the explicit opt-in menu on the "Other" path.
-- **Rounds do not persist.** Nothing learned in one round (one CLI launch)
-  carries into the next round. There is no on-disk session history piped
-  back to the LLM. The only cross-round channel is the caregiver-configured
-  patient profile, which is patient-specific rather than session-specific.
-- **Never echo a known subject as a guess.** If the category or seed
-  context identifies *what* the subject is, the agent's job is to narrow
-  what is still unclear *about* it.
-
-### Patient priors: the caregiver profile (not past passes or past rounds)
-
-Patient-level priors — family names, medications, hobbies, dietary needs,
-frequent topics, sensory/comfort preferences — live in a
-**caregiver-configured profile** loaded at the start of every round. The
-profile is persistent across rounds for one patient and is the sanctioned
-channel for patient context reaching the LLM. Past pass outcomes are not
-used as implicit priors for subsequent passes, and past rounds never leak
-into later rounds — a patient's need changes freely from one interaction
-to the next, so letting history bleed through would bury the current signal.
-
-Status: the profile loader is Phase 3 scope (see `docs/ROADMAP.md`).
-Until it lands, patient context enters a pass only via the "Other"
-free-form prompt (caregiver-typed, per-pass, opt-in — with the option to
-pull in prior passes from the same round).
+- **One question per screen.** Never multiple questions, never scrolling text.
+- **Huge tap targets.** Minimum 88 × 88 px; prefer filling a screen quadrant.
+- **Yes / No / Kinda / Not sure.** Four answers; no free-text from the patient.
+  `kinda` = "you're warm".
+- **High contrast, large type.** WCAG AAA (contrast ≥ 7:1). Minimum 24 px body.
+- **No time pressure.** No countdowns, auto-advance, or idle prompts.
+- **Pictograms + short text.** Concrete noun / short phrase, never a sentence.
+- **Persistent escape hatches.** "🏠 Start Over" and "🆘 Emergency" always visible.
+- **No reading-heavy LLM prose.** Patient never sees raw model output.
+- **TTS-ready.** Every on-screen string must be TTS-pronounceable.
 
 ## Git Workflow
 
@@ -190,78 +223,24 @@ pull in prior passes from the same round).
 - Feature work on topic branches; squash-merge PRs into `main`.
 - Conventional-ish commit messages (`feat:`, `fix:`, `docs:`, `chore:`).
 
-## Aphasia / UX Design Principles
-
-These are **binding** design constraints — deviations require explicit discussion.
-
-- **One question per screen.** Never multiple questions, never scrolling text.
-- **Huge tap targets.** Minimum 88 × 88 px; prefer filling a quadrant of the screen.
-- **Yes / No / Kinda / Not sure.** Four buttons max. No free-text input from
-  the patient. `kinda` = "you're warm" — the reasoner uses it to stay in a
-  semantic neighborhood; in fallback mode it behaves like `yes`.
-- **High contrast, large type.** Target WCAG AAA (contrast ≥ 7:1). Minimum 24 px body.
-- **No time pressure.** No countdowns, no auto-advance, no "you've been idle" prompts.
-- **Pictograms + short text.** Every question and answer has a pictogram; text is a
-  concrete noun/short phrase, not a sentence.
-- **Persistent escape hatches.** "🏠 Start Over" and "🆘 Emergency / Get Help" must
-  be on-screen at **all** times.
-- **No reading-heavy LLM prose.** Patient never sees raw model output; questions
-  are either picked from a curated bank or templated from a whitelist.
-- **TTS-ready.** Every on-screen string must be TTS-pronounceable (Phase 3 adds
-  `piper`).
-
-## Safety Principles
-
-- **Emergency short-circuit.** If the user picks the "Emergency" top category, or
-  any descendant flags `emergency: true`, bypass the LLM entirely and show a
-  hard-coded screen with caregiver-call / 911 actions.
-- **LLM output is never shown raw.** All patient-facing text flows through a
-  sanitizer that enforces: max length, no URLs, no medical advice keywords,
-  matches an expected template.
-- **No diagnostic language.** The system asks about **needs and feelings**, never
-  "do you have X condition?".
-- **Failure modes are soft.** If the LLM stalls, errors, or is unreachable, the
-  dialogue falls back to the static taxonomy tree — the app always keeps working.
-- **No PII stored.** Session state is in-memory; optional caregiver logs store
-  only taxonomy-node paths + timestamps, never patient-entered data (there isn't
-  any — input is button taps).
-
-## Privacy
-
-- All inference runs locally on `cerberus`. No third-party APIs, no telemetry.
-- Tablet ↔ cerberus traffic is confined to Tailscale.
-- No analytics, no crash reporting to external services.
-
 ## Cross-Repo Context
 
 This is a **new, independent repo** in the multi-repo workspace documented at
 `C:\Users\grey_\Git\GitHub\CLAUDE.md`. It has no code dependencies on the other
-repos (TDA-SST, G2Aero, etc.) and uses its own tooling.
+repos and uses its own tooling.
 
 ## Supplemental Ideas (future phases, not yet in scope)
 
-- **TTS output** via [`piper`](https://github.com/rhasspy/piper) — local, fast, runs on
-  modest hardware.
-- **Caregiver dashboard** — separate view showing session history as taxonomy
-  paths, never raw content, for therapist/family review.
-- **Session export for speech therapists** — anonymized summaries of which
-  topics the patient engages with.
-- **Multilingual support** — taxonomy + pictograms per locale; ARASAAC already
-  supports many.
-- **Speech-in** via `whisper.cpp` — some patients can speak words even if
-  sentence construction is hard; let them skip ahead.
-- **Eye-tracking input** as an accessibility stretch goal (Tobii or
-  webcam-based) for patients with limited motor control.
-- **Favorites / quick-access tiles** — the top 4–6 most-used taxonomy leaves
-  surface as a shortcut grid on the home screen.
-- **Per-patient profile** — family member names, medications, hobbies used as
-  concrete concepts in the question bank.
-- **Offline-first PWA** — service worker caches assets and taxonomy so a
-  transient Tailscale hiccup doesn't stall the session.
-- **Native Linux tablet app** (Phase 4 stretch) — Tauri shell reusing the PWA,
-  or GTK4 + libadwaita if we commit to a specific tablet.
+- **TTS output** via [`piper`](https://github.com/rhasspy/piper) — local, fast.
+- **Speech-in** via `whisper.cpp` — let patients who can speak words skip ahead.
+- **Eye-tracking input** as an accessibility stretch goal.
+- **Multilingual support** — topics + pictograms per locale.
+- **Per-patient weight fine-tuning** ("path b") — using the recorded dataset,
+  budget permitting; deferred.
+- **Native Linux tablet app** — Tauri shell or GTK4 + libadwaita.
 
 ## Planning
 
-The authoritative phased plan lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
-Update it when scope changes rather than scattering decisions across other docs.
+The phased plan lives in [`docs/ROADMAP.md`](docs/ROADMAP.md); the current beta
+design lives in [`docs/design/beta-retool.md`](docs/design/beta-retool.md).
+Update them when scope changes rather than scattering decisions across docs.

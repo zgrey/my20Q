@@ -1,0 +1,643 @@
+/* my20Q caregiver cockpit styling.
+   Two colorways adopted from zgrey.github.io: a warm dark theme (default)
+   and a NIST-inspired light theme. Switched via the `data-theme` attribute
+   on <html> (see index.html for the pre-paint apply script). */
+
+:root {
+  /* --- dark colorway (default) --- */
+  --color-bg-primary: #1a1a1a;
+  --color-bg-secondary: #222222;
+  --color-bg-elevated: #2a2a2a;
+  --color-text-primary: #bdb191;
+  --color-text-secondary: #a9a076;
+  --color-text-heading: #d0c2a5;
+  --color-accent-primary: #537949;
+  --color-accent-hover: #6ea262;
+  --color-accent-dim: #2d3d28;
+  --color-border: #333333;
+
+  /* --- semantic answer colors (theme-independent) --- */
+  --yes: #3f9d44;
+  --no: #d24437;
+  --kinda: #e0921c;
+  --not-sure: #6b7a8a;
+  --neutral: #4b5d70;
+  --neutral-strong: #3a4654;
+  --rec: #e23b3b;
+
+  /* --- cockpit aliases (re-resolve per theme) --- */
+  --bg: var(--color-bg-primary);
+  --card: var(--color-bg-secondary);
+  --nested: var(--color-bg-elevated);
+  --ink: var(--color-text-primary);
+  --ink-soft: var(--color-text-secondary);
+  --heading: var(--color-text-heading);
+  --accent: var(--color-accent-primary);
+  --accent-hover: var(--color-accent-hover);
+  --accent-soft: var(--color-accent-dim);
+  --border: var(--color-border);
+
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+}
+
+/* --- light colorway (NIST-inspired) --- */
+[data-theme="light"] {
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #f1f1f1;
+  --color-bg-elevated: #e8e8e8;
+  --color-text-primary: #1b1b1b;
+  --color-text-secondary: #454545;
+  --color-text-heading: #0b2d71;
+  --color-accent-primary: #005ea2;
+  --color-accent-hover: #0076d6;
+  --color-accent-dim: #dbeefa;
+  --color-border: #c9c9c9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  overflow: hidden;
+}
+
+body,
+.topbar,
+.tile,
+.turn.question,
+.picto-box,
+.answer,
+.send,
+.rec,
+.theme-toggle,
+.context-row input,
+.topic select {
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.cockpit {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1.55fr 1fr;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "conversation pictogram"
+    "conversation reasoning"
+    "input        reasoning";
+  gap: 14px;
+  padding: 14px;
+  min-height: 0;
+}
+
+.conversation {
+  grid-area: conversation;
+}
+.pictogram {
+  grid-area: pictogram;
+}
+.reasoning {
+  grid-area: reasoning;
+}
+.input {
+  grid-area: input;
+}
+
+.tile {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tile h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--heading);
+}
+
+/* ---------------------------------------------------------------- topbar */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 56px;
+  padding: 0 18px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.brand span {
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+
+.topic {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.topic select {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--nested);
+}
+
+.rec {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  cursor: pointer;
+}
+.rec .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.rec.on {
+  color: var(--rec);
+}
+.rec.on .dot {
+  background: var(--rec);
+  animation: blink 1.6s infinite;
+}
+.rec.paused {
+  color: var(--ink-soft);
+}
+.rec.paused .dot {
+  background: var(--ink-soft);
+}
+
+.theme-toggle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(226, 59, 59, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(226, 59, 59, 0);
+  }
+}
+
+/* ---------------------------------------------------------- conversation */
+
+.stream {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.empty {
+  color: var(--ink-soft);
+  font-style: italic;
+  margin: 4px 0;
+}
+
+.turn.question {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--nested);
+}
+.turn.question .q {
+  font-size: 16px;
+  line-height: 1.4;
+}
+.turn.question.pending {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.awaiting {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+}
+
+.chip {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: #fff;
+}
+.chip.yes {
+  background: var(--yes);
+}
+.chip.no {
+  background: var(--no);
+}
+.chip.kinda {
+  background: var(--kinda);
+}
+.chip.not_sure {
+  background: var(--not-sure);
+}
+
+.turn.context {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 3px solid var(--accent);
+  padding: 6px 10px;
+  background: var(--accent-soft);
+  border-radius: 0 8px 8px 0;
+}
+.turn.context .tag {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+.turn.context .ctx-text {
+  font-style: italic;
+}
+
+.synthesis {
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--accent-soft);
+}
+.synthesis .label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+.synthesis .utterance {
+  font-size: 20px;
+  line-height: 1.4;
+  margin: 8px 0;
+}
+.synthesis .confirm-note {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+/* ------------------------------------------------------------- pictogram */
+
+.picto-box {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--nested);
+  min-height: 120px;
+}
+.picto-box .glyph {
+  font-size: 64px;
+  line-height: 1;
+}
+.picto-box .concept {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  text-transform: capitalize;
+}
+.pictogram .caption {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.picto-img {
+  max-width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+}
+
+/* ------------------------------------------------------------- reasoning */
+
+.reasoning h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-hover);
+  animation: blink 1.4s infinite;
+}
+.reason-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+/* ----------------------------------------------------------------- input */
+
+.input {
+  gap: 12px;
+}
+.answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.answer {
+  flex: 1 1 92px;
+  min-height: 56px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.answer:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.answer.yes {
+  background: var(--yes);
+}
+.answer.no {
+  background: var(--no);
+}
+.answer.kinda {
+  background: var(--kinda);
+}
+.answer.not_sure {
+  background: var(--not-sure);
+}
+.answer.undo {
+  background: var(--neutral);
+}
+.answer.quit {
+  background: var(--neutral-strong);
+}
+.answer kbd {
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.context-row {
+  display: flex;
+  gap: 8px;
+}
+.context-row input {
+  flex: 1;
+  font-size: 15px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--nested);
+  color: var(--ink);
+}
+.context-row input::placeholder {
+  color: var(--ink-soft);
+}
+.context-row input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.send {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  padding: 0 20px;
+  cursor: pointer;
+}
+.send:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* --------------------------------------------------- wired-stage extras */
+
+.errorbar {
+  padding: 8px 18px;
+  background: var(--no);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.engine-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--ink-soft);
+}
+.engine-badge.reasoning {
+  color: var(--accent-hover);
+  border-color: var(--accent);
+}
+.engine-badge.fallback {
+  color: var(--kinda);
+  border-color: var(--kinda);
+}
+
+.synthesis.proposed {
+  border-style: dashed;
+}
+
+.turn.question.was-synthesis {
+  border-left: 3px solid var(--accent);
+}
+
+.notice {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.emergency-card {
+  border: 2px solid var(--rec);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(226, 59, 59, 0.08);
+}
+.emergency-card .label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--rec);
+}
+.emergency-card p {
+  margin: 8px 0;
+}
+.emergency-card ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.ctx-hint {
+  font-size: 13px;
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.rec.off {
+  cursor: default;
+  color: var(--ink-soft);
+}
+.rec.off .dot {
+  background: var(--ink-soft);
+  opacity: 0.5;
+}
+
+.saved {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.saved.warning {
+  color: var(--kinda);
+  opacity: 1;
+}
+.saved.over {
+  color: var(--no);
+  opacity: 1;
+}
+
+/* ----------------------------------------------------- emotional sliders */
+
+.emotion {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.emotion h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--heading);
+}
+.sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+.slider-row {
+  display: grid;
+  grid-template-columns: 84px 1fr 84px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.slider-row .slabel:last-child {
+  text-align: right;
+}
+.slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

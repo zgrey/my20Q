@@ -1,82 +1,156 @@
-from my20q.agent.dialogue import Answer, DialogueSession
-from my20q.taxonomy import Node
+"""Tests for the retooled round engine — fallback and reasoning modes."""
+
+from __future__ import annotations
+
+import json
+
+from my20q.agent.dialogue import Answer, Round, Session
+from my20q.agent.prompts import reason_messages
+from my20q.llm import MockBackend
+from my20q.topics import Topic, find_topic
 
 
-def test_yes_path_reaches_confirmed_leaf(tiny_taxonomy: Node) -> None:
-    session = DialogueSession(tiny_taxonomy, llm=None)
-    r = session.select_category("cat_a")
-    assert r.kind == "question"
-    assert r.node.id == "a1"  # first child probed
-
-    r = session.answer(Answer.YES)
-    assert r.kind == "guess"
-    assert r.node.id == "a1"
-
-    r = session.answer(Answer.YES)
-    assert r.kind == "answer"
-    assert r.node.id == "a1"
-    assert r.summary  # fallback summary is non-empty
+def _topic(topics: list[Topic], topic_id: str) -> Topic:
+    t = find_topic(topics, topic_id)
+    assert t is not None
+    return t
 
 
-def test_no_on_probe_advances_to_next_sibling(tiny_taxonomy: Node) -> None:
-    session = DialogueSession(tiny_taxonomy, llm=None)
-    r = session.select_category("cat_a")
-    assert r.node.id == "a1"
-    r = session.answer(Answer.NO)
-    assert r.kind == "question"
-    assert r.node.id == "a2"
+def _action(kind: str, content: str, rationale: str = "because") -> str:
+    return json.dumps({"action": kind, "content": content, "rationale": rationale})
 
 
-def test_leaf_rejection_backs_up_and_tries_sibling(tiny_taxonomy: Node) -> None:
-    session = DialogueSession(tiny_taxonomy, llm=None)
-    session.select_category("cat_a")       # probe a1
-    session.answer(Answer.YES)              # descend into a1 (leaf guess)
-    r = session.answer(Answer.NO)           # reject a1 leaf — probe next sibling
-    assert r.kind == "question"
-    assert r.node.id == "a2"
-    r = session.answer(Answer.YES)          # descend into a2 → guess
-    assert r.kind == "guess"
-    assert r.node.id == "a2"
+def _scripted(*responses: str) -> MockBackend:
+    """A MockBackend returning the given strings in order, then repeating
+    the last one for any further calls."""
+    state = {"i": 0}
+
+    def responder(_msgs: list) -> str:
+        i = min(state["i"], len(responses) - 1)
+        state["i"] += 1
+        return responses[i]
+
+    return MockBackend(responder=responder)
 
 
-def test_not_sure_defers_and_retries(tiny_taxonomy: Node) -> None:
-    session = DialogueSession(tiny_taxonomy, llm=None)
-    session.select_category("cat_a")       # probe a1
-    r = session.answer(Answer.NOT_SURE)     # defer a1 → probe a2
-    assert r.node.id == "a2"
-    r = session.answer(Answer.NO)           # reject a2 → retry deferred a1
-    assert r.kind == "question"
-    assert r.node.id == "a1"
+# ----------------------------------------------------------- fallback mode
 
 
-def test_emergency_category_short_circuits(tiny_taxonomy: Node) -> None:
-    session = DialogueSession(tiny_taxonomy, llm=None)
-    r = session.select_category("cat_b")
-    assert r.kind == "emergency"
-    assert r.node.id == "cat_b"
+async def test_fallback_walks_question_bank(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=None)
+    ev = await rnd.open()
+    assert ev.kind == "query" and ev.engine == "fallback"
+    first = ev.text
+    ev = await rnd.answer(Answer.NO)
+    assert ev.kind == "query" and ev.text != first
 
 
-def test_dead_end_when_all_children_rejected(tiny_taxonomy: Node) -> None:
-    session = DialogueSession(tiny_taxonomy, llm=None)
-    session.select_category("cat_a")
-    session.answer(Answer.NO)  # reject a1
-    r = session.answer(Answer.NO)  # reject a2 → exhausted cat_a subtree
-    # Root queue was cleared by select_category, so we hit dead_end.
-    assert r.kind == "dead_end"
+async def test_fallback_yes_synthesizes_then_confirms(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=None)
+    await rnd.open()
+    ev = await rnd.answer(Answer.YES)
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.YES)
+    assert ev.kind == "synthesized"
+    assert rnd.is_terminal and rnd.final_utterance
 
 
-def test_select_category_rejects_non_top_level(tiny_taxonomy: Node) -> None:
-    import pytest
-
-    session = DialogueSession(tiny_taxonomy, llm=None)
-    with pytest.raises(ValueError):
-        session.select_category("a1")  # not a top-level child
-    with pytest.raises(ValueError):
-        session.select_category("does_not_exist")
+async def test_emergency_topic_short_circuits(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "emergency"), llm=None)
+    ev = await rnd.open()
+    assert ev.kind == "emergency"
+    assert ev.emergency_screen is not None
+    assert rnd.outcome == "emergency"
 
 
-def test_max_turns_forces_dead_end(tiny_taxonomy: Node) -> None:
-    session = DialogueSession(tiny_taxonomy, llm=None, max_turns=1)
-    session.select_category("cat_a")      # probe a1 (turn still 0)
-    r = session.answer(Answer.NO)         # turn=1, meets max → dead_end
-    assert r.kind == "dead_end"
+# ---------------------------------------------------------- reasoning mode
+
+
+async def test_reasoning_round_reaches_synthesis(topics: list[Topic]) -> None:
+    backend = _scripted(
+        _action("query", "Is this about a family member you would like to contact?"),
+        _action("query", "Would you like us to telephone them right now?"),
+        _action("synthesis", "I would like to call my daughter to share some news."),
+    )
+    rnd = Round(_topic(topics, "my_people"), llm=backend, max_queries=20)
+    ev = await rnd.open()
+    assert ev.kind == "query" and ev.engine == "reasoning"
+    ev = await rnd.answer(Answer.YES)
+    assert ev.kind == "query"
+    ev = await rnd.answer(Answer.KINDA)
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.YES)
+    assert ev.kind == "synthesized"
+    assert "daughter" in rnd.final_utterance
+
+
+async def test_undo_rewinds_one_entry(topics: list[Topic]) -> None:
+    backend = _scripted(
+        _action("query", "Is this about a family member you would like to contact?"),
+        _action("query", "Would you like us to telephone them right now?"),
+        _action("query", "Do you want to tell them something specific today?"),
+    )
+    rnd = Round(_topic(topics, "my_people"), llm=backend, max_queries=20)
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    await rnd.answer(Answer.NO)
+    assert len(rnd.history) == 2
+    ev = await rnd.undo()
+    assert len(rnd.history) == 1
+    assert ev.kind == "query"
+
+
+async def test_budget_exhaustion_forces_synthesis_then_abandons(
+    topics: list[Topic],
+) -> None:
+    backend = _scripted(
+        _action("query", "Is this a question about being comfortable right now?"),
+        _action("synthesis", "I would like to be more comfortable."),
+    )
+    rnd = Round(_topic(topics, "general"), llm=backend, max_queries=1)
+    ev = await rnd.open()
+    assert ev.kind == "query"
+    ev = await rnd.answer(Answer.NO)  # budget hit -> forced synthesis
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.NO)  # forced synthesis rejected -> abandoned
+    assert ev.kind == "abandoned"
+    assert rnd.outcome == "abandoned"
+
+
+async def test_add_context_is_recorded(topics: list[Topic]) -> None:
+    backend = _scripted(
+        _action("query", "Is this about a family member you would like to contact?"),
+        _action("query", "Would you like to send them a written message instead?"),
+    )
+    rnd = Round(_topic(topics, "my_people"), llm=backend)
+    await rnd.open()
+    rnd.add_context("She mentioned her granddaughter earlier today.")
+    await rnd.answer(Answer.YES)
+    assert "context" in [h["kind"] for h in rnd.history]
+
+
+async def test_malformed_llm_degrades_to_fallback(topics: list[Topic]) -> None:
+    backend = MockBackend(responder=lambda _m: "this is not json")
+    rnd = Round(_topic(topics, "physical_health"), llm=backend)
+    ev = await rnd.open()
+    assert ev.engine == "fallback" and ev.kind == "query"
+
+
+def test_session_tracks_topic_sequence(topics: list[Topic]) -> None:
+    session = Session(topics, llm=None)
+    session.start_round("my_people")
+    session.start_round("physical_health")
+    assert session.topic_sequence == ["my_people", "physical_health"]
+
+
+def test_reason_messages_includes_emotional_reading() -> None:
+    messages = reason_messages(
+        "My feelings",
+        [],
+        1,
+        20,
+        emotional_state={"sad_happy": -0.6, "anxious_calm": 0.4},
+    )
+    content = messages[1]["content"]
+    assert "EMOTIONAL READING" in content
+    assert "sad" in content and "happy" in content

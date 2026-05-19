@@ -1,0 +1,165 @@
+# Flat topic list — the high-level contexts that anchor each round.
+#
+# This file is meant to be edited directly. Each entry is a topic the
+# caregiver can pick from the cockpit dropdown. `fallback_questions` is the
+# ordered bank used ONLY when the LLM is unreachable; reasoning mode drives
+# its own questioning under the topic.
+#
+# Convention: pin `emergency` first and the catch-all `general` last.
+
+- id: emergency
+  label: Get help now
+  emergency: true
+  description: >-
+    Urgent needs. Pinned first. Selecting it short-circuits the dialogue to a
+    hard-coded caregiver-call / 911 screen — the LLM is bypassed entirely.
+  fallback_questions:
+    - id: em_fall
+      label: I fell
+      question: Did you fall?
+      emergency: true
+    - id: em_chest
+      label: Chest pain
+      question: Does your chest hurt?
+      emergency: true
+    - id: em_breathing
+      label: Trouble breathing
+      question: Is it hard to breathe?
+      emergency: true
+    - id: em_call_family
+      label: Call family
+      question: Do you want to call family?
+      emergency: true
+
+- id: mental_health
+  label: My feelings
+  description: Emotional or mental state the patient wants to communicate.
+  fallback_questions:
+    - id: mh_anxious
+      label: Worried or scared
+      question: Are you feeling worried or scared?
+    - id: mh_sad
+      label: Sad
+      question: Are you feeling sad?
+    - id: mh_lonely
+      label: Lonely
+      question: Would you like someone to be with you?
+    - id: mh_confused
+      label: Confused
+      question: Are things feeling confusing right now?
+
+- id: physical_health
+  label: My body
+  description: Physical needs or discomfort.
+  fallback_questions:
+    - id: ph_pain
+      label: Pain
+      question: Are you in pain?
+    - id: ph_tired
+      label: Tired
+      question: Are you feeling tired?
+    - id: ph_hungry
+      label: Hungry
+      question: Are you hungry?
+    - id: ph_thirsty
+      label: Thirsty
+      question: Are you thirsty?
+    - id: ph_bathroom
+      label: Bathroom
+      question: Do you need the bathroom?
+    - id: ph_medication
+      label: Medicine
+      question: Do you need your medicine?
+
+- id: my_people
+  label: My people
+  description: >-
+    Family the patient wants to communicate about. Replace per-patient with
+    real names via the caregiver profile (Phase 5).
+  reasoning_hint: |
+    HARD EXCLUSION: never ask about physical or descriptive attributes of
+    these people — appearance, age, height, weight, build, clothing, hair,
+    where they live, etc. The patient knows them well; those questions
+    reveal nothing. If you catch yourself forming such a question, discard
+    it and ask from the buckets below instead.
+
+    Every question in this topic must fit exactly one of four buckets about
+    the patient's intent toward the person:
+
+      1. I need to do something TO or FOR them.
+         (call them, visit them, give them something, help them, thank
+         them, apologize, take them somewhere.)
+      2. They need to do something FOR or TO me.
+         (bring something, help me, stay with me, fix something, take me
+         somewhere.)
+      3. I need to convey information TO them.
+         (tell them news, share how I feel, warn them, remind them of
+         something, say I love them.)
+      4. I have a question FOR them.
+         (where are they, when are they coming, did they do X, how are
+         they feeling.)
+
+    Reasoning flow each query:
+
+    STEP A — if it is not yet clear which bucket applies, ask a yes/no
+    question that splits among them. Good splits: "Do you want to do
+    something for them?" (1 vs 2-4), "Do you need them to do something?"
+    (2 vs 1,3,4), "Do you want to tell them something?" (3 vs 4), "Do you
+    want to ask them something?" (4 vs 3).
+
+    STEP B — once the bucket is known, narrow on the specific action
+    (buckets 1-2) or the specific piece of information (buckets 3-4).
+
+    STEP C — if the specific person (wife, husband, mother, father,
+    daughter, son, sister, brother) is not yet known and it matters, ask a
+    relation-splitting question (parent vs spouse vs child vs sibling;
+    male vs female relation). Never split the person by physical traits.
+
+    Never synthesize "Your <relation>" as the answer — the relation alone
+    is never the answer. The answer is always a specific action or a
+    specific piece of information tied to a person.
+  fallback_questions:
+    - id: fam_spouse_wife
+      label: Wife
+      question: Do you want your wife?
+    - id: fam_spouse_husband
+      label: Husband
+      question: Do you want your husband?
+    - id: fam_mother
+      label: Mother
+      question: Do you want your mother?
+    - id: fam_father
+      label: Father
+      question: Do you want your father?
+    - id: fam_daughter
+      label: Daughter
+      question: Do you want your daughter?
+    - id: fam_son
+      label: Son
+      question: Do you want your son?
+    - id: fam_sister
+      label: Sister
+      question: Do you want your sister?
+    - id: fam_brother
+      label: Brother
+      question: Do you want your brother?
+
+- id: general
+  label: Other
+  description: General comfort and engagement needs. Catch-all, pinned last.
+  fallback_questions:
+    - id: gen_hot
+      label: Too hot
+      question: Are you too hot?
+    - id: gen_cold
+      label: Too cold
+      question: Are you too cold?
+    - id: gen_talk
+      label: Want to talk
+      question: Would you like to talk with someone?
+    - id: gen_entertainment
+      label: Something to do
+      question: Would you like something to do?
+    - id: gen_tv
+      label: Watch TV
+      question: Would you like to watch television?

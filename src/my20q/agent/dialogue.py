@@ -1,42 +1,34 @@
-"""Dialogue state machine — LLM-driven in reasoning mode, taxonomy tree
-walk as the fallback for when Ollama is unavailable.
+"""Round state machine — the my20Q dialogue engine.
 
-Two modes dispatch through the same `DialogueSession.answer()` API so
-the CLI and (later) the FastAPI layer don't need to care which is
-active.
+A `Session` spans one tool process and spawns `Round`s. A `Round` is one
+convergence attempt under a single topic: it issues queries and ends when
+the caregiver confirms a synthesized utterance (success), the query
+budget is exhausted, or the round is abandoned. Terminology and the round
+lifecycle: docs/design/beta-retool.md §2, §7.
 
-Reasoning mode
---------------
-After the user picks a starting category, the `Reasoner` drives the
-game: every turn asks the LLM for a yes/no question or a specific guess,
-then updates history with the user's answer (yes/no/kinda/not_sure).
-"yes" on a guess ends the session and triggers a caregiver summary.
-The 20-turn budget is the game limit — at the final turn the reasoner
-is forced to guess.
+Reasoning mode (LLM available) — the `Reasoner` proposes each query and
+the synthesis. Fallback mode (LLM unreachable) — a deterministic,
+stateless walk of the topic's fallback question bank.
 
-Fallback mode
--------------
-If the LLM is not reachable, the session reverts to a deterministic
-breadth-first walk of the taxonomy subtree under the chosen category.
-"yes" descends, "no" prunes, "not_sure" defers, "kinda" is treated as
-yes (go deeper in this direction). Emergency nodes short-circuit in
-both modes.
+The engine is async: the FastAPI layer awaits it directly; a CLI wraps
+it in `asyncio.run`. The round history is a flat list, so `undo()` is
+just a truncation — no separate rewind bookkeeping.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections import deque
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
-from my20q.agent import prompts
-from my20q.agent.reasoner import Reasoner, ReasonerError
-from my20q.agent.safety import is_emergency_path, sanitize_llm_text
-from my20q.llm.base import LLMBackend, LLMUnavailable
-from my20q.taxonomy.node import Node
+from my20q.agent.reasoner import Reasoner, ReasonerAction, ReasonerError
+from my20q.agent.safety import EMERGENCY_SCREEN
+from my20q.config import Config, Mode
+from my20q.llm.base import LLMBackend
+from my20q.profiles import PatientProfile
+from my20q.topics import FallbackQuestion, Topic, find_topic
 
 log = logging.getLogger(__name__)
 
@@ -48,312 +40,325 @@ class Answer(StrEnum):
     NOT_SURE = "not_sure"
 
 
-TurnKind = Literal["question", "guess", "emergency", "answer", "dead_end"]
+_AFFIRMED = {Answer.YES.value, Answer.KINDA.value}
+
+EventKind = Literal["query", "synthesis", "emergency", "synthesized", "abandoned"]
+Engine = Literal["reasoning", "fallback"]
 
 
 @dataclass
-class TurnResult:
-    kind: TurnKind
-    content: str = ""
-    node: Node | None = None
+class RoundEvent:
+    """The cockpit-facing state produced by open()/answer()/undo()."""
+
+    kind: EventKind
+    text: str = ""
     rationale: str = ""
-    path: list[Node] = field(default_factory=list)
-    summary: str = ""
-    turn: int = 0
+    query_index: int = 0
+    engine: Engine = "reasoning"
+    emergency_screen: dict | None = None
 
 
-@dataclass
-class _Frame:
-    node: Node
-    queue: deque[Node]
-    deferred: list[Node] = field(default_factory=list)
+class Round:
+    """One convergence attempt under a single topic.
 
-
-class DialogueSession:
-    """Single 20Q session.
-
-    Call `select_category(category_id)` to start, then alternate
-    `answer(Answer.X)` with reading each `TurnResult`. A session is
-    terminal when a TurnResult of kind `answer`, `emergency`, or
-    `dead_end` is returned.
+    Drive it: ``await open()`` once, then alternate ``await answer(a)``
+    with reading each `RoundEvent`. ``add_context`` injects caregiver
+    steering; ``await undo()`` rewinds the last entry. The round is over
+    once an event of kind ``synthesized``, ``abandoned``, or
+    ``emergency`` is returned (also reflected by ``is_terminal``).
     """
 
     def __init__(
         self,
-        root: Node,
+        topic: Topic,
         *,
         llm: LLMBackend | None = None,
-        max_turns: int = 20,
+        max_queries: int = 20,
+        mode: Mode = "training",
         seed_context: str = "",
+        profile_context: str = "",
+        emotional_state: dict[str, float] | None = None,
     ) -> None:
-        self.root = root
+        self.topic = topic
         self.llm = llm
-        self.max_turns = max_turns
+        self.max_queries = max(1, max_queries)
+        self.mode = mode
         self.seed_context = seed_context.strip()
-        self.turn = 0
-        self._category: Node | None = None
-        self._mode: Literal["reasoning", "fallback"] = (
-            "reasoning" if llm is not None else "fallback"
-        )
-        self._reasoner: Reasoner | None = Reasoner(llm) if llm is not None else None
-
-        # reasoning-mode state
+        self.profile_context = profile_context.strip()
+        # Caregiver emotional-slider reading; steers question tone (the API
+        # keeps it in sync mid-round). See docs/design/beta-retool.md §6.
+        self.emotional_state: dict[str, float] = dict(emotional_state or {})
+        self.engine: Engine = "reasoning" if llm is not None else "fallback"
+        self._reasoner = Reasoner(llm) if llm is not None else None
         self._history: list[dict] = []
-        self._last_kind: Literal["question", "guess"] | None = None
-        self._last_content: str = ""
-        self._last_rationale: str = ""
+        self._pending: ReasonerAction | None = None
+        self._pending_qid: str | None = None
+        self._outcome: str | None = None
+        self._final_utterance = ""
+        self._opened = False
+        # Optional progress hook — the API wires this to the SSE channel.
+        self.on_phase: Callable[[str], None] | None = None
 
-        # fallback-mode state
-        self._stack: list[_Frame] = []
-        self._pending_leaf: Node | None = None
-        self._last_probe: Node | None = None
+    # ----------------------------------------------------------- state
 
     @property
     def history(self) -> list[dict]:
-        return list(self._history)
+        """Copy of the round's ordered query/synthesis/context entries."""
+        return [dict(h) for h in self._history]
 
     @property
-    def path(self) -> list[Node]:
-        return [self.root] if self._category is None else [self.root, self._category]
+    def outcome(self) -> str | None:
+        """`synthesized` / `abandoned` / `emergency`, or None while live."""
+        return self._outcome
 
-    def select_category(self, category_id: str) -> TurnResult:
-        if self._category is not None:
-            raise RuntimeError("select_category can only be called once")
-        chosen = self.root.find(category_id)
-        if chosen is None or chosen not in self.root.children:
-            raise ValueError(f"Unknown top-level category: {category_id!r}")
-        self._category = chosen
-        if chosen.emergency:
-            return TurnResult(kind="emergency", node=chosen, path=[self.root, chosen])
-        if self._mode == "reasoning":
-            return self._next_reasoning()
-        if self.seed_context:
-            # No LLM to refine freeform text — echo it as the answer.
-            return TurnResult(
-                kind="answer",
-                content=self.seed_context,
-                node=chosen,
-                path=[self.root, chosen],
-                summary=f"They are communicating: {self.seed_context}",
+    @property
+    def is_terminal(self) -> bool:
+        return self._outcome is not None
+
+    @property
+    def final_utterance(self) -> str:
+        """The confirmed utterance once the round is `synthesized`."""
+        return self._final_utterance
+
+    @property
+    def query_count(self) -> int:
+        return sum(1 for h in self._history if h["kind"] == "query")
+
+    # ------------------------------------------------------- lifecycle
+
+    async def open(self) -> RoundEvent:
+        if self._opened:
+            raise RuntimeError("Round.open() already called")
+        self._opened = True
+        if self.topic.emergency:
+            self._outcome = "emergency"
+            return RoundEvent(
+                kind="emergency",
+                engine=self.engine,
+                emergency_screen=dict(EMERGENCY_SCREEN),
             )
-        self._stack = [_Frame(chosen, deque(chosen.children))]
-        return self._next_fallback()
+        return await self._advance()
 
-    def answer(self, answer: Answer) -> TurnResult:
-        if self._category is None:
-            raise RuntimeError("answer() called before select_category")
-        self.turn += 1
-        if self._mode == "reasoning":
-            return self._resolve_reasoning(answer)
-        return self._resolve_fallback(answer)
+    async def answer(self, a: Answer) -> RoundEvent:
+        if not self._opened:
+            raise RuntimeError("answer() called before open()")
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        if self._pending is None:
+            raise RuntimeError("answer() called with no pending action")
 
-    # ------------------------------------------------------------------ reasoning
+        pending = self._pending
+        entry: dict = {"kind": pending.kind, "text": pending.content, "answer": a.value}
+        if self._pending_qid is not None:
+            entry["qid"] = self._pending_qid
+        self._history.append(entry)
+        self._pending = None
+        self._pending_qid = None
 
-    def _next_reasoning(self) -> TurnResult:
-        assert self._category is not None and self._reasoner is not None
-        final = self.turn + 1 >= self.max_turns
+        if pending.kind == "synthesis" and a is Answer.YES:
+            self._outcome = "synthesized"
+            self._final_utterance = pending.content
+            return RoundEvent(
+                kind="synthesized",
+                text=pending.content,
+                query_index=self.query_count,
+                engine=self.engine,
+            )
+        return await self._advance()
+
+    def add_context(self, text: str) -> None:
+        """Inject caregiver context mid-round; steers the next query."""
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        text = text.strip()
+        if text:
+            self._history.append({"kind": "context", "text": text, "answer": None})
+
+    def abandon(self) -> None:
+        """Finalize a still-live round as abandoned.
+
+        Used when the caregiver switches topic or starts a new round
+        before the current one converges (see the round lifecycle in
+        docs/design/beta-retool.md §2).
+        """
+        if self._outcome is None:
+            self._outcome = "abandoned"
+            self._pending = None
+            self._pending_qid = None
+
+    async def undo(self) -> RoundEvent:
+        """Rewind the most recent entry and re-propose forward.
+
+        Everything downstream of the undone entry is discarded; in
+        reasoning mode the next action is re-proposed against the
+        truncated history, so it may differ from before.
+        """
+        if not self._opened:
+            raise RuntimeError("undo() called before open()")
+        if self._outcome == "emergency":
+            raise RuntimeError("cannot undo an emergency round")
+        if self._history:
+            self._history.pop()
+        self._outcome = None
+        self._final_utterance = ""
+        self._pending = None
+        self._pending_qid = None
+        return await self._advance()
+
+    # -------------------------------------------------------- internal
+
+    async def _advance(self) -> RoundEvent:
+        if self.engine == "fallback":
+            return self._fallback_advance()
+
+        final = self.query_count >= self.max_queries
+        last = self._history[-1] if self._history else None
+        if (
+            final
+            and last is not None
+            and last["kind"] == "synthesis"
+            and last["answer"] != Answer.YES.value
+        ):
+            # The forced final synthesis was rejected — nothing left to try.
+            self._outcome = "abandoned"
+            return RoundEvent(
+                kind="abandoned", query_index=self.query_count, engine=self.engine
+            )
+
+        assert self._reasoner is not None
         try:
-            action = _run_sync(
-                self._reasoner.next_action(
-                    category_label=self._category.label,
-                    history=self._history,
-                    turn=self.turn + 1,
-                    max_turns=self.max_turns,
-                    final=final,
-                    seed_context=self.seed_context,
-                    category_hint=self._category.reasoning_hint or "",
-                )
+            action = await self._reasoner.next_action(
+                topic_label=self.topic.label,
+                history=self._history,
+                query_index=self.query_count + 1,
+                max_queries=self.max_queries,
+                final=final,
+                seed_context=self.seed_context,
+                profile_context=self.profile_context,
+                topic_hint=self.topic.reasoning_hint or "",
+                emotional_state=self.emotional_state,
+                on_phase=self.on_phase,
             )
         except ReasonerError as exc:
             log.warning("reasoner failed (%s) — degrading to fallback mode", exc)
             return self._degrade_to_fallback()
 
-        self._last_kind = action.kind
-        self._last_content = action.content
-        self._last_rationale = action.rationale
-        return TurnResult(
-            kind=action.kind,
-            content=action.content,
-            rationale=action.rationale,
-            path=self.path,
-            turn=self.turn + 1,
-        )
+        self._pending = action
+        self._pending_qid = None
+        return self._event_for(action)
 
-    def _resolve_reasoning(self, answer: Answer) -> TurnResult:
-        assert self._category is not None
-        if self._last_kind is None:
-            raise RuntimeError("reasoning resolve before any action was issued")
-        self._history.append(
-            {
-                "action": self._last_kind,
-                "content": self._last_content,
-                "answer": answer.value,
-            }
-        )
-        if self._last_kind == "guess" and answer is Answer.YES:
-            content = self._last_content
-            summary = self._summarize_game(content)
-            return TurnResult(
-                kind="answer",
-                content=content,
-                path=self.path,
-                summary=summary,
-                turn=self.turn,
-            )
-        # Any other combination continues the game.
-        self._last_kind = None
-        if self.turn >= self.max_turns:
-            return TurnResult(kind="dead_end", path=self.path, turn=self.turn)
-        return self._next_reasoning()
-
-    def _summarize_game(self, final_content: str) -> str:
-        assert self._category is not None
-        fallback = f"They are communicating: {final_content}."
-        if self.llm is None:
-            return fallback
-        try:
-            raw = _run_sync(
-                self.llm.chat(
-                    prompts.summarize_game_messages(
-                        self._category.label,
-                        final_content,
-                        self._history,
-                        seed_context=self.seed_context,
-                    ),
-                    max_tokens=80,
-                )
-            )
-        except LLMUnavailable as exc:
-            log.info("LLM unavailable for game summary: %s", exc)
-            return fallback
-        cleaned = sanitize_llm_text(raw)
-        return cleaned or fallback
-
-    def _degrade_to_fallback(self) -> TurnResult:
-        """Switch from reasoning to tree-walk mode mid-session."""
-        assert self._category is not None
-        self._mode = "fallback"
+    def _degrade_to_fallback(self) -> RoundEvent:
+        """Switch to deterministic fallback mid-round (LLM became unusable)."""
+        self.engine = "fallback"
         self._reasoner = None
-        self._stack = [_Frame(self._category, deque(self._category.children))]
-        return self._next_fallback()
+        self._pending = None
+        self._pending_qid = None
+        return self._fallback_advance()
 
-    # ------------------------------------------------------------------ fallback
+    def _fallback_advance(self) -> RoundEvent:
+        """Deterministic, stateless walk of the topic's fallback bank.
 
-    def _next_fallback(self) -> TurnResult:
-        if self.turn >= self.max_turns:
-            node = self._stack[-1].node if self._stack else self.root
-            return TurnResult(kind="dead_end", node=node, path=self._fallback_path())
+        Position is derived from history each call, so undo just works.
+        """
+        bank = self.topic.fallback_questions
+        last = self._history[-1] if self._history else None
 
-        while self._stack:
-            frame = self._stack[-1]
-            node = frame.node
-            if is_emergency_path([self.root, *(f.node for f in self._stack)]):
-                return TurnResult(kind="emergency", node=node, path=self._fallback_path())
-
-            if node.is_leaf:
-                self._pending_leaf = node
-                question = self._phrase_question(node)
-                return TurnResult(
-                    kind="guess",
-                    content=question,
-                    node=node,
-                    path=self._fallback_path(),
-                    turn=self.turn,
+        # A just-affirmed fallback query → synthesize from its label.
+        if (
+            last is not None
+            and last["kind"] == "query"
+            and last.get("qid")
+            and last["answer"] in _AFFIRMED
+        ):
+            fq = self._find_fq(last["qid"])
+            if fq is not None:
+                action = ReasonerAction(
+                    kind="synthesis",
+                    content=fq.label,
+                    rationale="Fallback mode: confirming the matched need.",
                 )
+                self._pending = action
+                self._pending_qid = None
+                return self._event_for(action)
 
-            if frame.queue:
-                probe = frame.queue.popleft()
-                self._last_probe = probe
-                question = self._phrase_question(probe)
-                return TurnResult(
-                    kind="question",
-                    content=question,
-                    node=probe,
-                    path=self._fallback_path(),
-                    turn=self.turn,
-                )
+        # Otherwise advance to the next un-consumed bank question.
+        answers: dict[str, str] = {}
+        for h in self._history:
+            if h["kind"] == "query" and h.get("qid"):
+                answers[h["qid"]] = h["answer"]
+        consumed = {q for q, a in answers.items() if a != Answer.NOT_SURE.value}
+        deferred = {q for q, a in answers.items() if a == Answer.NOT_SURE.value}
 
-            if frame.deferred:
-                frame.queue.extend(frame.deferred)
-                frame.deferred.clear()
-                continue
+        nxt: FallbackQuestion | None = next(
+            (q for q in bank if q.id not in consumed and q.id not in deferred), None
+        )
+        if nxt is None:  # retry the deferred (not_sure) questions, in file order
+            nxt = next((q for q in bank if q.id in deferred), None)
 
-            if len(self._stack) == 1:
-                return TurnResult(kind="dead_end", node=node, path=self._fallback_path())
-            self._stack.pop()
-
-        return TurnResult(kind="dead_end", node=self.root, path=self._fallback_path())
-
-    def _resolve_fallback(self, answer: Answer) -> TurnResult:
-        # Map KINDA to YES in tree-walk mode: "warmer" == "go deeper here".
-        effective = Answer.YES if answer is Answer.KINDA else answer
-        if self._pending_leaf is not None:
-            leaf = self._pending_leaf
-            self._pending_leaf = None
-            if effective is Answer.YES:
-                summary = self._summarize_fallback(leaf)
-                return TurnResult(
-                    kind="answer",
-                    content=leaf.label,
-                    node=leaf,
-                    path=self._fallback_path(),
-                    summary=summary,
-                    turn=self.turn,
-                )
-            if self._stack:
-                self._stack.pop()
-            return self._next_fallback()
-
-        if self._last_probe is None:
-            raise RuntimeError("fallback resolve before any probe was issued")
-        probe = self._last_probe
-        self._last_probe = None
-        frame = self._stack[-1]
-        if effective is Answer.YES:
-            self._stack.append(_Frame(probe, deque(probe.children)))
-        elif effective is Answer.NOT_SURE:
-            frame.deferred.append(probe)
-        # NO: already popped; stay at this frame.
-        return self._next_fallback()
-
-    def _fallback_path(self) -> list[Node]:
-        return [self.root, *(f.node for f in self._stack)]
-
-    def _phrase_question(self, probe: Node) -> str:
-        if self.llm is None:
-            return probe.question
-        try:
-            raw = _run_sync(
-                self.llm.chat(prompts.rephrase_question_messages(probe.question), max_tokens=60)
+        if nxt is None or self.query_count >= self.max_queries:
+            self._outcome = "abandoned"
+            return RoundEvent(
+                kind="abandoned", query_index=self.query_count, engine=self.engine
             )
-        except LLMUnavailable as exc:
-            log.info("LLM unavailable, using static question: %s", exc)
-            return probe.question
-        cleaned = sanitize_llm_text(raw)
-        return cleaned or probe.question
 
-    def _summarize_fallback(self, leaf: Node) -> str:
-        path = self._fallback_path() + [leaf] if leaf not in self._stack else self._fallback_path()
-        fallback = f"They are communicating: {leaf.label}."
-        if self.llm is None:
-            return fallback
-        try:
-            raw = _run_sync(
-                self.llm.chat(prompts.summarize_path_messages(path), max_tokens=80)
-            )
-        except LLMUnavailable as exc:
-            log.info("LLM unavailable for summary: %s", exc)
-            return fallback
-        cleaned = sanitize_llm_text(raw)
-        return cleaned or fallback
+        action = ReasonerAction(
+            kind="query",
+            content=nxt.question,
+            rationale=f"Fallback mode: walking the '{self.topic.label}' question bank.",
+        )
+        self._pending = action
+        self._pending_qid = nxt.id
+        return self._event_for(action)
+
+    def _find_fq(self, qid: str) -> FallbackQuestion | None:
+        return next((q for q in self.topic.fallback_questions if q.id == qid), None)
+
+    def _event_for(self, action: ReasonerAction) -> RoundEvent:
+        idx = self.query_count + (1 if action.kind == "query" else 0)
+        return RoundEvent(
+            kind=action.kind,
+            text=action.content,
+            rationale=action.rationale,
+            query_index=idx,
+            engine=self.engine,
+        )
 
 
-def _run_sync(coro):  # type: ignore[no-untyped-def]
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    raise RuntimeError(
-        "DialogueSession is synchronous and cannot run from within an active "
-        "event loop. Use the async API directly from FastAPI/tests."
-    )
+class Session:
+    """One tool process — holds the patient context and spawns rounds."""
+
+    def __init__(
+        self,
+        topics: Sequence[Topic],
+        *,
+        llm: LLMBackend | None = None,
+        config: Config | None = None,
+        profile: PatientProfile | None = None,
+    ) -> None:
+        self.topics = list(topics)
+        self.llm = llm
+        self.config = config
+        self.profile = profile
+        self.rounds: list[Round] = []
+        self.emotional_state: dict[str, float] = {}
+
+    def start_round(self, topic_id: str, *, seed_context: str = "") -> Round:
+        topic = find_topic(self.topics, topic_id)
+        if topic is None:
+            raise ValueError(f"Unknown topic: {topic_id!r}")
+        round_ = Round(
+            topic,
+            llm=self.llm,
+            max_queries=self.config.max_queries if self.config else 20,
+            mode=self.config.mode if self.config else "training",
+            seed_context=seed_context,
+            profile_context=(self.profile.context or "") if self.profile else "",
+            emotional_state=self.emotional_state,
+        )
+        self.rounds.append(round_)
+        return round_
+
+    @property
+    def topic_sequence(self) -> list[str]:
+        """Ordered topics of the rounds so far — input to loop detection."""
+        return [r.topic.id for r in self.rounds]
