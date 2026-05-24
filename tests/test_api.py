@@ -194,6 +194,35 @@ def test_emotion_endpoint_accepts_a_reading() -> None:
     assert resp.json()["ok"] is True
 
 
+def test_export_session_markdown_and_json() -> None:
+    client = _fallback_client()
+    sid = client.post("/api/sessions").json()["session_id"]
+    rid = client.post(
+        f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
+    ).json()["round_id"]
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+
+    md = client.get(f"/api/sessions/{sid}/export")
+    assert md.status_code == 200
+    assert "text/markdown" in md.headers["content-type"]
+    assert "attachment" in md.headers["content-disposition"]
+    assert "my20Q conversation" in md.text
+    assert "Round 1" in md.text
+
+    js = client.get(f"/api/sessions/{sid}/export", params={"format": "json"})
+    assert js.status_code == 200
+    payload = js.json()
+    assert payload["kind"] == "conversation-export"
+    assert payload["round_count"] == 1
+    assert payload["rounds"][0]["outcome"] == "synthesized"
+
+
+def test_export_unknown_session_404() -> None:
+    client = _fallback_client()
+    assert client.get("/api/sessions/nope/export").status_code == 404
+
+
 def test_lifespan_unblocks_sse_subscribers_on_shutdown() -> None:
     """The lifespan hook injects a shutdown sentinel into every active SSE
     subscriber queue so blocked `queue.get()` calls wake up — preventing

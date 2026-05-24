@@ -161,6 +161,16 @@ export function App() {
     setEmotion({});
     if (sessionId) api.setEmotion(sessionId, {}).catch(() => undefined);
   };
+  const exportConversation = () => {
+    if (!sessionId) return;
+    // Trigger a download; the server's Content-Disposition names the file.
+    const a = document.createElement("a");
+    a.href = api.exportUrl(sessionId, "md");
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
 
   const toggleTheme = () => {
     setTheme((t) => {
@@ -210,6 +220,8 @@ export function App() {
         onToggleTheme={toggleTheme}
         engine={round?.engine ?? ""}
         busy={busy}
+        onExport={exportConversation}
+        canExport={!!sessionId}
       />
       {error && <div class="errorbar">{error}</div>}
       <main class="grid">

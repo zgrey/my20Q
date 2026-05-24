@@ -34,9 +34,11 @@ interface TopicBarProps {
   onToggleTheme: () => void;
   engine: string;
   busy: boolean;
+  onExport: () => void;
+  canExport: boolean;
 }
 
-/** Persistent header: topic, engine badge, recording light, theme toggle. */
+/** Persistent header: topic, engine badge, save, recording light, theme. */
 export function TopicBar(props: TopicBarProps) {
   const {
     topics,
@@ -48,6 +50,8 @@ export function TopicBar(props: TopicBarProps) {
     onToggleTheme,
     engine,
     busy,
+    onExport,
+    canExport,
   } = props;
   const themeLabel =
     theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
@@ -73,6 +77,14 @@ export function TopicBar(props: TopicBarProps) {
           ))}
         </select>
       </label>
+      <button
+        class="save-btn"
+        onClick={onExport}
+        disabled={!canExport}
+        title="Save this conversation to a file"
+      >
+        ⬇ Save
+      </button>
       {recording && recording.enabled ? (
         <button
           class={`rec ${recording.paused ? "paused" : "on"}`}

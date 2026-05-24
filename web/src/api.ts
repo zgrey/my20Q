@@ -39,6 +39,8 @@ export const api = {
     post<RoundState>(`/sessions/${sid}/rounds/${rid}/undo`),
   eventsUrl: (sid: string, rid: string) =>
     `${BASE}/sessions/${sid}/rounds/${rid}/events`,
+  exportUrl: (sid: string, format: "md" | "json" = "md") =>
+    `${BASE}/sessions/${sid}/export?format=${format}`,
   recording: () => request<RecordingStatus>("/recording"),
   setPaused: (paused: boolean) =>
     post<RecordingStatus>("/recording/pause", { paused }),

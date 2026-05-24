@@ -219,6 +219,29 @@ body,
   background: var(--ink-soft);
 }
 
+.save-btn {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.save-btn:hover:not(:disabled) {
+  color: var(--accent-hover);
+  border-color: var(--accent);
+}
+.save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .theme-toggle {
   width: 36px;
   height: 36px;

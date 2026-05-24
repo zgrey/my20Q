@@ -27,7 +27,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from my20q.agent.dialogue import Answer, Round, RoundEvent, Session
@@ -36,7 +36,7 @@ from my20q.config import Config
 from my20q.llm import select_backend
 from my20q.pictograms import Pictogram, load_catalog, retrieve
 from my20q.profiles import is_real_patient, load_profile
-from my20q.recording import Recorder
+from my20q.recording import Recorder, job_b_score, transcript
 from my20q.topics import load_topics
 
 log = logging.getLogger(__name__)
@@ -416,6 +416,46 @@ def _register_routes(app: FastAPI) -> None:
     def set_recording_paused(body: schemas.PauseIn) -> schemas.RecordingStatusOut:
         state.recording_paused = body.paused
         return _recording_status(state)
+
+    @app.get("/api/sessions/{sid}/export")
+    def export_session(sid: str, format: str = "md") -> Response:
+        """Download the session's conversation as Markdown or JSON.
+
+        Works regardless of the recording gate — this is the caregiver
+        'save conversation' feature, not the training dataset. The export
+        carries only the conversation (no profile, no graph). See
+        recording/transcript.py.
+        """
+        _session(sid)  # 404 if unknown
+        rounds: list[dict] = []
+        for handle in state.rounds.values():
+            if handle.session_id != sid:
+                continue
+            r = handle.round
+            rounds.append(
+                {
+                    "round_id": handle.round_id,
+                    "topic_id": r.topic.id,
+                    "topic_label": r.topic.label,
+                    "engine": r.engine,
+                    "outcome": r.outcome,
+                    "final_utterance": r.final_utterance,
+                    "history": r.history,
+                    "emotional_state": r.emotional_state,
+                    "job_b": job_b_score(r.history, r.outcome),
+                }
+            )
+        payload = transcript.session_payload(sid, rounds)
+        if format == "json":
+            body, media, ext = transcript.to_json(payload), "application/json", "json"
+        else:
+            body, media, ext = transcript.to_markdown(payload), "text/markdown", "md"
+        filename = f"my20q-conversation-{sid[:8]}.{ext}"
+        return Response(
+            content=body,
+            media_type=f"{media}; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     @app.post("/api/sessions/{sid}/emotion")
     def set_emotion(sid: str, body: schemas.EmotionIn) -> dict:
