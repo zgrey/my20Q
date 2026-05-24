@@ -36,7 +36,7 @@ from my20q.config import Config
 from my20q.llm import select_backend
 from my20q.pictograms import Pictogram, load_catalog, retrieve
 from my20q.profiles import is_real_patient, load_profile
-from my20q.recording import Recorder, job_b_score, transcript
+from my20q.recording import Recorder, build_round_record, transcript
 from my20q.topics import load_topics
 
 log = logging.getLogger(__name__)
@@ -418,38 +418,44 @@ def _register_routes(app: FastAPI) -> None:
         return _recording_status(state)
 
     @app.get("/api/sessions/{sid}/export")
-    def export_session(sid: str, format: str = "md") -> Response:
-        """Download the session's conversation as Markdown or JSON.
+    def export_session(sid: str, format: str = "jsonl") -> Response:
+        """Download the session's conversation.
 
-        Works regardless of the recording gate — this is the caregiver
-        'save conversation' feature, not the training dataset. The export
-        carries only the conversation (no profile, no graph). See
+        Mirrors the recording dataset: the default JSONL format is the
+        same per-round record schema the recorder writes
+        (`build_round_record`), so exported and recorded data are one
+        uniform training corpus. `format=md` gives a human-readable view
+        rendered from the same records.
+
+        Works regardless of the recording gate — and carries only the
+        conversation, never the profile or knowledge graph. See
         recording/transcript.py.
         """
         _session(sid)  # 404 if unknown
-        rounds: list[dict] = []
+        records: list[dict] = []
         for handle in state.rounds.values():
             if handle.session_id != sid:
                 continue
             r = handle.round
-            rounds.append(
-                {
-                    "round_id": handle.round_id,
-                    "topic_id": r.topic.id,
-                    "topic_label": r.topic.label,
-                    "engine": r.engine,
-                    "outcome": r.outcome,
-                    "final_utterance": r.final_utterance,
-                    "history": r.history,
-                    "emotional_state": r.emotional_state,
-                    "job_b": job_b_score(r.history, r.outcome),
-                }
+            records.append(
+                build_round_record(
+                    session_id=handle.session_id,
+                    round_id=handle.round_id,
+                    topic_id=r.topic.id,
+                    engine=r.engine,
+                    history=r.history,
+                    outcome=r.outcome,
+                    final_utterance=r.final_utterance,
+                    model=state.model_label,
+                    emotional_state=r.emotional_state,
+                )
             )
-        payload = transcript.session_payload(sid, rounds)
-        if format == "json":
-            body, media, ext = transcript.to_json(payload), "application/json", "json"
-        else:
-            body, media, ext = transcript.to_markdown(payload), "text/markdown", "md"
+        if format == "md":
+            body = transcript.to_markdown(sid, records)
+            media, ext = "text/markdown", "md"
+        else:  # jsonl — mirrors the recording file format
+            body = transcript.to_jsonl(records)
+            media, ext = "application/x-ndjson", "jsonl"
         filename = f"my20q-conversation-{sid[:8]}.{ext}"
         return Response(
             content=body,

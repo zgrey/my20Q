@@ -194,7 +194,7 @@ def test_emotion_endpoint_accepts_a_reading() -> None:
     assert resp.json()["ok"] is True
 
 
-def test_export_session_markdown_and_json() -> None:
+def test_export_session_jsonl_mirrors_recording_format() -> None:
     client = _fallback_client()
     sid = client.post("/api/sessions").json()["session_id"]
     rid = client.post(
@@ -203,19 +203,25 @@ def test_export_session_markdown_and_json() -> None:
     client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
     client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
 
-    md = client.get(f"/api/sessions/{sid}/export")
+    # default format is JSONL — one round per line, recording record schema
+    resp = client.get(f"/api/sessions/{sid}/export")
+    assert resp.status_code == 200
+    assert "application/x-ndjson" in resp.headers["content-type"]
+    assert "attachment" in resp.headers["content-disposition"]
+    lines = [ln for ln in resp.text.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    # same keys the recorder writes (see test_real_profile_records_*)
+    assert record["outcome"] == "synthesized"
+    assert record["topic_id"] == "physical_health"
+    assert record["session_id"] == sid
+    assert "queries" in record and "job_b" in record and "recorded_at" in record
+
+    md = client.get(f"/api/sessions/{sid}/export", params={"format": "md"})
     assert md.status_code == 200
     assert "text/markdown" in md.headers["content-type"]
-    assert "attachment" in md.headers["content-disposition"]
     assert "my20Q conversation" in md.text
     assert "Round 1" in md.text
-
-    js = client.get(f"/api/sessions/{sid}/export", params={"format": "json"})
-    assert js.status_code == 200
-    payload = js.json()
-    assert payload["kind"] == "conversation-export"
-    assert payload["round_count"] == 1
-    assert payload["rounds"][0]["outcome"] == "synthesized"
 
 
 def test_export_unknown_session_404() -> None:

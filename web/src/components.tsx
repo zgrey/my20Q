@@ -450,7 +450,7 @@ export function InputTile(props: InputProps) {
 
   return (
     <section class="tile input">
-      <div class="answers">
+      <div class="answers-grid">
         {ANSWER_BUTTONS.map((b) => (
           <button
             class={`answer ${b.a}`}
@@ -461,6 +461,8 @@ export function InputTile(props: InputProps) {
             <kbd>{b.key}</kbd>
           </button>
         ))}
+      </div>
+      <div class="secondary-row">
         <button class="answer undo" disabled={!canUndo} onClick={onUndo}>
           Undo<kbd>U</kbd>
         </button>

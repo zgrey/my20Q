@@ -42,6 +42,41 @@ def job_b_score(history: list[dict], outcome: str | None) -> float:
     return round(_W_FINAL * confirmed + answer_term, 3)
 
 
+def build_round_record(
+    *,
+    session_id: str,
+    round_id: str,
+    topic_id: str,
+    engine: str,
+    history: list[dict],
+    outcome: str | None,
+    final_utterance: str,
+    model: str,
+    emotional_state: dict | None = None,
+) -> dict:
+    """The canonical per-round training record.
+
+    Shared by the recorder (which appends it as JSONL to the patient
+    dataset) and the caregiver conversation export (which serves the same
+    shape) — so recorded data and exported data are one uniform corpus.
+    See docs/design/beta-retool.md §8.
+    """
+    return {
+        "session_id": session_id,
+        "round_id": round_id,
+        "topic_id": topic_id,
+        "engine": engine,
+        "outcome": outcome,
+        "final_utterance": final_utterance,
+        "query_count": sum(1 for h in history if h["kind"] == "query"),
+        "job_b": job_b_score(history, outcome),
+        "queries": history,
+        "emotional_state": emotional_state or {},
+        "model": model,
+        "recorded_at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
+    }
+
+
 class Recorder:
     """Appends finalized rounds to one patient's on-disk dataset."""
 
@@ -63,20 +98,17 @@ class Recorder:
     ) -> None:
         """Append one finalized round to its session's JSONL file."""
         self.patient_dir.mkdir(parents=True, exist_ok=True)
-        record = {
-            "session_id": session_id,
-            "round_id": round_id,
-            "topic_id": topic_id,
-            "engine": engine,
-            "outcome": outcome,
-            "final_utterance": final_utterance,
-            "query_count": sum(1 for h in history if h["kind"] == "query"),
-            "job_b": job_b_score(history, outcome),
-            "queries": history,
-            "emotional_state": emotional_state or {},
-            "model": model,
-            "recorded_at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
-        }
+        record = build_round_record(
+            session_id=session_id,
+            round_id=round_id,
+            topic_id=topic_id,
+            engine=engine,
+            history=history,
+            outcome=outcome,
+            final_utterance=final_utterance,
+            model=model,
+            emotional_state=emotional_state,
+        )
         path = self.patient_dir / f"{session_id}.jsonl"
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")

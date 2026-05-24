@@ -466,15 +466,18 @@ body,
 .input {
   gap: 12px;
 }
-.answers {
+/* Primary answers — a large 2×2 grid of big tap targets. */
+.answers-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+/* Secondary actions — Undo + Quit, smaller, beneath the grid. */
+.secondary-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
 }
 .answer {
-  flex: 1 1 92px;
-  min-height: 56px;
-  font-size: 15px;
   font-weight: 700;
   color: #fff;
   border: none;
@@ -484,6 +487,15 @@ body,
   align-items: center;
   justify-content: center;
   gap: 6px;
+}
+.answers-grid .answer {
+  min-height: 92px;
+  font-size: 22px;
+}
+.secondary-row .answer {
+  flex: 1;
+  min-height: 46px;
+  font-size: 14px;
 }
 .answer:disabled {
   opacity: 0.4;

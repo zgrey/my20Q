@@ -52,28 +52,55 @@ async def test_recorder_writes_a_round(tmp_path, topics: list[Topic]) -> None:
     assert "job_b" in record
 
 
+def _sample_record() -> dict:
+    """A round record in the shared recording schema."""
+    from my20q.recording import build_round_record
+
+    return build_round_record(
+        session_id="session-abcdef12",
+        round_id="r1",
+        topic_id="my_people",
+        engine="reasoning",
+        history=[
+            {"kind": "query", "text": "Is this about someone?", "answer": "yes"},
+            {"kind": "context", "text": "He pointed at a photo.", "answer": None},
+            {"kind": "synthesis", "text": "Call my son.", "answer": "yes"},
+        ],
+        outcome="synthesized",
+        final_utterance="I would like to call my son.",
+        model="fallback",
+        emotional_state={"sad_happy": -0.4, "anxious_calm": 0.0},
+    )
+
+
+def test_export_jsonl_matches_recording_record_schema() -> None:
+    record = _sample_record()
+    jsonl = transcript.to_jsonl([record])
+    lines = [ln for ln in jsonl.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    parsed = json.loads(lines[0])
+    # identical to what Recorder.record_round writes
+    assert parsed == record
+    assert set(parsed) >= {
+        "session_id",
+        "round_id",
+        "topic_id",
+        "engine",
+        "outcome",
+        "final_utterance",
+        "query_count",
+        "job_b",
+        "queries",
+        "emotional_state",
+        "model",
+        "recorded_at",
+    }
+
+
 def test_transcript_markdown_renders_rounds_and_context() -> None:
-    rounds = [
-        {
-            "round_id": "r1",
-            "topic_id": "my_people",
-            "topic_label": "My people",
-            "engine": "reasoning",
-            "outcome": "synthesized",
-            "final_utterance": "I would like to call my son.",
-            "history": [
-                {"kind": "query", "text": "Is this about someone?", "answer": "yes"},
-                {"kind": "context", "text": "He pointed at a photo.", "answer": None},
-                {"kind": "synthesis", "text": "Call my son.", "answer": "yes"},
-            ],
-            "emotional_state": {"sad_happy": -0.4, "anxious_calm": 0.0},
-            "job_b": 11.0,
-        }
-    ]
-    payload = transcript.session_payload("session-abcdef12", rounds)
-    md = transcript.to_markdown(payload)
+    md = transcript.to_markdown("session-abcdef12", [_sample_record()])
     assert "# my20Q conversation" in md
-    assert "Round 1 — My people (reasoning)" in md
+    assert "Round 1 — my_people (reasoning)" in md
     assert "caregiver context:_ He pointed at a photo." in md
     assert "“I would like to call my son.”" in md
     assert "sad_happy -0.40" in md  # zero-valued pairs are dropped
@@ -81,10 +108,8 @@ def test_transcript_markdown_renders_rounds_and_context() -> None:
 
 
 def test_transcript_handles_empty_session() -> None:
-    payload = transcript.session_payload("s0", [])
-    md = transcript.to_markdown(payload)
-    assert "no rounds" in md
-    assert transcript.to_json(payload).strip().startswith("{")
+    assert "no rounds" in transcript.to_markdown("s0", [])
+    assert transcript.to_jsonl([]) == ""
 
 
 async def test_abandon_finalizes_a_live_round(topics: list[Topic]) -> None:

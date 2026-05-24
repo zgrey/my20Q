@@ -163,9 +163,11 @@ export function App() {
   };
   const exportConversation = () => {
     if (!sessionId) return;
-    // Trigger a download; the server's Content-Disposition names the file.
+    // Default to JSONL — the same record format the recorder writes, so
+    // exports and recordings form one training corpus. The server's
+    // Content-Disposition names the file.
     const a = document.createElement("a");
-    a.href = api.exportUrl(sessionId, "md");
+    a.href = api.exportUrl(sessionId, "jsonl");
     a.download = "";
     document.body.appendChild(a);
     a.click();
@@ -189,10 +191,18 @@ export function App() {
 
   // y/n/k/s answer shortcuts, u = undo, q = new round. The handlers are
   // re-bound each render so they close over current state.
+  //
+  // Shortcuts also fire from inside the context field, but only while it
+  // is empty — so a single keystroke answers like it does outside the
+  // field, yet you can still type multi-character context (Enter sends).
+  // The topic dropdown keeps its own keyboard behavior.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "SELECT" || tag === "TEXTAREA") return;
+      if (tag === "INPUT" && (el as HTMLInputElement).value !== "") return;
       const map: Record<string, Answer> = {
         y: "yes",
         n: "no",
@@ -200,9 +210,16 @@ export function App() {
         s: "not_sure",
       };
       const key = e.key.toLowerCase();
-      if (key in map) answer(map[key]);
-      else if (key === "u") undo();
-      else if (key === "q") newRound();
+      if (key in map) {
+        e.preventDefault();
+        answer(map[key]);
+      } else if (key === "u") {
+        e.preventDefault();
+        undo();
+      } else if (key === "q") {
+        e.preventDefault();
+        newRound();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
