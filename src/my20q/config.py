@@ -33,6 +33,13 @@ class Config:
     mode: Mode
     recording_dir: Path
     recording_threshold_bytes: int
+    # Text-to-speech (piper, local-only — never a cloud voice). The binary
+    # and a voice model are installed on the host; until then the cockpit
+    # reports audio as unavailable and stays silent. See tts/.
+    tts_enabled: bool
+    piper_bin: str
+    piper_model: Path | None
+    piper_timeout_s: float
 
     @classmethod
     def from_env(cls) -> Config:
@@ -47,6 +54,7 @@ class Config:
             raise ValueError(f"MY20Q_BACKEND must be 'ollama' or 'anthropic', got {backend!r}")
 
         profile_env = os.environ.get("MY20Q_PROFILE", "").strip()
+        piper_model_env = os.environ.get("MY20Q_PIPER_MODEL", "").strip()
 
         return cls(
             ollama_base_url=os.environ.get("MY20Q_OLLAMA_URL", "http://localhost:11434"),
@@ -64,4 +72,8 @@ class Config:
             recording_threshold_bytes=(
                 int(os.environ.get("MY20Q_RECORDING_THRESHOLD_MB", "25")) * 1024 * 1024
             ),
+            tts_enabled=os.environ.get("MY20Q_TTS", "1") != "0",
+            piper_bin=os.environ.get("MY20Q_PIPER_BIN", "piper"),
+            piper_model=Path(piper_model_env) if piper_model_env else None,
+            piper_timeout_s=float(os.environ.get("MY20Q_PIPER_TIMEOUT", "20")),
         )

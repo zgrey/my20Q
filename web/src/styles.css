@@ -269,7 +269,8 @@ body,
   cursor: not-allowed;
 }
 
-.theme-toggle {
+.theme-toggle,
+.audio-toggle {
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -283,7 +284,11 @@ body,
   align-items: center;
   justify-content: center;
 }
-.theme-toggle:hover {
+.audio-toggle.degraded {
+  border-color: var(--kinda);
+}
+.theme-toggle:hover,
+.audio-toggle:hover {
   border-color: var(--accent);
   color: var(--accent);
 }

@@ -9,6 +9,7 @@ import type {
   RoundRecord,
   RoundState,
   Topic,
+  TTSStatus,
 } from "./types";
 
 const BASE = "/api";
@@ -56,6 +57,7 @@ export const api = {
   recordings: () => request<RecordingFile[]>("/recordings"),
   recordingRecords: (sid: string) =>
     request<RoundRecord[]>(`/recordings/${encodeURIComponent(sid)}`),
+  ttsStatus: () => request<TTSStatus>("/tts/status"),
 };
 
 /** Turn a fetch failure into a caregiver-readable message. */

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import { api, friendlyError } from "./api";
 import {
@@ -9,7 +9,17 @@ import {
   TopicBar,
 } from "./components";
 import { ReviewDashboard } from "./review";
+import { confirmBeep, speak, stopSpeaking } from "./tts";
 import type { Answer, RecordingStatus, RoundState, Topic } from "./types";
+
+/** Read the persisted audio preference (default on). */
+function initialAudio(): boolean {
+  try {
+    return localStorage.getItem("audio") !== "0";
+  } catch {
+    return true;
+  }
+}
 
 type Theme = "dark" | "light";
 type View = "live" | "review";
@@ -41,6 +51,9 @@ export function App() {
     "closed",
   );
   const [emotion, setEmotion] = useState<Record<string, number>>({});
+  const [audioOn, setAudioOn] = useState<boolean>(initialAudio);
+  const [ttsAvailable, setTtsAvailable] = useState(false);
+  const lastSpokenRef = useRef<string>("");
 
   // Bootstrap: load topics, create a session, open the first round.
   useEffect(() => {
@@ -99,6 +112,32 @@ export function App() {
     };
   }, [sessionId, round?.round_id]);
 
+  // Is local (piper) speech available? Drives the audio toggle's tooltip.
+  useEffect(() => {
+    api
+      .ttsStatus()
+      .then((s) => setTtsAvailable(s.available))
+      .catch(() => setTtsAvailable(false));
+  }, []);
+
+  // Speak each new query / proposed / confirmed utterance aloud (live mode
+  // only, when audio is on and piper is available). The ref guards against
+  // re-speaking the same text on unrelated re-renders.
+  useEffect(() => {
+    if (view !== "live" || !audioOn || !ttsAvailable) return;
+    const ev = round?.event;
+    if (!ev || !ev.text) return;
+    if (!["query", "synthesis", "synthesized"].includes(ev.kind)) return;
+    if (ev.text === lastSpokenRef.current) return;
+    lastSpokenRef.current = ev.text;
+    speak(ev.text);
+  }, [round?.event.text, round?.event.kind, audioOn, ttsAvailable, view]);
+
+  // Stop any readout when leaving live mode.
+  useEffect(() => {
+    if (view !== "live") stopSpeaking();
+  }, [view]);
+
   const run = useCallback(async (fn: () => Promise<RoundState>) => {
     setBusy(true);
     setError(null);
@@ -124,6 +163,7 @@ export function App() {
 
   const answer = (a: Answer) => {
     if (sessionId && round && canAnswer) {
+      if (audioOn) confirmBeep(); // instant audible acknowledgement of input
       run(() => api.answer(sessionId, round.round_id, a));
     }
   };
@@ -175,6 +215,19 @@ export function App() {
     document.body.appendChild(a);
     a.click();
     a.remove();
+  };
+
+  const toggleAudio = () => {
+    setAudioOn((on) => {
+      const next = !on;
+      try {
+        localStorage.setItem("audio", next ? "1" : "0");
+      } catch {
+        /* localStorage unavailable — preference applies for this session */
+      }
+      if (!next) stopSpeaking();
+      return next;
+    });
   };
 
   const toggleTheme = () => {
@@ -245,6 +298,9 @@ export function App() {
         canExport={!!sessionId}
         view={view}
         onView={setView}
+        audioOn={audioOn}
+        onToggleAudio={toggleAudio}
+        ttsAvailable={ttsAvailable}
       />
       {error && <div class="errorbar">{error}</div>}
       {view === "review" ? (

@@ -98,3 +98,15 @@ class RecordingFileOut(BaseModel):
     rounds: int
     bytes: int
     modified: str
+
+
+class TTSStatusOut(BaseModel):
+    """Whether local (piper) speech is available, and why/why not."""
+
+    available: bool
+    voice: str | None = None
+    reason: str
+
+
+class TTSIn(BaseModel):
+    text: str

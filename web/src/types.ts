@@ -59,6 +59,13 @@ export interface RecordingStatus {
   rounds: number;
 }
 
+// Whether local (piper) speech is available — drives the audio toggle.
+export interface TTSStatus {
+  available: boolean;
+  voice: string | null;
+  reason: string;
+}
+
 // One recorded session on disk (the review dashboard's server picker).
 export interface RecordingFile {
   session_id: string;

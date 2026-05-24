@@ -29,6 +29,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from my20q.agent.dialogue import Answer, Round, RoundEvent, Session
 from my20q.api import schemas
@@ -38,6 +39,7 @@ from my20q.pictograms import Pictogram, load_catalog, retrieve
 from my20q.profiles import is_real_patient, load_profile
 from my20q.recording import Recorder, build_round_record, transcript
 from my20q.topics import load_topics
+from my20q.tts import TTSUnavailable, select_tts
 
 log = logging.getLogger(__name__)
 
@@ -209,6 +211,9 @@ def create_app(config: Config | None = None, *, backend: object = _UNSET) -> Fas
     )
     app.state.recording_paused = False
     app.state.model_label = getattr(llm, "model", None) or "fallback"
+    # Local-only TTS (piper). May be unavailable until installed — the
+    # status endpoint reports why, and the cockpit stays silent.
+    app.state.tts = select_tts(config)
 
     _register_routes(app)
     _mount_assets(app)
@@ -490,6 +495,35 @@ def _register_routes(app: FastAPI) -> None:
             media_type=f"{media}; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+    @app.get("/api/tts/status", response_model=schemas.TTSStatusOut)
+    def tts_status() -> schemas.TTSStatusOut:
+        """Report whether local (piper) speech is ready, and why/why not."""
+        engine = state.tts
+        if engine is None:
+            return schemas.TTSStatusOut(available=False, reason="TTS disabled")
+        return schemas.TTSStatusOut(
+            available=engine.available, voice=engine.voice, reason=engine.reason
+        )
+
+    @app.post("/api/tts")
+    async def synthesize_tts(body: schemas.TTSIn) -> Response:
+        """Render text to WAV via local piper.
+
+        503 when piper is unavailable (not installed / no model) — the
+        cockpit treats that as 'audio off' and stays silent. There is no
+        cloud fallback by design. Patient-facing strings are already
+        sanitized upstream; this only voices what the cockpit shows.
+        """
+        engine = state.tts
+        if engine is None or not engine.available:
+            reason = "TTS disabled" if engine is None else engine.reason
+            raise HTTPException(503, f"TTS unavailable: {reason}")
+        try:
+            audio = await run_in_threadpool(engine.synthesize, body.text)
+        except TTSUnavailable as exc:
+            raise HTTPException(503, f"TTS failed: {exc}") from exc
+        return Response(content=audio, media_type="audio/wav")
 
     @app.post("/api/sessions/{sid}/emotion")
     def set_emotion(sid: str, body: schemas.EmotionIn) -> dict:

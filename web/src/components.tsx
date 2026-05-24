@@ -38,6 +38,9 @@ interface TopicBarProps {
   canExport: boolean;
   view: "live" | "review";
   onView: (v: "live" | "review") => void;
+  audioOn: boolean;
+  onToggleAudio: () => void;
+  ttsAvailable: boolean;
 }
 
 /** Persistent header: view tabs, topic, engine badge, save, rec, theme. */
@@ -56,8 +59,16 @@ export function TopicBar(props: TopicBarProps) {
     canExport,
     view,
     onView,
+    audioOn,
+    onToggleAudio,
+    ttsAvailable,
   } = props;
   const reviewing = view === "review";
+  const audioTitle = !audioOn
+    ? "Audio off — click to enable readouts and input beeps"
+    : ttsAvailable
+      ? "Audio on — queries and utterances are read aloud"
+      : "Audio on (input beeps) — voice readouts need piper installed";
   const themeLabel =
     theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
   return (
@@ -134,6 +145,14 @@ export function TopicBar(props: TopicBarProps) {
           Rec off
         </span>
       )}
+      <button
+        class={`audio-toggle${audioOn && !ttsAvailable ? " degraded" : ""}`}
+        onClick={onToggleAudio}
+        aria-label={audioTitle}
+        title={audioTitle}
+      >
+        {audioOn ? "🔊" : "🔇"}
+      </button>
       <button
         class="theme-toggle"
         onClick={onToggleTheme}
