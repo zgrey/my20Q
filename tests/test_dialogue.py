@@ -117,16 +117,39 @@ async def test_budget_exhaustion_forces_synthesis_then_abandons(
     assert rnd.outcome == "abandoned"
 
 
-async def test_add_context_is_recorded(topics: list[Topic]) -> None:
+async def test_add_context_refreshes_the_pending_query(topics: list[Topic]) -> None:
     backend = _scripted(
         _action("query", "Is this about a family member you would like to contact?"),
         _action("query", "Would you like to send them a written message instead?"),
     )
     rnd = Round(_topic(topics, "my_people"), llm=backend)
-    await rnd.open()
-    rnd.add_context("She mentioned her granddaughter earlier today.")
-    await rnd.answer(Answer.YES)
+    first = await rnd.open()
+    # Adding context re-proposes — the on-screen query refreshes (and the
+    # context lands in history).
+    refreshed = await rnd.add_context("She mentioned her granddaughter earlier.")
+    assert refreshed.kind == "query"
+    assert refreshed.text != first.text
     assert "context" in [h["kind"] for h in rnd.history]
+
+
+async def test_empty_context_leaves_query_unchanged(topics: list[Topic]) -> None:
+    backend = _scripted(_action("query", "Is this about contacting someone?"))
+    rnd = Round(_topic(topics, "my_people"), llm=backend)
+    first = await rnd.open()
+    same = await rnd.add_context("   ")
+    assert same.text == first.text
+    assert "context" not in [h["kind"] for h in rnd.history]
+
+
+async def test_rationale_persists_in_history(topics: list[Topic]) -> None:
+    backend = _scripted(
+        _action("query", "Is this about contacting someone?", rationale="exploring contact"),
+    )
+    rnd = Round(_topic(topics, "my_people"), llm=backend)
+    await rnd.open()
+    await rnd.answer(Answer.NO)
+    query_entry = next(h for h in rnd.history if h["kind"] == "query")
+    assert query_entry["rationale"] == "exploring contact"
 
 
 async def test_malformed_llm_degrades_to_fallback(topics: list[Topic]) -> None:

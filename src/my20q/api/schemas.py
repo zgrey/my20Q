@@ -53,6 +53,7 @@ class HistoryEntryOut(BaseModel):
     kind: str
     text: str
     answer: str | None = None
+    rationale: str = ""  # the reasoner's "why" for this query/synthesis
 
 
 class RoundStateOut(BaseModel):

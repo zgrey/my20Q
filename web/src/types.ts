@@ -35,6 +35,7 @@ export interface HistoryEntry {
   kind: "query" | "synthesis" | "context";
   text: string;
   answer: Answer | null;
+  rationale: string;
 }
 
 export interface RoundState {

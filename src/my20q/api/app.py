@@ -246,7 +246,10 @@ def _register_routes(app: FastAPI) -> None:
             event=_event_out(h.last_event, state.pictograms),
             history=[
                 schemas.HistoryEntryOut(
-                    kind=e["kind"], text=e["text"], answer=e.get("answer")
+                    kind=e["kind"],
+                    text=e["text"],
+                    answer=e.get("answer"),
+                    rationale=e.get("rationale", ""),
                 )
                 for e in r.history
             ],
@@ -324,12 +327,14 @@ def _register_routes(app: FastAPI) -> None:
     @app.post(
         "/api/sessions/{sid}/rounds/{rid}/context", response_model=schemas.RoundStateOut
     )
-    def add_context(
+    async def add_context(
         sid: str, rid: str, body: schemas.ContextIn
     ) -> schemas.RoundStateOut:
         handle = _handle(sid, rid)
         try:
-            handle.round.add_context(body.text)
+            # Re-proposes the pending query against the new context, so the
+            # on-screen question refreshes to account for it.
+            handle.last_event = await handle.round.add_context(body.text)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
         return _round_state(handle)

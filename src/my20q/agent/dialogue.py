@@ -148,7 +148,15 @@ class Round:
             raise RuntimeError("answer() called with no pending action")
 
         pending = self._pending
-        entry: dict = {"kind": pending.kind, "text": pending.content, "answer": a.value}
+        # Persist the reasoner's rationale alongside the query so saves,
+        # recordings, and the session-review dashboard can show *why* each
+        # question was asked — not just the question and the answer.
+        entry: dict = {
+            "kind": pending.kind,
+            "text": pending.content,
+            "answer": a.value,
+            "rationale": pending.rationale,
+        }
         if self._pending_qid is not None:
             entry["qid"] = self._pending_qid
         self._history.append(entry)
@@ -166,13 +174,28 @@ class Round:
             )
         return await self._advance()
 
-    def add_context(self, text: str) -> None:
-        """Inject caregiver context mid-round; steers the next query."""
+    async def add_context(self, text: str) -> RoundEvent:
+        """Inject caregiver context mid-round and refresh the pending query.
+
+        The current (unanswered) query lives in ``_pending``, not in
+        history — so we append the context and re-propose against the
+        updated history, returning a fresh query that actually accounts
+        for what the caregiver just said. Empty context is a no-op that
+        leaves the current query in place. In fallback mode there is no
+        LLM to steer, so the deterministic walk re-proposes the same
+        question.
+        """
         if self._outcome is not None:
             raise RuntimeError("round is already terminal")
         text = text.strip()
-        if text:
-            self._history.append({"kind": "context", "text": text, "answer": None})
+        if not text:
+            if self._pending is not None:
+                return self._event_for(self._pending)
+            return await self._advance()
+        self._history.append({"kind": "context", "text": text, "answer": None})
+        self._pending = None
+        self._pending_qid = None
+        return await self._advance()
 
     def abandon(self) -> None:
         """Finalize a still-live round as abandoned.

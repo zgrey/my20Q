@@ -189,8 +189,7 @@ export function ConversationTile({
         )}
         {awaitingAnswer && lastEntry?.kind === "context" && (
           <div class="ctx-hint">
-            Context noted — it will steer the next question. Answer the one
-            above with a button to continue.
+            Context added — the question above was refreshed to use it.
           </div>
         )}
         {round.outcome === "synthesized" && (

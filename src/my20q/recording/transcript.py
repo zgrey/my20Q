@@ -73,6 +73,9 @@ def to_markdown(session_id: str, records: list[dict[str, Any]]) -> str:
                 tag = "Proposed" if kind == "synthesis" else "Q"
                 suffix = f" — **{_ANSWER_LABEL.get(ans, ans)}**" if ans else ""
                 lines.append(f"  {step}. {tag}: {text}{suffix}")
+                rationale = entry.get("rationale")
+                if rationale:
+                    lines.append(f"     _reasoning: {rationale}_")
 
         emotion = {k: v for k, v in (rec.get("emotional_state") or {}).items() if v}
         if emotion:
