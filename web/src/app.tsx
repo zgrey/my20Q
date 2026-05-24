@@ -34,6 +34,9 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<string | null>(null);
+  const [sseStatus, setSseStatus] = useState<"connecting" | "open" | "closed">(
+    "closed",
+  );
   const [emotion, setEmotion] = useState<Record<string, number>>({});
 
   // Bootstrap: load topics, create a session, open the first round.
@@ -69,10 +72,16 @@ export function App() {
   }, []);
 
   // SSE progress channel — live reasoner phase while a request is in flight.
+  // The server immediately emits a {phase:"connected"} payload, so we flip
+  // to "open" on the first message (more reliable across browsers than
+  // EventSource.onopen alone, which doesn't fire until headers arrive).
   useEffect(() => {
     if (!sessionId || !round) return;
+    setSseStatus("connecting");
     const es = new EventSource(api.eventsUrl(sessionId, round.round_id));
+    es.onopen = () => setSseStatus("open");
     es.onmessage = (e) => {
+      setSseStatus("open");
       try {
         const data = JSON.parse(e.data);
         if (typeof data.phase === "string") setPhase(data.phase);
@@ -80,7 +89,11 @@ export function App() {
         /* ignore malformed SSE payloads */
       }
     };
-    return () => es.close();
+    es.onerror = () => setSseStatus("closed");
+    return () => {
+      es.close();
+      setSseStatus("closed");
+    };
   }, [sessionId, round?.round_id]);
 
   const run = useCallback(async (fn: () => Promise<RoundState>) => {
@@ -144,6 +157,10 @@ export function App() {
       return next;
     });
   };
+  const resetEmotion = () => {
+    setEmotion({});
+    if (sessionId) api.setEmotion(sessionId, {}).catch(() => undefined);
+  };
 
   const toggleTheme = () => {
     setTheme((t) => {
@@ -202,8 +219,10 @@ export function App() {
           event={round?.event ?? null}
           busy={busy}
           phase={phase}
+          sse={sseStatus}
           emotion={emotion}
           onEmotion={setEmotionValue}
+          onResetEmotion={resetEmotion}
         />
         <InputTile
           canAnswer={canAnswer}

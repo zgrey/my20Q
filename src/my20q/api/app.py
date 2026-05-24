@@ -16,14 +16,16 @@ Run it: ``python -m my20q.api`` (or
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -40,6 +42,12 @@ from my20q.topics import load_topics
 log = logging.getLogger(__name__)
 
 _UNSET: object = object()
+
+# Sentinel pushed into each subscriber's queue at server shutdown so any
+# generator blocked in `queue.get()` returns immediately and exits the
+# loop. Without this, uvicorn's graceful shutdown waits forever for the
+# SSE generator to finish on its own (it never does).
+_SHUTDOWN_SENTINEL: object = object()
 
 
 @dataclass
@@ -132,6 +140,31 @@ def _recording_status(state) -> schemas.RecordingStatusOut:
     )
 
 
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Lifespan hook that gracefully unblocks SSE generators on shutdown.
+
+    Uvicorn waits for in-flight requests to drain before exiting. The SSE
+    progress channel is an infinite generator — it will never drain on its
+    own. On shutdown we set `shutdown_event` and push a sentinel onto every
+    active subscriber queue so each generator wakes from `queue.get()`,
+    breaks out of its loop, and the response closes cleanly.
+
+    Combined with `timeout_graceful_shutdown` in __main__.py, this keeps
+    Ctrl+C responsive even with open EventSource connections.
+    """
+    app.state.shutdown_event = asyncio.Event()
+    try:
+        yield
+    finally:
+        app.state.shutdown_event.set()
+        rounds = getattr(app.state, "rounds", {})
+        for handle in rounds.values():
+            for queue in list(handle.subscribers):
+                with contextlib.suppress(asyncio.QueueFull):
+                    queue.put_nowait(_SHUTDOWN_SENTINEL)
+
+
 def create_app(config: Config | None = None, *, backend: object = _UNSET) -> FastAPI:
     """Build the cockpit API.
 
@@ -143,7 +176,11 @@ def create_app(config: Config | None = None, *, backend: object = _UNSET) -> Fas
     profile = load_profile(config.profile_path)
     llm = select_backend(config, profile) if backend is _UNSET else backend
 
-    app = FastAPI(title="my20Q Caregiver Cockpit API", version="0.1.0-beta")
+    app = FastAPI(
+        title="my20Q Caregiver Cockpit API",
+        version="0.1.0-beta",
+        lifespan=_lifespan,
+    )
 
     origins = [
         o.strip()
@@ -311,33 +348,65 @@ def _register_routes(app: FastAPI) -> None:
         return _round_state(handle)
 
     @app.get("/api/sessions/{sid}/rounds/{rid}/events")
-    async def round_events(sid: str, rid: str) -> StreamingResponse:
+    async def round_events(
+        sid: str, rid: str, request: Request
+    ) -> StreamingResponse:
         """SSE progress channel for one round.
 
         Streams short reasoner phase events ("thinking", "re-asking") so
         the cockpit can show live progress while a request is in flight.
         The authoritative round state still comes from the REST responses;
-        this channel is purely progress. A 15s keep-alive holds the
-        connection open through idle gaps.
+        this channel is purely progress.
+
+        Shutdown-safe: each iteration polls a short timeout. A keep-alive
+        comment fires every 5s of idle so intermediaries don't close the
+        connection. At server shutdown the lifespan handler pushes a
+        sentinel into the queue, which breaks the loop and lets uvicorn
+        finish draining within `timeout_graceful_shutdown` seconds. The
+        same loop also exits promptly if the client disconnects.
+
+        Headers disable caching and proxy buffering — without these, the
+        Vite dev proxy and nginx-style intermediaries hold messages until
+        the connection closes, defeating the live channel.
         """
         handle = _handle(sid, rid)
         queue: asyncio.Queue = asyncio.Queue()
         handle.subscribers.append(queue)
+        shutdown_event: asyncio.Event = getattr(
+            app.state, "shutdown_event", asyncio.Event()
+        )
 
         async def stream():
             try:
                 yield _sse({"phase": "connected"})
-                while True:
+                while not shutdown_event.is_set():
+                    if await request.is_disconnected():
+                        break
                     try:
-                        item = await asyncio.wait_for(queue.get(), timeout=15.0)
-                        yield _sse(item)
+                        item = await asyncio.wait_for(queue.get(), timeout=5.0)
                     except TimeoutError:
                         yield ": keep-alive\n\n"
+                        continue
+                    if item is _SHUTDOWN_SENTINEL:
+                        break
+                    yield _sse(item)
+            except asyncio.CancelledError:
+                # uvicorn cancels in-flight requests during forced shutdown;
+                # let the cancellation propagate after cleanup runs.
+                raise
             finally:
                 if queue in handle.subscribers:
                     handle.subscribers.remove(queue)
 
-        return StreamingResponse(stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.get("/api/recording", response_model=schemas.RecordingStatusOut)
     def recording_status() -> schemas.RecordingStatusOut:

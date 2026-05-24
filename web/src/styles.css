@@ -394,12 +394,42 @@ body,
   align-items: center;
   gap: 8px;
 }
+/* Connection dot for the SSE progress channel. Colour reflects status —
+   green = open, amber = connecting, dim = closed. Pulses only when open. */
 .pulse {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  background: var(--ink-soft);
+  opacity: 0.5;
+  transition:
+    background-color 0.2s ease,
+    opacity 0.2s ease;
+}
+.pulse.sse-open {
   background: var(--accent-hover);
+  opacity: 1;
   animation: blink 1.4s infinite;
+}
+.pulse.sse-connecting {
+  background: var(--kinda);
+  opacity: 0.8;
+  animation: blink 0.8s infinite;
+}
+.pulse.sse-closed {
+  background: var(--ink-soft);
+  opacity: 0.4;
+}
+.phase-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  margin-left: 4px;
 }
 .reason-text {
   margin: 0;
@@ -609,13 +639,42 @@ body,
   flex: 1;
   min-height: 0;
 }
-.emotion h3 {
+.emotion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin: 0 0 8px;
+}
+.emotion h3 {
+  margin: 0;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--heading);
+}
+.reset-emotion {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.reset-emotion:hover:not(:disabled) {
+  color: var(--accent-hover);
+  border-color: var(--accent);
+}
+.reset-emotion:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 .sliders {
   display: flex;

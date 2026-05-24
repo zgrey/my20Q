@@ -381,3 +381,38 @@ Items surfaced after the plan was approved; not yet scheduled into a phase.
   step is a conditional sampling scheme that uses the slider *weights* to
   bias query generation toward the patient's emotional state — a more
   principled mechanism than prompt text alone. To be iterated on next.
+
+---
+
+## 16. Remote operation on cerberus (Tailscale + tmux)
+
+Cerberus is the home server; the caregiver browser reaches it over the
+Tailscale VPN. Day-to-day operation lives in a tmux session so the
+caregiver can disconnect without killing anything.
+
+**Two tmux windows**:
+
+1. The server itself: `python -m my20q.api`. Bind to the loopback
+   (`MY20Q_API_HOST=127.0.0.1`, the default) — Tailscale fronts it.
+2. The Tailscale serve route: `tailscale serve --bg https / http://127.0.0.1:8000`
+   (or `tailscale funnel` if you want it reachable beyond the tailnet —
+   keep it off by default).
+
+**Clean shutdown — the supported sequence**:
+
+1. In the server window: a single Ctrl+C. Uvicorn enters graceful
+   shutdown; the lifespan hook (`api/app.py::_lifespan`) sets the
+   shutdown event and pushes a sentinel into every active SSE
+   subscriber queue, so each `/api/.../events` generator wakes from
+   `queue.get()` and exits its loop. The process exits within a
+   second or two even with open EventSource streams.
+2. As a backstop, `uvicorn.run(..., timeout_graceful_shutdown=5)` (in
+   `api/__main__.py`, overridable with `MY20Q_API_GRACEFUL_TIMEOUT`)
+   force-closes anything still in flight after 5 seconds.
+3. Tear down the route: `tailscale serve --bg --remove` (or
+   `tailscale serve reset`). Then detach/kill the tmux session.
+
+If the first Ctrl+C ever appears to hang past ~6 seconds (it shouldn't),
+a second Ctrl+C triggers uvicorn's force-exit immediately. As a
+last resort over SSH:
+`pkill -INT -f "my20q.api"` then `pkill -KILL -f "my20q.api"`.

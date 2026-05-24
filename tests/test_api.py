@@ -14,7 +14,7 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from my20q.api.app import _sse, create_app  # noqa: E402
+from my20q.api.app import _SHUTDOWN_SENTINEL, _lifespan, _sse, create_app  # noqa: E402
 
 
 def _fallback_client() -> TestClient:
@@ -192,3 +192,28 @@ def test_emotion_endpoint_accepts_a_reading() -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+
+
+def test_lifespan_unblocks_sse_subscribers_on_shutdown() -> None:
+    """The lifespan hook injects a shutdown sentinel into every active SSE
+    subscriber queue so blocked `queue.get()` calls wake up — preventing
+    the Ctrl+C hang seen with long-lived EventSource connections.
+    """
+    import asyncio
+    import types
+
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    queue: asyncio.Queue = asyncio.Queue()
+    handle = types.SimpleNamespace(subscribers=[queue])
+    app.state.rounds = {"r1": handle}
+
+    async def run() -> None:
+        async with _lifespan(app):
+            assert not app.state.shutdown_event.is_set()
+            assert queue.empty()
+        assert app.state.shutdown_event.is_set()
+        assert queue.get_nowait() is _SHUTDOWN_SENTINEL
+
+    asyncio.run(run())

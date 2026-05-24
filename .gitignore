@@ -215,3 +215,6 @@ __marimo__/
 # Fetched AAC pictograms — regenerable via scripts/fetch_icons.py.
 /assets/arasaac/
 /assets/mulberry/
+
+# Local-only reference doc generated for the owner — not part of the repo.
+/tool-summary.html

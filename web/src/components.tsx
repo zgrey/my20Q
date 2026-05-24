@@ -281,13 +281,31 @@ const EMOTION_PAIRS: { id: string; left: string; right: string }[] = [
 function EmotionSliders({
   values,
   onChange,
+  onReset,
 }: {
   values: Record<string, number>;
   onChange: (id: string, value: number) => void;
+  onReset: () => void;
 }) {
+  // "Touched" = any slider deviates from neutral. We don't compare floats
+  // exactly because the <input type="range"> step (0.05) means a manual
+  // drag back to centre can leave residue like 0.0500000001.
+  const touched = EMOTION_PAIRS.some(
+    (p) => Math.abs(values[p.id] ?? 0) > 0.001,
+  );
   return (
     <div class="emotion">
-      <h3>Emotional reading</h3>
+      <div class="emotion-header">
+        <h3>Emotional reading</h3>
+        <button
+          class="reset-emotion"
+          onClick={onReset}
+          disabled={!touched}
+          title="Reset every slider to the neutral centre"
+        >
+          Reset
+        </button>
+      </div>
       <div class="sliders">
         {EMOTION_PAIRS.map((pair) => (
           <label class="slider-row" key={pair.id}>
@@ -310,19 +328,33 @@ function EmotionSliders({
   );
 }
 
-/** Tile 3 — live reasoning narration + the caregiver's emotional sliders. */
+const PHASE_LABEL: Record<string, string> = {
+  connected: "live",
+  thinking: "thinking",
+  "re-asking": "re-asking",
+};
+
+/** Tile 3 — live reasoning narration + the caregiver's emotional sliders.
+ *
+ * `sse` reflects the EventSource connection state — coloured pulse next to
+ * the heading. `phase` is the latest server-side reasoner phase delivered
+ * over that channel (visible proof that the SSE round-trip is working). */
 export function ReasoningTile({
   event,
   busy,
   phase,
+  sse,
   emotion,
   onEmotion,
+  onResetEmotion,
 }: {
   event: RoundEvent | null;
   busy: boolean;
   phase: string | null;
+  sse: "connecting" | "open" | "closed";
   emotion: Record<string, number>;
   onEmotion: (id: string, value: number) => void;
+  onResetEmotion: () => void;
 }) {
   let text: string;
   let live = false;
@@ -344,11 +376,28 @@ export function ReasoningTile({
     text = event.rationale || "—";
     live = true;
   }
+  // Surface only meaningful phases — "connected" is implied by the dot.
+  const phaseLabel =
+    phase && phase !== "connected" ? PHASE_LABEL[phase] ?? phase : null;
+  const sseTitle =
+    sse === "open"
+      ? "Live progress channel connected"
+      : sse === "connecting"
+        ? "Connecting to the live progress channel…"
+        : "Live progress channel disconnected — events may be delayed";
   return (
     <section class="tile reasoning">
-      <h2>Live reasoning {live && <span class="pulse" />}</h2>
+      <h2>
+        Live reasoning
+        <span class={`pulse sse-${sse}`} title={sseTitle} />
+        {live && phaseLabel && <span class="phase-tag">{phaseLabel}</span>}
+      </h2>
       <p class="reason-text">{text}</p>
-      <EmotionSliders values={emotion} onChange={onEmotion} />
+      <EmotionSliders
+        values={emotion}
+        onChange={onEmotion}
+        onReset={onResetEmotion}
+      />
     </section>
   );
 }
