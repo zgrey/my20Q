@@ -58,3 +58,28 @@ export interface RecordingStatus {
   status: "ok" | "warning" | "over" | "disabled";
   rounds: number;
 }
+
+// One recorded session on disk (the review dashboard's server picker).
+export interface RecordingFile {
+  session_id: string;
+  rounds: number;
+  bytes: number;
+  modified: string;
+}
+
+// One round as saved/recorded — the build_round_record schema. The same
+// shape comes from an uploaded .jsonl line or GET /api/recordings/{sid}.
+export interface RoundRecord {
+  session_id: string;
+  round_id: string;
+  topic_id: string;
+  engine: string;
+  outcome: string | null;
+  final_utterance: string;
+  query_count: number;
+  job_b: number;
+  queries: HistoryEntry[];
+  emotional_state: Record<string, number>;
+  model: string;
+  recorded_at: string;
+}

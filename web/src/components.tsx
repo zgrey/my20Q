@@ -36,9 +36,11 @@ interface TopicBarProps {
   busy: boolean;
   onExport: () => void;
   canExport: boolean;
+  view: "live" | "review";
+  onView: (v: "live" | "review") => void;
 }
 
-/** Persistent header: topic, engine badge, save, recording light, theme. */
+/** Persistent header: view tabs, topic, engine badge, save, rec, theme. */
 export function TopicBar(props: TopicBarProps) {
   const {
     topics,
@@ -52,7 +54,10 @@ export function TopicBar(props: TopicBarProps) {
     busy,
     onExport,
     canExport,
+    view,
+    onView,
   } = props;
+  const reviewing = view === "review";
   const themeLabel =
     theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
   return (
@@ -60,23 +65,40 @@ export function TopicBar(props: TopicBarProps) {
       <div class="brand">
         my20Q <span>· Caregiver Cockpit</span>
       </div>
-      {engine && (
+      <div class="view-tabs" role="tablist">
+        <button
+          class={reviewing ? "" : "active"}
+          onClick={() => onView("live")}
+        >
+          Live
+        </button>
+        <button
+          class={reviewing ? "active" : ""}
+          onClick={() => onView("review")}
+        >
+          Review
+        </button>
+      </div>
+      {!reviewing && engine && (
         <span class={`engine-badge ${engine}`} title="Active dialogue engine">
           {engine}
         </span>
       )}
-      <label class="topic">
-        <span>Topic</span>
-        <select
-          value={topicId}
-          disabled={busy || topics.length === 0}
-          onChange={(e) => onTopic((e.target as HTMLSelectElement).value)}
-        >
-          {topics.map((t) => (
-            <option value={t.id}>{t.label}</option>
-          ))}
-        </select>
-      </label>
+      <span class="tb-spacer" />
+      {!reviewing && (
+        <label class="topic">
+          <span>Topic</span>
+          <select
+            value={topicId}
+            disabled={busy || topics.length === 0}
+            onChange={(e) => onTopic((e.target as HTMLSelectElement).value)}
+          >
+            {topics.map((t) => (
+              <option value={t.id}>{t.label}</option>
+            ))}
+          </select>
+        </label>
+      )}
       <button
         class="save-btn"
         onClick={onExport}

@@ -229,6 +229,44 @@ def test_export_unknown_session_404() -> None:
     assert client.get("/api/sessions/nope/export").status_code == 404
 
 
+def test_recordings_empty_without_real_profile() -> None:
+    client = _fallback_client()
+    assert client.get("/api/recordings").json() == []
+    assert client.get("/api/recordings/anything").status_code == 404
+
+
+def test_recordings_list_and_read_for_real_profile(tmp_path) -> None:
+    profile = tmp_path / "real.yaml"
+    profile.write_text("id: test_patient\ndisplay_name: T\n", encoding="utf-8")
+    cfg = replace(
+        Config.from_env(),
+        llm_enabled=False,
+        profile_path=profile,
+        recording_dir=tmp_path / "data",
+    )
+    client = TestClient(create_app(cfg, backend=None))
+
+    # record a round so there is a session file to review
+    sid = client.post("/api/sessions").json()["session_id"]
+    rid = client.post(
+        f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
+    ).json()["round_id"]
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+
+    listing = client.get("/api/recordings").json()
+    assert len(listing) == 1
+    assert listing[0]["session_id"] == sid
+    assert listing[0]["rounds"] == 1
+
+    records = client.get(f"/api/recordings/{sid}").json()
+    assert records[0]["outcome"] == "synthesized"
+    assert "queries" in records[0]
+
+    # path traversal is rejected
+    assert client.get("/api/recordings/..%2f..%2fsecret").status_code == 404
+
+
 def test_lifespan_unblocks_sse_subscribers_on_shutdown() -> None:
     """The lifespan hook injects a shutdown sentinel into every active SSE
     subscriber queue so blocked `queue.get()` calls wake up — preventing

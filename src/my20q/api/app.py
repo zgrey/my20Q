@@ -422,6 +422,29 @@ def _register_routes(app: FastAPI) -> None:
         state.recording_paused = body.paused
         return _recording_status(state)
 
+    @app.get("/api/recordings", response_model=list[schemas.RecordingFileOut])
+    def list_recordings() -> list[schemas.RecordingFileOut]:
+        """List recorded sessions for the review dashboard's server picker.
+
+        Empty unless a real patient profile is loaded (recordings only
+        exist for a real patient). Saved exports load via upload instead.
+        """
+        recorder = state.recorder
+        if recorder is None:
+            return []
+        return [schemas.RecordingFileOut(**e) for e in recorder.list_sessions()]
+
+    @app.get("/api/recordings/{session_id}")
+    def read_recording(session_id: str) -> list[dict]:
+        """Parsed round records for one recorded session (review playback)."""
+        recorder = state.recorder
+        if recorder is None:
+            raise HTTPException(404, "no recordings (no real patient profile)")
+        try:
+            return recorder.read_session(session_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, f"unknown recording: {session_id}") from exc
+
     @app.get("/api/sessions/{sid}/export")
     def export_session(sid: str, format: str = "jsonl") -> Response:
         """Download the session's conversation.

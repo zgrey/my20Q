@@ -8,9 +8,11 @@ import {
   ReasoningTile,
   TopicBar,
 } from "./components";
+import { ReviewDashboard } from "./review";
 import type { Answer, RecordingStatus, RoundState, Topic } from "./types";
 
 type Theme = "dark" | "light";
+type View = "live" | "review";
 
 /** Read the theme the pre-paint script in index.html already applied. */
 function initialTheme(): Theme {
@@ -26,6 +28,7 @@ function initialTheme(): Theme {
  */
 export function App() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [view, setView] = useState<View>("live");
   const [recording, setRecording] = useState<RecordingStatus | null>(null);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [topicId, setTopicId] = useState("");
@@ -198,6 +201,7 @@ export function App() {
   // The topic dropdown keeps its own keyboard behavior.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (view !== "live") return; // review mode has its own navigation
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
@@ -239,31 +243,39 @@ export function App() {
         busy={busy}
         onExport={exportConversation}
         canExport={!!sessionId}
+        view={view}
+        onView={setView}
       />
       {error && <div class="errorbar">{error}</div>}
-      <main class="grid">
-        <ConversationTile round={round} busy={busy} />
-        <PictogramTile event={round?.event ?? null} />
-        <ReasoningTile
-          event={round?.event ?? null}
-          busy={busy}
-          phase={phase}
-          sse={sseStatus}
-          emotion={emotion}
-          onEmotion={setEmotionValue}
-          onResetEmotion={resetEmotion}
-        />
-        <InputTile
-          canAnswer={canAnswer}
-          canUndo={canUndo}
-          terminal={!!terminal}
-          busy={busy}
-          onAnswer={answer}
-          onUndo={undo}
-          onSend={sendContext}
-          onNewRound={newRound}
-        />
-      </main>
+      {view === "review" ? (
+        <main class="review-main">
+          <ReviewDashboard />
+        </main>
+      ) : (
+        <main class="grid">
+          <ConversationTile round={round} busy={busy} />
+          <PictogramTile event={round?.event ?? null} />
+          <ReasoningTile
+            event={round?.event ?? null}
+            busy={busy}
+            phase={phase}
+            sse={sseStatus}
+            emotion={emotion}
+            onEmotion={setEmotionValue}
+            onResetEmotion={resetEmotion}
+          />
+          <InputTile
+            canAnswer={canAnswer}
+            canUndo={canUndo}
+            terminal={!!terminal}
+            busy={busy}
+            onAnswer={answer}
+            onUndo={undo}
+            onSend={sendContext}
+            onNewRound={newRound}
+          />
+        </main>
+      )}
     </div>
   );
 }

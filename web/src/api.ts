@@ -2,7 +2,14 @@
 // Vite dev proxy (and, in production, the backend serving the built app)
 // keep everything same-origin.
 
-import type { Answer, RecordingStatus, RoundState, Topic } from "./types";
+import type {
+  Answer,
+  RecordingFile,
+  RecordingStatus,
+  RoundRecord,
+  RoundState,
+  Topic,
+} from "./types";
 
 const BASE = "/api";
 
@@ -46,6 +53,9 @@ export const api = {
     post<RecordingStatus>("/recording/pause", { paused }),
   setEmotion: (sid: string, values: Record<string, number>) =>
     post<{ ok: boolean }>(`/sessions/${sid}/emotion`, { values }),
+  recordings: () => request<RecordingFile[]>("/recordings"),
+  recordingRecords: (sid: string) =>
+    request<RoundRecord[]>(`/recordings/${encodeURIComponent(sid)}`),
 };
 
 /** Turn a fetch failure into a caregiver-readable message. */

@@ -89,3 +89,12 @@ class EmotionIn(BaseModel):
     """Caregiver emotional-slider reading: pair id -> value in [-1, 1]."""
 
     values: dict[str, float]
+
+
+class RecordingFileOut(BaseModel):
+    """A recorded session on disk — for the review dashboard's picker."""
+
+    session_id: str
+    rounds: int
+    bytes: int
+    modified: str

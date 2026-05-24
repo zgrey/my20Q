@@ -113,6 +113,49 @@ class Recorder:
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
 
+    def list_sessions(self) -> list[dict]:
+        """Recorded sessions for this patient — newest first.
+
+        One entry per ``*.jsonl`` file (a session), with its round count
+        and size, for the session-review dashboard's picker.
+        """
+        if not self.patient_dir.is_dir():
+            return []
+        out: list[dict] = []
+        for f in self.patient_dir.glob("*.jsonl"):
+            stat = f.stat()
+            with f.open("r", encoding="utf-8") as fh:
+                rounds = sum(1 for line in fh if line.strip())
+            out.append(
+                {
+                    "session_id": f.stem,
+                    "rounds": rounds,
+                    "bytes": stat.st_size,
+                    "modified": _dt.datetime.fromtimestamp(
+                        stat.st_mtime, _dt.UTC
+                    ).isoformat(timespec="seconds"),
+                }
+            )
+        out.sort(key=lambda e: e["modified"], reverse=True)
+        return out
+
+    def read_session(self, session_id: str) -> list[dict]:
+        """Parsed round records for one recorded session.
+
+        `session_id` is validated to be a bare filename within this
+        patient's directory — no path traversal.
+        """
+        if "/" in session_id or "\\" in session_id or ".." in session_id:
+            raise FileNotFoundError(session_id)
+        path = self.patient_dir / f"{session_id}.jsonl"
+        if path.parent.resolve() != self.patient_dir.resolve() or not path.is_file():
+            raise FileNotFoundError(session_id)
+        return [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
     def dataset_bytes(self) -> int:
         """Total size of this patient's recorded dataset, in bytes."""
         if not self.patient_dir.is_dir():
