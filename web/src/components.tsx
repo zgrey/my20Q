@@ -116,7 +116,7 @@ export function TopicBar(props: TopicBarProps) {
         disabled={!canExport}
         title="Save this conversation to a file"
       >
-        ⬇ Save
+        ⬇<span class="btn-label"> Save</span>
       </button>
       {recording && recording.enabled ? (
         <button
