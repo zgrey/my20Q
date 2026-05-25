@@ -4,7 +4,6 @@ import { api, friendlyError } from "./api";
 import {
   ConversationTile,
   InputTile,
-  PictogramTile,
   ReasoningTile,
   TopicBar,
 } from "./components";
@@ -310,7 +309,9 @@ export function App() {
       ) : (
         <main class="grid">
           <ConversationTile round={round} busy={busy} />
-          <PictogramTile event={round?.event ?? null} />
+          {/* Pictogram tile shelved — the curated retrieval mostly fell back
+              to "?" in real sessions. Component + backend retrieval are kept;
+              re-mount once the image slot is driven by a generator (task). */}
           <ReasoningTile
             event={round?.event ?? null}
             busy={busy}

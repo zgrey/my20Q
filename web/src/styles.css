@@ -103,9 +103,10 @@ body,
   flex: 1;
   display: grid;
   grid-template-columns: 1.55fr 1fr;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: 1fr auto;
+  /* Pictogram tile shelved (see app.tsx); reasoning takes the full right
+     column. The .pictogram rules below are retained for easy re-enable. */
   grid-template-areas:
-    "conversation pictogram"
     "conversation reasoning"
     "input        reasoning";
   gap: 14px;

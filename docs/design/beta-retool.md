@@ -381,6 +381,19 @@ Items surfaced after the plan was approved; not yet scheduled into a phase.
   step is a conditional sampling scheme that uses the slider *weights* to
   bias query generation toward the patient's emotional state — a more
   principled mechanism than prompt text alone. To be iterated on next.
+- **Pictogram tile shelved; image slot → generator (under review).** In
+  real sessions the curated ARASAAC retrieval mostly fell back to "?", so
+  the pictogram tile is unmounted from the cockpit (the `PictogramTile`
+  component and the backend retrieval are kept for easy re-enable). The
+  proposed future is to drive the image slot from an actual image
+  generator. **This reopens a locked decision** — "imagery is *retrieved*,
+  never *generated* on the fly" — and brushes against "LLM output is never
+  shown raw to the patient": a generator emits unvetted imagery to a
+  vulnerable patient. For a *real* patient it must run **locally** (no
+  cloud image API) to hold the privacy invariant. Options to weigh: local
+  generation; pre-generate + cache a caregiver-vetted per-patient set; or
+  simply make retrieval work (fetch the ARASAAC PNGs via
+  `scripts/fetch_icons.py`). Not finalized — see the task backlog.
 
 ---
 
