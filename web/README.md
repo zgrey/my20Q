@@ -30,22 +30,47 @@ npm run typecheck  # tsc --noEmit
 
 ## Layout
 
+Two tabs in the topbar: **Live** (the cockpit) and **Review** (session
+playback). Topbar also has the topic ▼, engine badge, ⬇ Save, recording
+light, 🔊 audio toggle, and theme.
+
 ```
-┌─ brand · engine ────── Topic ▼ ──────── ● REC · ☀ ─┐
+┌─ brand · Live|Review ── Topic ▼ ── ⬇ · ● REC · 🔊 · ☀ ─┐
 │ ┌──────────────────────┐ ┌─────────────────────┐ │
-│ │ 1 Conversation       │ │ 2 Pictogram         │ │
-│ │   transcript + live  │ ├─────────────────────┤ │
-│ │   query / synthesis  │ │ 3 Live reasoning    │ │
+│ │ 1 Conversation       │ │ 2 Live reasoning    │ │
+│ │   transcript + live  │ │   narration + SSE   │ │
+│ │   query / synthesis  │ │   + emotion sliders │ │
 │ ├──────────────────────┤ │                     │ │
-│ │ 4 Input  y/n/k/s/u/q │ │                     │ │
+│ │ 3 Input  y/n/k/s/u/q │ │                     │ │
 │ └──────────────────────┘ └─────────────────────┘ │
 └────────────────────────────────────────────────────┘
 ```
 
+> The Pictogram tile is shelved (curated retrieval mostly fell back to "?" in
+> real sessions). The component and backend retrieval are retained — re-mount
+> once the image slot is driven by a generator.
+
+**Emotion sliders** (in the reasoning tile): ten opposed-emotion pairs, each a
+coarse 5-detent scale (strong/mild each side + neutral) with large pole labels.
+Every change posts the full reading to the backend to colour the next query;
+a **Reset** pill snaps all to neutral.
+
+## Review tab
+
+Loads a saved/recorded `.jsonl` and renders the whole conversation as one
+**scrollable transcript**. The active step (question + reasoning + answer) is
+highlighted and auto-scrolls into view, descending one pair at a time:
+
+- **Prev / Next** move the highlight; click any step to jump to it.
+- **▶ Auto-play** steps through on its own.
+- With 🔊 audio + piper available, each step is read aloud as
+  *question → reasoning → "the patient then indicated &lt;answer&gt;"*;
+  auto-play advances only after each readout finishes.
+
 ## Keyboard shortcuts
 
 `Y` yes · `N` no · `K` kinda · `S` not sure · `U` undo · `Q` new round.
-Ignored while the caregiver-context field is focused.
+Ignored while the caregiver-context field is focused, and in Review mode.
 
 ## Backend down?
 
