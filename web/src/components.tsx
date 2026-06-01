@@ -340,8 +340,8 @@ function EmotionSliders({
   onReset: () => void;
 }) {
   // "Touched" = any slider deviates from neutral. We don't compare floats
-  // exactly because the <input type="range"> step (0.05) means a manual
-  // drag back to centre can leave residue like 0.0500000001.
+  // exactly because the <input type="range"> step can leave float residue
+  // (e.g. 0.5000000001) after a drag back toward centre.
   const touched = EMOTION_PAIRS.some(
     (p) => Math.abs(values[p.id] ?? 0) > 0.001,
   );
@@ -366,7 +366,7 @@ function EmotionSliders({
               type="range"
               min="-1"
               max="1"
-              step="0.05"
+              step="0.5"
               value={values[pair.id] ?? 0}
               onChange={(e) =>
                 onChange(pair.id, parseFloat((e.target as HTMLInputElement).value))

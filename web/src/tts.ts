@@ -6,6 +6,9 @@
 
 let currentAudio: HTMLAudioElement | null = null;
 let audioCtx: AudioContext | null = null;
+// Resolver for the in-flight speak() promise, so stopSpeaking() (or starting
+// a new readout) settles a pending caller rather than leaving it hanging.
+let endResolve: (() => void) | null = null;
 
 /** Stop any in-flight voice readout (e.g. on a new query or muting). */
 export function stopSpeaking(): void {
@@ -13,9 +16,17 @@ export function stopSpeaking(): void {
     currentAudio.pause();
     currentAudio = null;
   }
+  if (endResolve) {
+    const r = endResolve;
+    endResolve = null;
+    r();
+  }
 }
 
-/** Speak `text` via the backend piper voice. Silent if TTS is unavailable. */
+/** Speak `text` via the backend piper voice. Silent if TTS is unavailable.
+ *  The returned promise resolves when playback finishes (or is interrupted by
+ *  a new readout / stopSpeaking), which lets callers chain readouts — e.g.
+ *  the review auto-play advancing one step after each line is read. */
 export async function speak(text: string): Promise<void> {
   const t = text.trim();
   if (!t) return;
@@ -34,17 +45,18 @@ export async function speak(text: string): Promise<void> {
   const url = URL.createObjectURL(await resp.blob());
   const audio = new Audio(url);
   currentAudio = audio;
-  const cleanup = () => {
-    URL.revokeObjectURL(url);
-    if (currentAudio === audio) currentAudio = null;
-  };
-  audio.onended = cleanup;
-  audio.onerror = cleanup;
-  try {
-    await audio.play();
-  } catch {
-    cleanup(); // autoplay blocked until a user gesture — that's fine
-  }
+  return new Promise<void>((resolve) => {
+    endResolve = resolve;
+    const done = () => {
+      URL.revokeObjectURL(url);
+      if (currentAudio === audio) currentAudio = null;
+      if (endResolve === resolve) endResolve = null;
+      resolve();
+    };
+    audio.onended = done;
+    audio.onerror = done;
+    audio.play().catch(done); // autoplay blocked until a gesture — that's fine
+  });
 }
 
 /** A short confirmation beep for caregiver input (local, no backend). */

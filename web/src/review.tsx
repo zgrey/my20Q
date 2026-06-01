@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { Fragment } from "preact";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { api, friendlyError } from "./api";
+import { speak, stopSpeaking } from "./tts";
 import type { Answer, HistoryEntry, RecordingFile, RoundRecord } from "./types";
 
 const ANSWER_LABEL: Record<Answer, string> = {
@@ -37,7 +39,7 @@ interface Step {
   round: RoundRecord;
   entry: HistoryEntry | null; // null = a round with no queries (e.g. emergency)
   entryNumber: number; // 1-based query/synthesis number in the round; 0 for context
-  isRoundEnd: boolean;
+  isRoundStart: boolean;
 }
 
 function buildSteps(records: RoundRecord[]): Step[] {
@@ -45,7 +47,7 @@ function buildSteps(records: RoundRecord[]): Step[] {
   records.forEach((round, roundIndex) => {
     const entries = round.queries ?? [];
     if (entries.length === 0) {
-      steps.push({ roundIndex, round, entry: null, entryNumber: 0, isRoundEnd: true });
+      steps.push({ roundIndex, round, entry: null, entryNumber: 0, isRoundStart: true });
       return;
     }
     let qn = 0;
@@ -56,7 +58,7 @@ function buildSteps(records: RoundRecord[]): Step[] {
         round,
         entry,
         entryNumber: entry.kind === "context" ? 0 : qn,
-        isRoundEnd: i === entries.length - 1,
+        isRoundStart: i === 0,
       });
     });
   });
@@ -70,14 +72,55 @@ function emotionLine(state: Record<string, number>): string {
   return parts.join(" · ");
 }
 
+/** Compose the spoken line for a step: question, then reasoning, then the
+ *  patient's answer — read aloud during navigation / auto-play. */
+function stepSpeech(s: Step): string {
+  const e = s.entry;
+  if (!e) return "";
+  if (e.kind === "context") return e.text;
+  const parts = [e.text];
+  if (e.rationale) parts.push(e.rationale);
+  if (e.answer) parts.push(`The patient then indicated ${ANSWER_LABEL[e.answer]}`);
+  return parts.join(". ");
+}
+
+function StepKindLabel({ step }: { step: Step }) {
+  if (step.entry === null) {
+    return (
+      <span class="rstep-kind">
+        {OUTCOME_LABEL[step.round.outcome ?? ""] ?? "No questions"}
+      </span>
+    );
+  }
+  if (step.entry.kind === "context") {
+    return <span class="rstep-kind context">caregiver context</span>;
+  }
+  return (
+    <span class="rstep-kind">
+      {step.entry.kind === "synthesis" ? "Proposed message" : `Question ${step.entryNumber}`}
+    </span>
+  );
+}
+
 /** Read-only session review — load a saved/recorded .jsonl and step through
- *  each query, response, and the reasoning. See task #22. */
-export function ReviewDashboard() {
+ *  each query, response, and reasoning. The whole conversation is shown as a
+ *  scrollable transcript; the active step is highlighted and the rest dim,
+ *  descending one pair (question + reasoning) at a time. See task #22. */
+export function ReviewDashboard({
+  audioOn,
+  ttsAvailable,
+}: {
+  audioOn: boolean;
+  ttsAvailable: boolean;
+}) {
   const [records, setRecords] = useState<RoundRecord[] | null>(null);
   const [source, setSource] = useState<string>("");
   const [step, setStep] = useState(0);
+  const [playing, setPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [serverList, setServerList] = useState<RecordingFile[]>([]);
+
+  const canVoice = audioOn && ttsAvailable;
 
   // Server-side recordings exist only for a real patient; empty otherwise.
   useEffect(() => {
@@ -87,12 +130,65 @@ export function ReviewDashboard() {
       .catch(() => setServerList([]));
   }, []);
 
+  // Stop any readout when this view unmounts.
+  useEffect(() => () => stopSpeaking(), []);
+
   const steps = useMemo(() => (records ? buildSteps(records) : []), [records]);
+  const total = steps.length;
+
   const load = (recs: RoundRecord[], label: string) => {
+    stopSpeaking();
     setRecords(recs);
     setSource(label);
     setStep(0);
+    setPlaying(false);
     setError(null);
+  };
+
+  // Keep the highlighted step scrolled into view as it descends.
+  const activeRef = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [step]);
+
+  // Auto-play: speak the active step (when voice is on) then advance; without
+  // voice, advance on a fixed cadence. Re-runs on each step so it chains.
+  useEffect(() => {
+    if (!playing || total === 0) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const advance = () => {
+      if (cancelled) return;
+      if (step >= total - 1) setPlaying(false);
+      else setStep(step + 1);
+    };
+    if (canVoice) {
+      speak(stepSpeech(steps[step])).then(() => advance());
+    } else {
+      timer = window.setTimeout(advance, 4500);
+    }
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [playing, step, canVoice, steps, total]);
+
+  const goTo = (i: number) => {
+    if (i < 0 || i >= total) return;
+    setPlaying(false);
+    stopSpeaking();
+    setStep(i);
+    if (canVoice) speak(stepSpeech(steps[i]));
+  };
+
+  const togglePlay = () => {
+    if (total === 0) return;
+    setPlaying((p) => {
+      if (p) stopSpeaking();
+      // Restart from the top if we're parked on the last step.
+      else if (step >= total - 1) setStep(0);
+      return !p;
+    });
   };
 
   const onUpload = (e: Event) => {
@@ -142,21 +238,20 @@ export function ReviewDashboard() {
     </div>
   );
 
-  if (!records || steps.length === 0) {
+  if (!records || total === 0) {
     return (
       <div class="review">
         <h2>Session review</h2>
         {loader}
-        {records && steps.length === 0 && (
+        {records && total === 0 && (
           <p class="empty">That save has no rounds to review.</p>
         )}
       </div>
     );
   }
 
-  const cur = steps[Math.min(step, steps.length - 1)];
+  const cur = steps[Math.min(step, total - 1)];
   const round = cur.round;
-  const total = steps.length;
 
   return (
     <div class="review">
@@ -200,51 +295,71 @@ export function ReviewDashboard() {
           )}
         </aside>
 
-        <section class="review-step">
-          {cur.entry === null ? (
-            <p class="empty">
-              This round had no questions ({round.outcome ?? "—"}).
-            </p>
-          ) : cur.entry.kind === "context" ? (
-            <div class="rs-context">
-              <span class="tag">caregiver context</span>
-              <p>{cur.entry.text}</p>
-            </div>
-          ) : (
-            <>
-              <div class="rs-kind">
-                {cur.entry.kind === "synthesis"
-                  ? "Proposed message"
-                  : `Question ${cur.entryNumber}`}
-              </div>
-              <p class="rs-text">{cur.entry.text}</p>
-              {cur.entry.answer && (
-                <span class={`chip ${cur.entry.answer}`}>
-                  {ANSWER_LABEL[cur.entry.answer]}
-                </span>
-              )}
-              {cur.entry.rationale && (
-                <div class="rs-reasoning">
-                  <span class="tag">reasoning</span>
-                  <p>{cur.entry.rationale}</p>
-                </div>
-              )}
-            </>
-          )}
-        </section>
+        <ol class="review-transcript">
+          {steps.map((s, i) => {
+            const active = i === step;
+            const e = s.entry;
+            return (
+              <Fragment key={i}>
+                {s.isRoundStart && (
+                  <li class="rstep-round" aria-hidden="true">
+                    <span class="rr-num">Round {s.roundIndex + 1}</span>
+                    <span class="rr-topic">{s.round.topic_id}</span>
+                    <span class={`rr-outcome ${s.round.outcome ?? ""}`}>
+                      {OUTCOME_LABEL[s.round.outcome ?? ""] ?? s.round.outcome ?? "—"}
+                    </span>
+                  </li>
+                )}
+                <li
+                  ref={active ? activeRef : undefined}
+                  class={`rstep${active ? " active" : ""}${
+                    e?.kind === "context" ? " is-context" : ""
+                  }`}
+                  onClick={() => goTo(i)}
+                >
+                  <StepKindLabel step={s} />
+                  {e === null ? (
+                    <p class="rstep-empty">
+                      This round had no questions ({s.round.outcome ?? "—"}).
+                    </p>
+                  ) : (
+                    <>
+                      <p class="rstep-text">{e.text}</p>
+                      {e.kind !== "context" && e.answer && (
+                        <span class={`chip ${e.answer}`}>
+                          {ANSWER_LABEL[e.answer]}
+                        </span>
+                      )}
+                      {e.kind !== "context" && e.rationale && (
+                        <div class="rstep-reasoning">
+                          <span class="tag">reasoning</span>
+                          <p>{e.rationale}</p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </li>
+              </Fragment>
+            );
+          })}
+        </ol>
       </div>
 
       <div class="review-nav">
-        <button disabled={step === 0} onClick={() => setStep((s) => s - 1)}>
+        <button disabled={step === 0} onClick={() => goTo(step - 1)}>
           ‹ Prev
+        </button>
+        <button
+          class={`review-play${playing ? " playing" : ""}`}
+          onClick={togglePlay}
+          title={playing ? "Pause auto-play" : "Auto-play through the conversation"}
+        >
+          {playing ? "❚❚ Pause" : "▶ Auto-play"}
         </button>
         <span class="review-progress">
           Step {step + 1} / {total}
         </span>
-        <button
-          disabled={step >= total - 1}
-          onClick={() => setStep((s) => s + 1)}
-        >
+        <button disabled={step >= total - 1} onClick={() => goTo(step + 1)}>
           Next ›
         </button>
       </div>

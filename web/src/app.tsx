@@ -304,7 +304,7 @@ export function App() {
       {error && <div class="errorbar">{error}</div>}
       {view === "review" ? (
         <main class="review-main">
-          <ReviewDashboard />
+          <ReviewDashboard audioOn={audioOn} ttsAvailable={ttsAvailable} />
         </main>
       ) : (
         <main class="grid">

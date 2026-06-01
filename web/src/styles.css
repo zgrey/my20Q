@@ -754,17 +754,18 @@ body,
 }
 .slider-row {
   display: grid;
-  grid-template-columns: 84px 1fr 84px;
+  grid-template-columns: 1fr 96px 1fr;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: 10px;
+  font-size: 15px;
   color: var(--ink-soft);
 }
 .slider-row .slabel:last-child {
   text-align: right;
 }
 .slider-row input[type="range"] {
-  width: 100%;
+  width: 96px;
+  justify-self: center;
   accent-color: var(--accent);
   cursor: pointer;
 }
@@ -899,47 +900,117 @@ body,
   padding-top: 6px;
 }
 
-.review-step {
+/* The whole conversation, scrollable; the active step is highlighted and the
+   rest dim, descending one question+reasoning pair at a time. */
+.review-transcript {
+  list-style: none;
+  margin: 0;
+  padding: 4px 8px 4px 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  gap: 10px;
   overflow-y: auto;
   min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
-.rs-kind {
+.rstep-round {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 12px 0 2px;
+  padding: 4px 14px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.rstep-round:first-child {
+  margin-top: 4px;
+}
+.rr-num {
+  font-weight: 700;
+  color: var(--heading);
+}
+.rr-topic {
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+.rr-outcome {
+  margin-left: auto;
+  color: var(--ink-soft);
+}
+.rr-outcome.synthesized {
+  color: var(--yes);
+}
+.rr-outcome.emergency {
+  color: var(--rec);
+}
+
+.rstep {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 8px;
+  padding: 12px 16px;
+  border: 1px solid transparent;
+  border-left: 3px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  opacity: 0.5;
+  cursor: pointer;
+  transition:
+    opacity 0.25s ease,
+    background 0.25s ease,
+    border-color 0.25s ease;
+}
+.rstep:hover {
+  opacity: 0.8;
+}
+.rstep.active {
+  opacity: 1;
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+.rstep.is-context {
+  border-left-style: dashed;
+}
+.rstep-kind {
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--accent-hover);
   font-weight: 700;
 }
-.rs-text {
+.rstep-kind.context {
+  color: var(--ink-soft);
+}
+.rstep-text {
   margin: 0;
-  font-size: 22px;
+  font-size: 17px;
   line-height: 1.4;
 }
-.rs-reasoning,
-.rs-context {
+.rstep.active .rstep-text {
+  font-size: 20px;
+}
+.rstep-empty {
+  margin: 0;
+  font-style: italic;
+  color: var(--ink-soft);
+}
+.rstep-reasoning {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--accent);
   padding: 6px 12px;
 }
-.rs-reasoning {
-  border-left-color: var(--accent);
-}
-.rs-reasoning p,
-.rs-context p {
+.rstep-reasoning p {
   margin: 0;
   font-size: 14px;
   color: var(--ink);
 }
-.rs-reasoning .tag,
-.rs-context .tag {
+.rstep-reasoning .tag {
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -970,6 +1041,11 @@ body,
 .review-nav button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.review-play.playing {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 .review-progress {
   font-size: 13px;
@@ -1121,16 +1197,18 @@ body,
     font-size: 16px;
   }
   .review-body {
-    grid-template-columns: 1fr; /* round info above the step */
+    grid-template-columns: 1fr; /* round info above the transcript */
   }
-  .review-step {
-    overflow: visible;
-    padding: 16px;
+  /* The page scrolls on mobile, so the transcript flows instead of trapping
+     its own scroll; cap it so the nav stays reachable. */
+  .review-transcript {
+    max-height: 60vh;
   }
-  .rs-text {
-    font-size: 20px;
+  .rstep.active .rstep-text {
+    font-size: 19px;
   }
   .review-nav {
+    flex-wrap: wrap;
     position: sticky;
     bottom: 0;
     background: var(--card);
