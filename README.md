@@ -1,147 +1,138 @@
 # my20Q
 
-An assistive, game-based agent that helps individuals with aphasia communicate
-a need through a short 20-questions-style dialogue, pairing each yes/no
-question with AAC-appropriate imagery.
+A **context-driven speech emulator** for one specific person with aphasia. A
+caregiver and patient use it *together*: it plays a short question-and-answer
+dialogue — pairing each question with AAC-appropriate imagery — to converge on
+what the person needs to express (a need, a feeling, a request for help) and
+synthesizes that as a short spoken utterance.
 
-**Clinical intent**: assistive, **not** diagnostic. The tool helps a patient
-express a need to a caregiver — it never offers medical advice, triage, or
-treatment recommendations. All LLM inference runs locally; nothing leaves the
-host.
+It is **patient-specific, not global or medical** — a digital voice that
+reflects one person, not a clinical average.
+
+**Clinical intent**: assistive, **not** diagnostic. It helps a person
+communicate a need to a caregiver — never medical advice, triage, or treatment
+recommendations. All inference runs locally for a real patient; nothing leaves
+the host.
+
+See [`CLAUDE.md`](CLAUDE.md) for architecture/constraints,
+[`docs/design/beta-retool.md`](docs/design/beta-retool.md) for the live design,
+and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 
 ## Status
 
-- **Phase 1 (Python backend MVP)** — complete. Dialogue engine, taxonomy,
-  Ollama client, safety layer, and Rich-based CLI harness all in place. Runs
-  against a local LLM in reasoning mode or deterministically against the
-  taxonomy tree in fallback mode.
-- **Phase 2 (FastAPI + PWA)** — not yet started.
+- **Phase 1 — backend MVP** ✓ Dialogue engine, topics, Ollama client, safety
+  layer, and a Rich-based CLI harness.
+- **Phase 2 — caregiver cockpit** ✓ FastAPI backend + Preact/Vite web cockpit:
+  4-tile layout (conversation · pictogram · live reasoning + emotion sliders ·
+  input), persistent topic bar, recording light, session **Review** dashboard,
+  SSE progress channel, JSONL recording/export, and **local piper TTS**
+  (voice readouts of queries/utterances; review auto-play reads each step).
+- **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
+  graph write path).
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phased plan and
-[`CLAUDE.md`](CLAUDE.md) for architecture and design constraints.
+## Terminology
+
+Three-tier scale: **Session** (one open→close) ⊃ **Round** (one convergence
+attempt under a single topic, ending on synthesis / topic change / budget /
+session end) ⊃ **Query** (one generated question). The query budget is a soft
+safety cap, not the primary terminator.
+
+## Privacy invariant
+
+**recording ⟹ real patient ⟹ local LLM.** A single flag
+(`real_patient_profile_loaded`) gates both the backend and recording: with a
+real profile the LLM is local-only (Ollama) and recording is on; with a
+synthetic persona the Anthropic backend is permitted and recording is off. The
+recorded dataset and any cloud backend can never coexist. TTS is **always**
+local (piper) — there is no cloud-voice path.
 
 ## Install
 
 ```bash
-# Shared venv (owner's convention) — or use your tool of choice
-source ~/venv/Scripts/activate         # Windows / Git Bash
+# Shared venv (owner's convention) — or your tool of choice
+source ~/venv/Scripts/activate          # Windows / Git Bash
 pip install -e ".[dev]"
 pytest
 ```
 
-Optional: start a local LLM for reasoning mode.
+Optional — local LLM for reasoning mode:
 
 ```bash
 ollama serve &
-ollama pull gemma3:12b                 # default; any Ollama model works
+ollama pull gemma3:12b                   # default; any Ollama model works
 ```
 
-## Example CLI run
-
-The CLI is a **developer harness**, not the patient interface — the PWA in
-Phase 2 is what a patient actually uses. Use it to iterate on prompts,
-taxonomy, and dialogue behavior.
+Optional — local TTS (piper). On Linux/macOS `pip install -e ".[tts]"` provides
+the `piper` entry point; on **Windows** use the prebuilt
+[piper release](https://github.com/rhasspy/piper/releases) binary instead, plus
+a voice model (`.onnx` + `.onnx.json`), and point at them:
 
 ```bash
-$ python -m my20q --no-llm             # deterministic fallback mode
-LLM disabled. Using deterministic taxonomy walk (questions only, no reasoning).
-+--------------------------------+
-| my20Q - what do you need/want? |
-+--------------------------------+
-  1. Get help now (emergency)  (emergency)
-  2. My feelings  (mental_health)
-  3. My body  (physical_health)
-  4. My People  (my_people)
-  5. Other  (general)
-  q. quit
-Pick a category number (or q to quit) [1/2/3/4/5/q]: 3
-
-+-------------------+
-| turn 0 - Question |
-| Are you in pain?  |
-+-------------------+
-yes / no / kinda / not sure [y/n/k/s] (y): n
-
-+------------------------+
-| turn 1 - Question      |
-| Are you feeling tired? |
-+------------------------+
-yes / no / kinda / not sure [y/n/k/s] (y): n
-
-+-------------------+
-| turn 2 - Question |
-| Are you hungry?   |
-+-------------------+
-yes / no / kinda / not sure [y/n/k/s] (y): n
-
-+-------------------+
-| turn 3 - Question |
-| Are you thirsty?  |
-+-------------------+
-yes / no / kinda / not sure [y/n/k/s] (y): y
-
-+------------------+
-| turn 4 - Guess   |
-| Are you thirsty? |
-+------------------+
-yes / no / kinda / not sure (q to quit) [y/n/k/s/q] (y): y
-
-+----------------------------------+
-| Summary for caregiver:           |
-| They are communicating: Thirsty. |
-|                                  |
-| Final: Thirsty                   |
-+----------------------------------+
-
-Play again? [y/n] (y): n
-goodbye
+export MY20Q_PIPER_BIN=/path/to/piper[.exe]            # if not on PATH
+export MY20Q_PIPER_MODEL=/path/to/en_US-amy-medium.onnx
+# verify: GET /api/tts/status -> { "available": true }
 ```
 
-Drop `--no-llm` to use Ollama. The session plays to a terminal outcome —
-confirmed guess, 20-turn limit, emergency, or dead-end — then offers
-**play again** and returns to the category picker. Type `q` at any prompt to
-quit softly.
+## Run
 
-## The "Other" category — freeform context and multi-round carryover
+**Caregiver cockpit** (the primary interface) — backend serves the built
+cockpit at `/`:
 
-Selecting **Other** skips the 20-questions walk and prompts the user to type
-what they want to communicate (`Explain the topic in any level of detail:`).
-In reasoning mode the LLM uses that text as a seed to guide a short,
-narrowing dialogue; in `--no-llm` mode it is echoed directly into the
-caregiver summary.
+```bash
+python -m my20q.api                      # http://localhost:8000  (cockpit + API)
+# remote: tailscale serve --bg https / http://127.0.0.1:8000
+```
 
-If earlier rounds in the same CLI session produced successful outcomes, the
-user is first offered an enumerated menu of those prior contexts plus **All
-of the above** / **None** before typing the new detail. This lets a caregiver
-manually accumulate context across plays until an LLM-backed session-history
-store exists.
+Develop the cockpit with hot-reload (Vite proxies `/api/*` to the backend):
 
-## CLI flags and environment
+```bash
+cd web && npm install && npm run dev     # http://localhost:5173
+npm run build                            # production build to web/dist/
+```
 
-| Flag / env var | Default | Purpose |
-|----------------|---------|---------|
-| `--no-llm` | off | Force deterministic tree-walk mode |
-| `--max-turns N` | `20` | Override the 20-turn game budget |
-| `MY20Q_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
-| `MY20Q_OLLAMA_MODEL` | `gemma3:12b` | Model tag |
-| `MY20Q_OLLAMA_TIMEOUT` | `30` | Per-request timeout (seconds) |
-| `MY20Q_TAXONOMY` | bundled `tree.yaml` | Override taxonomy path |
-| `MY20Q_LLM` | `1` | Set to `0` to disable LLM (same as `--no-llm`) |
-| `MY20Q_MAX_TURNS` | `20` | Same as `--max-turns` |
+**CLI harness** (developer tool, *not* the patient interface — for iterating on
+prompts, topics, and dialogue behavior):
+
+```bash
+python -m my20q                          # reasoning mode (needs Ollama)
+python -m my20q --no-llm                 # deterministic fallback mode
+python -m my20q --max-queries 12         # override the per-round query budget
+```
 
 ## Answers
 
-Patients answer each turn with one of four buttons (mapped to keys in the CLI):
+Each query is answered with one of four buttons (mapped to keys in the cockpit
+and CLI):
 
 - **yes** — affirmed; narrow in this direction
 - **no** — rejected; pivot
 - **kinda** — warmer; close to the target
 - **not sure** — no information; try a different axis
 
-In fallback mode, `kinda` is treated as `yes` (go deeper here).
+## Environment
 
-## Privacy
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `MY20Q_LLM` | `1` | Set `0` to disable the LLM (same as `--no-llm`) |
+| `MY20Q_BACKEND` | auto | `ollama` / `anthropic` / `mock` (gated by the privacy flag) |
+| `MY20Q_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
+| `MY20Q_OLLAMA_MODEL` | `gemma3:12b` | Ollama model tag |
+| `MY20Q_OLLAMA_TIMEOUT` | `30` | Per-request timeout (s) |
+| `MY20Q_ANTHROPIC_MODEL` | — | Anthropic model (synthetic personas only) |
+| `MY20Q_MAX_QUERIES` | `20` | Per-round query budget (same as `--max-queries`) |
+| `MY20Q_MODE` | training | Dialogue mode |
+| `MY20Q_PROFILE` | — | Patient/persona profile to load |
+| `MY20Q_TOPICS` | bundled | Override the topics data path |
+| `MY20Q_DATA_DIR` | repo-local | Recorded-dataset directory (real patient) |
+| `MY20Q_RECORDING_THRESHOLD_MB` | — | Dataset-size warning threshold |
+| `MY20Q_TTS` | `1` | Set `0` to disable TTS |
+| `MY20Q_PIPER_BIN` | `piper` | piper binary (name on PATH or full path) |
+| `MY20Q_PIPER_MODEL` | — | Voice model `.onnx` path |
+| `MY20Q_PIPER_TIMEOUT` | `20` | piper synthesis timeout (s) |
 
-All inference is local — no cloud APIs, no telemetry, no PII stored. The
-taxonomy path and timestamps are the only data a caregiver dashboard (Phase 3)
-would ever see.
+## Tests
+
+```bash
+pytest
+ruff check .
+```
