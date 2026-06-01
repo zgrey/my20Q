@@ -127,10 +127,14 @@ export function App() {
     const ev = round?.event;
     if (!ev || !ev.text) return;
     if (!["query", "synthesis", "synthesized"].includes(ev.kind)) return;
-    if (ev.text === lastSpokenRef.current) return;
-    lastSpokenRef.current = ev.text;
-    speak(ev.text);
-  }, [round?.event.text, round?.event.kind, audioOn, ttsAvailable, view]);
+    // A query is read with its distilled lead-in ("Okay, not food then — …")
+    // so the readouts vary instead of firing bare questions back to back.
+    const spoken =
+      ev.kind === "query" && ev.preface ? `${ev.preface} ${ev.text}` : ev.text;
+    if (spoken === lastSpokenRef.current) return;
+    lastSpokenRef.current = spoken;
+    speak(spoken);
+  }, [round?.event.text, round?.event.preface, round?.event.kind, audioOn, ttsAvailable, view]);
 
   // Stop any readout when leaving live mode.
   useEffect(() => {

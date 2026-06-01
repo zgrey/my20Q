@@ -43,6 +43,7 @@ class EventOut(BaseModel):
     kind: str
     text: str = ""
     rationale: str = ""
+    preface: str = ""  # short spoken lead-in read aloud just before the query
     query_index: int = 0
     engine: str = "reasoning"
     emergency_screen: dict | None = None

@@ -33,6 +33,22 @@ def _has_forbidden(text: str) -> bool:
     return any(p.search(text) for p in _FORBIDDEN_PATTERNS)
 
 
+# Visual / markdown formatting characters that carry no spoken meaning — piper
+# voices some of them literally ("asterisk"). Stripped from anything we speak.
+_UNSPEAKABLE = re.compile(r"[*_#`~|<>\[\]{}\\^=]+")
+
+
+def for_speech(text: str) -> str:
+    """Normalize a string for TTS: drop formatting chars (e.g. ``*``) that
+    would otherwise be read aloud, and collapse the resulting whitespace.
+
+    This is the single chokepoint the ``/api/tts`` endpoint applies, so both
+    live readouts and review playback are voiced cleanly regardless of any
+    stray markup the LLM emitted in a query or rationale.
+    """
+    return " ".join(_UNSPEAKABLE.sub(" ", text).split())
+
+
 def sanitize_llm_text(text: str) -> str:
     """Sanitize a single LLM-produced line — e.g. a query.
 

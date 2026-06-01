@@ -32,6 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from my20q.agent.dialogue import Answer, Round, RoundEvent, Session
+from my20q.agent.safety import for_speech
 from my20q.api import schemas
 from my20q.config import Config
 from my20q.llm import select_backend
@@ -70,6 +71,7 @@ def _event_out(ev: RoundEvent, catalog: list[Pictogram]) -> schemas.EventOut:
         kind=ev.kind,
         text=ev.text,
         rationale=ev.rationale,
+        preface=ev.preface,
         query_index=ev.query_index,
         engine=ev.engine,
         emergency_screen=ev.emergency_screen,
@@ -520,7 +522,7 @@ def _register_routes(app: FastAPI) -> None:
             reason = "TTS disabled" if engine is None else engine.reason
             raise HTTPException(503, f"TTS unavailable: {reason}")
         try:
-            audio = await run_in_threadpool(engine.synthesize, body.text)
+            audio = await run_in_threadpool(engine.synthesize, for_speech(body.text))
         except TTSUnavailable as exc:
             raise HTTPException(503, f"TTS failed: {exc}") from exc
         return Response(content=audio, media_type="audio/wav")

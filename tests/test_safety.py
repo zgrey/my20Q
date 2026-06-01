@@ -1,4 +1,9 @@
-from my20q.agent.safety import EMERGENCY_SCREEN, sanitize_llm_text, sanitize_utterance
+from my20q.agent.safety import (
+    EMERGENCY_SCREEN,
+    for_speech,
+    sanitize_llm_text,
+    sanitize_utterance,
+)
 
 
 def test_emergency_screen_has_actions() -> None:
@@ -42,3 +47,17 @@ def test_sanitize_utterance_collapses_whitespace() -> None:
 
 def test_sanitize_utterance_drops_medical_advice() -> None:
     assert sanitize_utterance("You should increase the dosage") == ""
+
+
+def test_for_speech_strips_asterisks_and_markdown() -> None:
+    # The reported bug: TTS voiced the literal "*". Formatting chars are
+    # dropped and the surrounding whitespace collapsed.
+    assert for_speech("Are you *really* hungry?") == "Are you really hungry?"
+    assert for_speech("**bold** _em_ `code` #tag") == "bold em code tag"
+
+
+def test_for_speech_keeps_spoken_punctuation() -> None:
+    assert (
+        for_speech("Okay, not food then — are you thirsty?")
+        == "Okay, not food then — are you thirsty?"
+    )

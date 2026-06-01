@@ -335,6 +335,14 @@ body,
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+/* The spoken lead-in distilled from the reasoning — read aloud just before
+   the question; shown muted/italic above it so the caregiver sees it too. */
+.turn.question.pending .preface {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--ink-soft);
+  margin-bottom: 4px;
+}
 .awaiting {
   margin-top: 6px;
   font-size: 11px;

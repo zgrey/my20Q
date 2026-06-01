@@ -152,6 +152,31 @@ async def test_rationale_persists_in_history(topics: list[Topic]) -> None:
     assert query_entry["rationale"] == "exploring contact"
 
 
+async def test_preface_flows_to_query_event(topics: list[Topic]) -> None:
+    backend = _scripted(
+        json.dumps(
+            {
+                "action": "query",
+                "content": "Are you thirsty right now?",
+                "preface": "Okay, not food then —",
+                "rationale": "pivoting to drink",
+            }
+        )
+    )
+    rnd = Round(_topic(topics, "physical_health"), llm=backend)
+    ev = await rnd.open()
+    assert ev.kind == "query"
+    assert ev.preface == "Okay, not food then —"
+
+
+async def test_preface_dropped_when_identical_to_question(topics: list[Topic]) -> None:
+    q = "Are you thirsty right now?"
+    backend = _scripted(json.dumps({"action": "query", "content": q, "preface": q}))
+    rnd = Round(_topic(topics, "physical_health"), llm=backend)
+    ev = await rnd.open()
+    assert ev.kind == "query" and ev.preface == ""
+
+
 async def test_malformed_llm_degrades_to_fallback(topics: list[Topic]) -> None:
     backend = MockBackend(responder=lambda _m: "this is not json")
     rnd = Round(_topic(topics, "physical_health"), llm=backend)

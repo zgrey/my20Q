@@ -53,6 +53,7 @@ class RoundEvent:
     kind: EventKind
     text: str = ""
     rationale: str = ""
+    preface: str = ""  # short spoken lead-in read just before a query
     query_index: int = 0
     engine: Engine = "reasoning"
     emergency_screen: dict | None = None
@@ -342,6 +343,7 @@ class Round:
             kind=action.kind,
             text=action.content,
             rationale=action.rationale,
+            preface=action.preface,
             query_index=idx,
             engine=self.engine,
         )

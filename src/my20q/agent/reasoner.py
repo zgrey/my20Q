@@ -37,6 +37,11 @@ class ReasonerAction:
     kind: Literal["query", "synthesis"]
     content: str
     rationale: str = ""
+    #: A short, patient-facing spoken lead-in read aloud just before the
+    #: query — a distillation of the reasoning that varies turn to turn so the
+    #: readout is less monotonous. Sanitized like any patient-facing string;
+    #: empty when the model omitted it or it was rejected.
+    preface: str = ""
 
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
@@ -174,4 +179,11 @@ class Reasoner:
         )
         if not cleaned:
             raise ReasonerError(f"sanitizer rejected content: {content!r}")
-        return ReasonerAction(kind=kind, content=cleaned, rationale=rationale[:240])
+        # Optional spoken lead-in. Patient-facing, so sanitized; kept short
+        # (it prefaces, not replaces, the question) and never identical to it.
+        preface = sanitize_llm_text(str(data.get("preface", "") or ""))[:100]
+        if preface.casefold() == cleaned.casefold():
+            preface = ""
+        return ReasonerAction(
+            kind=kind, content=cleaned, rationale=rationale[:240], preface=preface
+        )

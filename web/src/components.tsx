@@ -217,6 +217,7 @@ export function ConversationTile({
         ))}
         {!terminal && ev.kind === "query" && (
           <div class="turn question pending">
+            {ev.preface && <div class="preface">{ev.preface}</div>}
             <div class="q">{ev.text}</div>
             <div class="awaiting">awaiting answer</div>
           </div>

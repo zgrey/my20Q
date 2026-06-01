@@ -25,6 +25,7 @@ export interface RoundEvent {
   kind: EventKind;
   text: string;
   rationale: string;
+  preface: string; // short spoken lead-in read aloud just before the query
   query_index: number;
   engine: "reasoning" | "fallback";
   emergency_screen: EmergencyScreen | null;
