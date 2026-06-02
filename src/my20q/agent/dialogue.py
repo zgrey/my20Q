@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
+from my20q.agent import hypotheses as hyp
+from my20q.agent.hypotheses import Hypothesis
 from my20q.agent.reasoner import Reasoner, ReasonerAction, ReasonerError
 from my20q.agent.safety import EMERGENCY_SCREEN
 from my20q.config import Config, Mode
@@ -57,6 +59,10 @@ class RoundEvent:
     query_index: int = 0
     engine: Engine = "reasoning"
     emergency_screen: dict | None = None
+    # The live belief over candidate needs — [{need, weight}] sorted desc — that
+    # drove this question. Empty in fallback/emergency/terminal events. Powers
+    # the cockpit's honest reasoning tile.
+    hypotheses: list[dict] = field(default_factory=list)
 
 
 class Round:
@@ -95,6 +101,9 @@ class Round:
         #: a ReasonerError forced the degrade.
         self.degrade_reason: str = ""
         self._reasoner = Reasoner(llm) if llm is not None else None
+        # The round's candidate-need set (the belief prior), seeded once by the
+        # reasoner on the first advance. Weights are recomputed from history.
+        self._hypotheses: list[Hypothesis] = []
         self._history: list[dict] = []
         self._pending: ReasonerAction | None = None
         self._pending_qid: str | None = None
@@ -164,6 +173,13 @@ class Round:
         }
         if self._pending_qid is not None:
             entry["qid"] = self._pending_qid
+        # Belief-replay metadata: a query carries the candidates it split (so
+        # undo can recompute weights); a synthesis carries the hypothesis it was
+        # built from (so a rejection eliminates that need).
+        if pending.yes_ids:
+            entry["yes_ids"] = list(pending.yes_ids)
+        if pending.hyp_id:
+            entry["hyp_id"] = pending.hyp_id
         self._history.append(entry)
         self._pending = None
         self._pending_qid = None
@@ -255,25 +271,79 @@ class Round:
 
         assert self._reasoner is not None
         try:
-            action = await self._reasoner.next_action(
-                topic_label=self.topic.label,
-                history=self._history,
-                query_index=self.query_count + 1,
-                max_queries=self.max_queries,
-                final=final,
-                seed_context=self.seed_context,
-                profile_context=self.profile_context,
-                topic_hint=self.topic.reasoning_hint or "",
-                emotional_state=self.emotional_state,
-                on_phase=self.on_phase,
-            )
+            # Seed the candidate-need set once, on the first advance.
+            if not self._hypotheses:
+                self._hypotheses = await self._reasoner.seed_hypotheses(
+                    **self._reasoner_ctx()
+                )
+            weights = hyp.recompute(self._hypotheses, self._replay_pairs())
+
+            if final or hyp.should_synthesize(weights):
+                top = hyp.leader(weights)
+                leader_hyp = self._hyp_by_id(top[0]) if top else None
+                if leader_hyp is None:
+                    return self._degrade_to_fallback("no leading hypothesis")
+                action = await self._reasoner.synthesize(
+                    leading_need=leader_hyp.need,
+                    history=self._history,
+                    **self._reasoner_ctx(),
+                )
+                action.hyp_id = leader_hyp.id
+            else:
+                ranked = hyp.ranked(self._hypotheses, weights)
+                candidates = [(h.id, h.need, w) for h, w in ranked]
+                action = await self._reasoner.ask(
+                    candidates=candidates,
+                    weights=weights,
+                    history=self._history,
+                    **self._reasoner_ctx(),
+                )
         except ReasonerError as exc:
             log.warning("reasoner failed (%s) — degrading to fallback mode", exc)
             return self._degrade_to_fallback(str(exc))
 
         self._pending = action
         self._pending_qid = None
-        return self._event_for(action)
+        return self._event_for(action, weights)
+
+    def _reasoner_ctx(self) -> dict:
+        """Shared keyword context passed to every reasoner call."""
+        return {
+            "topic_label": self.topic.label,
+            "seed_context": self.seed_context,
+            "profile_context": self.profile_context,
+            "topic_hint": self.topic.reasoning_hint or "",
+            "emotional_state": self.emotional_state,
+            "on_phase": self.on_phase,
+        }
+
+    def _replay_pairs(self) -> list[tuple[set[str], str]]:
+        """(yes_ids, answer) pairs to fold over the seed prior for the belief.
+
+        A query contributes its split; a *rejected* synthesis contributes an
+        elimination of the need it proposed (same as a "no" to "is it X?").
+        """
+        pairs: list[tuple[set[str], str]] = []
+        for h in self._history:
+            answer = h.get("answer")
+            if not answer:
+                continue
+            if h["kind"] == "query":
+                pairs.append((set(h.get("yes_ids", [])), answer))
+            elif h["kind"] == "synthesis" and answer != Answer.YES.value:
+                hid = h.get("hyp_id")
+                if hid:
+                    pairs.append(({hid}, Answer.NO.value))
+        return pairs
+
+    def _hyp_by_id(self, hid: str) -> Hypothesis | None:
+        return next((h for h in self._hypotheses if h.id == hid), None)
+
+    def _belief_view(self, weights: dict[str, float]) -> list[dict]:
+        return [
+            {"need": h.need, "weight": round(w, 3)}
+            for h, w in hyp.ranked(self._hypotheses, weights)
+        ]
 
     def _degrade_to_fallback(self, reason: str = "") -> RoundEvent:
         """Switch to deterministic fallback mid-round (LLM became unusable)."""
@@ -342,7 +412,9 @@ class Round:
     def _find_fq(self, qid: str) -> FallbackQuestion | None:
         return next((q for q in self.topic.fallback_questions if q.id == qid), None)
 
-    def _event_for(self, action: ReasonerAction) -> RoundEvent:
+    def _event_for(
+        self, action: ReasonerAction, weights: dict[str, float] | None = None
+    ) -> RoundEvent:
         idx = self.query_count + (1 if action.kind == "query" else 0)
         return RoundEvent(
             kind=action.kind,
@@ -351,6 +423,7 @@ class Round:
             preface=action.preface,
             query_index=idx,
             engine=self.engine,
+            hypotheses=self._belief_view(weights) if weights is not None else [],
         )
 
 

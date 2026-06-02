@@ -1,90 +1,83 @@
-"""System prompt and templating for the reasoning-mode LLM.
+"""System prompts and templating for the reasoning-mode LLM.
 
-In the retooled engine the LLM has one job: drive a round. Each turn it
-either proposes a yes/no `query` or a `synthesis` — a candidate utterance
-in the patient's voice. See docs/design/beta-retool.md §7.
+The retooled engine wraps the LLM in a hypothesis controller (see
+``agent/hypotheses.py`` and ``agent/dialogue.py``). The LLM does *language*,
+code does *control*, via three focused calls:
+
+- ``seed_messages``      — list candidate needs to test (the belief's prior).
+- ``ask_messages``       — the single most-discriminating yes/no question.
+- ``synthesize_messages``— phrase the leading need as a first-person utterance.
+
+See docs/design/beta-retool.md §7.
 """
 
 from __future__ import annotations
 
 from my20q.llm.base import LLMMessage
 
-GAME_SYSTEM_PROMPT = """\
-You help a caregiver and a person with aphasia communicate. Inside ONE
-round, under ONE high-level topic, you ask short questions to work out
-what the person needs to say — then you synthesize it as a short
-sentence in their voice.
+SEED_SYSTEM = """\
+You help a caregiver and a person with aphasia communicate. Under ONE topic,
+list the distinct things the person might be trying to express RIGHT NOW — a
+spread of candidate NEEDS to test. These are hypotheses, NOT questions.
 
-OUTPUT FORMAT — STRICT JSON, nothing else:
-{"action": "query" | "synthesis", "content": "...", "preface": "...",
- "rationale": "..."}
+OUTPUT — STRICT JSON, nothing else:
+{"hypotheses": ["I'm thirsty and want a drink", "My foot hurts", ...]}
 
-- "query" — a single yes/no narrowing question.
-- "synthesis" — the candidate utterance: what the person is trying to
-  say, as ONE complete sentence in the FIRST PERSON ("I would like…",
-  "I feel…"). This is the round's output; the caregiver confirms it
-  with the person before it is spoken.
-- "content" — the query or utterance shown in the cockpit. Phrase it as
-  a clear, complete, natural sentence — roughly 8-16 words. Not a
-  clipped fragment ("Your son?"), not a paragraph. Use concrete,
-  everyday words; a little extra phrasing helps it land clearly.
-- "preface" — a SHORT spoken lead-in (≤ 12 words) read aloud to the
-  person immediately before the question. Distill WHY you are asking
-  this next — what the last answers narrowed — into one warm, plain,
-  conversational phrase that gives gentle context. It must VARY turn to
-  turn (this is what stops the questions sounding monotonous and
-  repetitive), must NOT restate the question or mechanically name the
-  topic, and must NOT contain medical terms. Good: "Okay, it's not
-  about food then —", "Let's try something different —", "Since you're
-  feeling tired —". Omit it (empty string) only on the very first query
-  when there is nothing yet to build on.
-- A QUERY MUST BE A SINGLE YES/NO QUESTION. The caregiver can only
-  answer yes, no, kinda, or not sure — there are no other buttons.
-  NEVER ask an either/or or multiple-choice question ("Is it inside or
-  outside?", "Is it A, B, or C?"). Pick ONE option and ask it as a
-  plain yes/no ("Is it inside the house?"); a later query can probe
-  the other option.
-- "rationale" — one short sentence for the caregiver's reasoning panel;
-  never spoken to the patient.
+- 6 to 10 items, each ONE short FIRST-PERSON need.
+- ALWAYS include the most common everyday needs, phrased naturally, EVEN IF the
+  topic seems narrow: being thirsty / wanting a drink, being hungry / wanting
+  food, needing the toilet, being in pain, and being too hot or too cold. A
+  basic want like thirst is easy to miss under a "body" topic — do not skip it.
+- THEN add items specific to the topic, spread across kinds — do not pile into
+  one: WANT (an object, to move), FEEL (lonely, scared, frustrated, tired),
+  WRONG/body (nausea, dizziness, weakness), PEOPLE (see or contact someone).
+- Concrete, everyday words. Make them mutually DISTINCT so a yes/no question
+  can tell them apart, and broad enough that the real need is likely among them.
+- No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
+"""
 
-STAY ON TOPIC. Every query and the synthesis must stay within the
-round's topic. Drift to a closely related facet only briefly, and only
-when it genuinely helps narrow the need.
+ASK_SYSTEM = """\
+You help narrow down what a person with aphasia needs. You are given the current
+CANDIDATE needs (each with an id). Ask the ONE yes/no question that best SPLITS
+them — ideally about half of them would answer "yes".
 
-HOW TO READ THE ANSWERS (in history):
-- "yes" — affirmed; keep narrowing in this direction.
-- "no" — rejected; pivot. Never re-ask something already rejected.
-- "kinda" — warm; you are close. Refine around what got the "kinda".
-- "not_sure" — no information; try a different facet.
-- A "[caregiver context]" entry is free-form steering the caregiver
-  typed in mid-round — weight it heavily.
+OUTPUT — STRICT JSON, nothing else:
+{"question": "...", "yes_ids": ["h2","h5"], "preface": "...", "rationale": "..."}
 
-EXPLORE vs EXPLOIT — the core dialogue philosophy:
-Each query balances two moves, like a reinforcement-learning policy:
-- EXPLOIT what this round has revealed — its history, the caregiver
-  context, the seed context, and the patient profile.
-- EXPLORE an under-sampled facet every 2-3 queries, even when the
-  exploit signal looks coherent, to avoid a false local optimum.
-- Never echo a known subject back as a synthesis. If the topic or seed
-  context already says WHAT the subject is, narrow what is unclear
-  ABOUT it.
+- "question": ONE plain yes/no question, ~8-16 everyday words. The caregiver can
+  only answer yes, no, kinda, or not sure — so NEVER an either/or or
+  multiple-choice question ("Is it A or B?"). Pick one idea and ask it plainly.
+  Prefer questions that separate WANTS from FEELINGS from BODY problems from
+  PEOPLE, rather than drilling deeper into one need.
+- "yes_ids": exactly the candidate ids whose need would answer YES to your
+  question. It MUST be a non-empty STRICT subset (some yes AND some no) — that
+  split is what makes the question informative.
+- "preface": a SHORT spoken lead-in (<=12 words) read to the person right before
+  the question — warm, plain, varies each turn, gives gentle context, never just
+  restates the question.
+- "rationale": one short sentence for the caregiver's panel; never spoken.
 
-PACING:
-- Mix queries and an eventual synthesis. A reasonable rhythm is 2-5
-  narrowing queries, then synthesize, then adapt if it is rejected.
-- After two "kinda" answers in a row, SYNTHESIZE from the neighbourhood.
-- When told the query budget is reached, action MUST be "synthesis".
+Never repeat a question already in the history. Weight any [caregiver context]
+heavily. No medical advice, URLs, markup, or emoji.
+"""
 
-SAFETY:
-- Never give medical advice, diagnoses, or dosages.
-- Never include URLs, HTML, markdown, or emoji.
-- Never repeat content already in the history.
+SYNTH_SYSTEM = """\
+You phrase a person's need in their own voice for the caregiver to confirm with
+them. Given the LEADING candidate need and the dialogue so far:
+
+OUTPUT — STRICT JSON, nothing else:
+{"utterance": "..."}
+
+- "utterance": ONE complete FIRST-PERSON sentence, natural and concrete, ~6-16
+  words ("I would like a glass of water.", "I feel lonely and would like someone
+  to sit with me."). Build on the leading need and what the answers confirmed.
+- No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
 """
 
 
 def _format_history(history: list[dict]) -> str:
     if not history:
-        return "(no queries yet)"
+        return "(nothing asked yet)"
     lines: list[str] = []
     for i, h in enumerate(history, start=1):
         if h["kind"] == "context":
@@ -94,40 +87,27 @@ def _format_history(history: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def reason_messages(
-    topic_label: str,
-    history: list[dict],
-    query_index: int,
-    max_queries: int,
+def _context_block(
     *,
-    final: bool = False,
-    seed_context: str = "",
-    profile_context: str = "",
-    topic_hint: str = "",
-    emotional_state: dict | None = None,
-    corrections: list[str] | None = None,
-) -> list[LLMMessage]:
-    """Build the messages asking the LLM for the next round action.
+    profile_context: str,
+    seed_context: str,
+    topic_hint: str,
+    emotional_state: dict | None,
+) -> str:
+    """Shared preamble: topic guidance, profile, emotion, and seed context.
 
-    `history` is the round's ordered list of `{"kind", "text", "answer"}`
-    dicts — `kind` is "query", "synthesis", or "context". `seed_context`
-    is optional caregiver free-form text supplied up front;
-    `profile_context` is the persistent patient profile; `topic_hint` is
-    the topic's reasoning guidance.
+    These inform *how* to ask — never the answer itself.
     """
-    instruction = (
-        f"Topic for this round: {topic_label}\n"
-        f"Query {query_index} of up to {max_queries}\n\n"
-    )
+    out = ""
     if topic_hint:
-        instruction += (
-            "TOPIC-SCOPED REASONING GUIDANCE (applies to this whole round):\n"
+        out += (
+            "TOPIC-SCOPED GUIDANCE (applies to this whole round):\n"
             f"{topic_hint.strip()}\n\n"
         )
     if profile_context:
-        instruction += (
-            "PATIENT PROFILE (persistent, caregiver-managed context — use as "
-            "a prior on HOW to ask, never as the answer itself):\n"
+        out += (
+            "PATIENT PROFILE (persistent caregiver context — a prior on HOW to "
+            "ask, never the answer):\n"
             f"  {profile_context}\n\n"
         )
     if emotional_state:
@@ -135,39 +115,116 @@ def reason_messages(
         for pair_id, value in emotional_state.items():
             poles = pair_id.split("_", 1)
             if len(poles) == 2 and isinstance(value, int | float):
-                readings.append(f"  - {poles[0]} ↔ {poles[1]}: {float(value):+.2f}")
+                readings.append(f"  - {poles[0]} <-> {poles[1]}: {float(value):+.2f}")
         if readings:
-            instruction += (
-                "CAREGIVER'S EMOTIONAL READING of the patient right now "
-                "(-1 = the first word, +1 = the second, 0 = neutral):\n"
-                + "\n".join(readings)
-                + "\nLet this colour the tone and focus of your questions — it "
-                "is context, not the answer.\n\n"
+            out += (
+                "CAREGIVER'S EMOTIONAL READING (-1 = first word, +1 = second, "
+                "0 = neutral):\n" + "\n".join(readings) + "\n\n"
             )
     if seed_context:
-        instruction += (
+        out += (
             "SEED CONTEXT the caregiver supplied up front:\n"
             f'  "{seed_context}"\n\n'
-            "Treat this as the SUBJECT, not the answer. Do not echo it back "
-            "as a synthesis — narrow what is still unclear about it.\n\n"
         )
-    instruction += f"History so far:\n{_format_history(history)}\n\n"
+    return out
+
+
+def seed_messages(
+    topic_label: str,
+    *,
+    seed_context: str = "",
+    profile_context: str = "",
+    topic_hint: str = "",
+    emotional_state: dict | None = None,
+) -> list[LLMMessage]:
+    """Ask the LLM for the round's candidate-need set (the belief prior)."""
+    instruction = f"Topic for this round: {topic_label}\n\n"
+    instruction += _context_block(
+        profile_context=profile_context,
+        seed_context=seed_context,
+        topic_hint=topic_hint,
+        emotional_state=emotional_state,
+    )
+    instruction += (
+        "List the candidate needs as strict JSON. Spread them across "
+        "want / feel / body / people, concrete and mutually distinct."
+    )
+    return [
+        {"role": "system", "content": SEED_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def ask_messages(
+    topic_label: str,
+    candidates: list[tuple[str, str, float]],
+    history: list[dict],
+    *,
+    seed_context: str = "",
+    profile_context: str = "",
+    topic_hint: str = "",
+    emotional_state: dict | None = None,
+    corrections: list[str] | None = None,
+) -> list[LLMMessage]:
+    """Ask for the next discriminating yes/no question over ``candidates``.
+
+    ``candidates`` is ``(id, need, weight)`` for the live hypotheses.
+    """
+    listing = "\n".join(
+        f"  {hid}: {need}  [confidence {weight:.2f}]" for hid, need, weight in candidates
+    )
+    instruction = f"Topic for this round: {topic_label}\n\n"
+    instruction += _context_block(
+        profile_context=profile_context,
+        seed_context=seed_context,
+        topic_hint=topic_hint,
+        emotional_state=emotional_state,
+    )
+    instruction += (
+        "CANDIDATE needs still in play (id: need [confidence]):\n"
+        f"{listing}\n\n"
+        f"History so far:\n{_format_history(history)}\n\n"
+    )
     if corrections:
         joined = "\n".join(f"  - {c}" for c in corrections)
         instruction += (
-            "YOUR PREVIOUS QUERY ATTEMPT WAS REJECTED BY THE AUDITOR:\n"
+            "YOUR PREVIOUS ATTEMPT WAS REJECTED:\n"
             f"{joined}\n"
-            "Produce a corrected query — ONE plain yes/no question.\n\n"
+            "Produce a corrected question that splits the candidates.\n\n"
         )
-    if final:
-        instruction += (
-            'QUERY BUDGET REACHED. action MUST be "synthesis" — your best '
-            "synthesis of what the person is trying to say, from all the "
-            "evidence above."
-        )
-    else:
-        instruction += 'Propose your next "query" or a "synthesis" as strict JSON.'
+    instruction += (
+        'Return the single best yes/no question and its "yes_ids" as strict JSON.'
+    )
     return [
-        {"role": "system", "content": GAME_SYSTEM_PROMPT},
+        {"role": "system", "content": ASK_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def synthesize_messages(
+    topic_label: str,
+    leading_need: str,
+    history: list[dict],
+    *,
+    seed_context: str = "",
+    profile_context: str = "",
+    topic_hint: str = "",
+    emotional_state: dict | None = None,
+) -> list[LLMMessage]:
+    """Ask the LLM to phrase the leading need as a confirmable utterance."""
+    instruction = f"Topic for this round: {topic_label}\n\n"
+    instruction += _context_block(
+        profile_context=profile_context,
+        seed_context=seed_context,
+        topic_hint=topic_hint,
+        emotional_state=emotional_state,
+    )
+    instruction += (
+        f"LEADING candidate need: {leading_need}\n\n"
+        f"History so far:\n{_format_history(history)}\n\n"
+        "Phrase this need as one first-person sentence, as strict JSON."
+    )
+    return [
+        {"role": "system", "content": SYNTH_SYSTEM},
         {"role": "user", "content": instruction},
     ]

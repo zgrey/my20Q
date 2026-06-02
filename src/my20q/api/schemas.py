@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TopicOut(BaseModel):
@@ -48,6 +48,9 @@ class EventOut(BaseModel):
     engine: str = "reasoning"
     emergency_screen: dict | None = None
     pictogram: str | None = None  # catalog concept id, or null when none matched
+    # Live belief over candidate needs ([{need, weight}], sorted) — the honest
+    # reasoning tile. Empty for fallback/emergency/terminal events.
+    hypotheses: list[dict] = Field(default_factory=list)
 
 
 class HistoryEntryOut(BaseModel):

@@ -76,6 +76,7 @@ def _event_out(ev: RoundEvent, catalog: list[Pictogram]) -> schemas.EventOut:
         engine=ev.engine,
         emergency_screen=ev.emergency_screen,
         pictogram=match.id if match else None,
+        hypotheses=ev.hypotheses,
     )
 
 

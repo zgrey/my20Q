@@ -438,6 +438,7 @@ export function ReasoningTile({
       : sse === "connecting"
         ? "Connecting to the live progress channel…"
         : "Live progress channel disconnected — events may be delayed";
+  const hypotheses = event?.hypotheses ?? [];
   return (
     <section class="tile reasoning">
       <h2>
@@ -446,6 +447,25 @@ export function ReasoningTile({
         {live && phaseLabel && <span class="phase-tag">{phaseLabel}</span>}
       </h2>
       <p class="reason-text">{text}</p>
+      {hypotheses.length > 0 && (
+        <div class="belief">
+          <div class="belief-head">What the need might be</div>
+          <ul class="belief-list">
+            {hypotheses.map((h, i) => {
+              const pct = Math.round(h.weight * 100);
+              return (
+                <li class={`belief-row${i === 0 ? " lead" : ""}`} key={h.need}>
+                  <span class="belief-need">{h.need}</span>
+                  <span class="belief-bar">
+                    <span class="belief-fill" style={`width:${pct}%`} />
+                  </span>
+                  <span class="belief-pct">{pct}%</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
       <EmotionSliders
         values={emotion}
         onChange={onEmotion}

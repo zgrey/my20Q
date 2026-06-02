@@ -1,13 +1,20 @@
-"""Tests for the retooled round engine — fallback and reasoning modes."""
+"""Tests for the round engine — fallback and the hypothesis controller."""
 
 from __future__ import annotations
 
 import json
 
 from my20q.agent.dialogue import Answer, Round, Session
-from my20q.agent.prompts import reason_messages
+from my20q.agent.prompts import seed_messages
 from my20q.llm import MockBackend
 from my20q.topics import Topic, find_topic
+
+SEED_NEEDS = [
+    "I am thirsty and want a glass of water",
+    "My foot hurts",
+    "I feel lonely",
+    "I want to call my daughter",
+]
 
 
 def _topic(topics: list[Topic], topic_id: str) -> Topic:
@@ -16,19 +23,31 @@ def _topic(topics: list[Topic], topic_id: str) -> Topic:
     return t
 
 
-def _action(kind: str, content: str, rationale: str = "because") -> str:
-    return json.dumps({"action": kind, "content": content, "rationale": rationale})
+def _controller_backend(
+    *,
+    seed: list[str] = SEED_NEEDS,
+    asks: list[tuple[str, list[str]]],
+    utterance: str = "I would like a glass of water.",
+) -> MockBackend:
+    """A MockBackend that plays the seed/ask/synthesize protocol.
 
+    It returns the seed set, then walks `asks` (question, yes_ids) for each
+    ask call, then the synthesis utterance — branching on the system prompt.
+    """
+    state = {"ask": 0}
 
-def _scripted(*responses: str) -> MockBackend:
-    """A MockBackend returning the given strings in order, then repeating
-    the last one for any further calls."""
-    state = {"i": 0}
-
-    def responder(_msgs: list) -> str:
-        i = min(state["i"], len(responses) - 1)
-        state["i"] += 1
-        return responses[i]
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "candidate NEEDS to test" in system:
+            return json.dumps({"hypotheses": seed})
+        if "best SPLITS" in system:
+            i = min(state["ask"], len(asks) - 1)
+            state["ask"] += 1
+            question, yes_ids = asks[i]
+            return json.dumps(
+                {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "split"}
+            )
+        return json.dumps({"utterance": utterance})  # synthesize
 
     return MockBackend(responder=responder)
 
@@ -63,121 +82,92 @@ async def test_emergency_topic_short_circuits(topics: list[Topic]) -> None:
     assert rnd.outcome == "emergency"
 
 
-# ---------------------------------------------------------- reasoning mode
+# -------------------------------------------------- hypothesis controller
 
 
-async def test_reasoning_round_reaches_synthesis(topics: list[Topic]) -> None:
-    backend = _scripted(
-        _action("query", "Is this about a family member you would like to contact?"),
-        _action("query", "Would you like us to telephone them right now?"),
-        _action("synthesis", "I would like to call my daughter to share some news."),
+async def test_reasoning_round_converges_via_belief(topics: list[Topic]) -> None:
+    backend = _controller_backend(
+        asks=[
+            ("Is it something you want right now?", ["h1", "h2"]),
+            ("Are you feeling thirsty?", ["h1"]),
+            ("Is it about a drink?", ["h1"]),
+        ]
     )
-    rnd = Round(_topic(topics, "my_people"), llm=backend, max_queries=20)
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
     ev = await rnd.open()
     assert ev.kind == "query" and ev.engine == "reasoning"
+    # The honest tile gets the full live belief.
+    assert len(ev.hypotheses) == len(SEED_NEEDS)
+    assert ev.hypotheses[0]["need"] in SEED_NEEDS
+
     ev = await rnd.answer(Answer.YES)
     assert ev.kind == "query"
-    ev = await rnd.answer(Answer.KINDA)
+    # The split is persisted for belief replay / undo.
+    assert rnd.history[0]["yes_ids"] == ["h1", "h2"]
+
+    ev = await rnd.answer(Answer.YES)
     assert ev.kind == "synthesis"
     ev = await rnd.answer(Answer.YES)
     assert ev.kind == "synthesized"
-    assert "daughter" in rnd.final_utterance
+    assert "water" in rnd.final_utterance
 
 
-async def test_undo_rewinds_one_entry(topics: list[Topic]) -> None:
-    backend = _scripted(
-        _action("query", "Is this about a family member you would like to contact?"),
-        _action("query", "Would you like us to telephone them right now?"),
-        _action("query", "Do you want to tell them something specific today?"),
+async def test_undo_recomputes_belief(topics: list[Topic]) -> None:
+    backend = _controller_backend(
+        asks=[("Is it something you want?", ["h1", "h2"]), ("Is it a drink?", ["h1"])]
     )
-    rnd = Round(_topic(topics, "my_people"), llm=backend, max_queries=20)
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
     await rnd.open()
     await rnd.answer(Answer.YES)
-    await rnd.answer(Answer.NO)
-    assert len(rnd.history) == 2
-    ev = await rnd.undo()
     assert len(rnd.history) == 1
-    assert ev.kind == "query"
+    ev = await rnd.undo()
+    assert len(rnd.history) == 0
+    assert ev.kind == "query" and len(ev.hypotheses) == len(SEED_NEEDS)
 
 
-async def test_budget_exhaustion_forces_synthesis_then_abandons(
-    topics: list[Topic],
-) -> None:
-    backend = _scripted(
-        _action("query", "Is this a question about being comfortable right now?"),
-        _action("synthesis", "I would like to be more comfortable."),
-    )
+async def test_budget_forces_synthesis_then_abandons(topics: list[Topic]) -> None:
+    backend = _controller_backend(asks=[("Is it something you want?", ["h1", "h2"])])
     rnd = Round(_topic(topics, "general"), llm=backend, max_queries=1)
     ev = await rnd.open()
     assert ev.kind == "query"
     ev = await rnd.answer(Answer.NO)  # budget hit -> forced synthesis
     assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # forced synthesis rejected -> abandoned
+    ev = await rnd.answer(Answer.NO)  # rejected -> abandoned
     assert ev.kind == "abandoned"
     assert rnd.outcome == "abandoned"
 
 
-async def test_add_context_refreshes_the_pending_query(topics: list[Topic]) -> None:
-    backend = _scripted(
-        _action("query", "Is this about a family member you would like to contact?"),
-        _action("query", "Would you like to send them a written message instead?"),
+async def test_rejected_synthesis_keeps_going(topics: list[Topic]) -> None:
+    backend = _controller_backend(
+        asks=[
+            ("Is it something you want?", ["h1", "h2"]),
+            ("Are you thirsty?", ["h1"]),
+            ("Is it about a person?", ["h4"]),
+        ]
     )
-    rnd = Round(_topic(topics, "my_people"), llm=backend)
-    first = await rnd.open()
-    # Adding context re-proposes — the on-screen query refreshes (and the
-    # context lands in history).
-    refreshed = await rnd.add_context("She mentioned her granddaughter earlier.")
-    assert refreshed.kind == "query"
-    assert refreshed.text != first.text
-    assert "context" in [h["kind"] for h in rnd.history]
-
-
-async def test_empty_context_leaves_query_unchanged(topics: list[Topic]) -> None:
-    backend = _scripted(_action("query", "Is this about contacting someone?"))
-    rnd = Round(_topic(topics, "my_people"), llm=backend)
-    first = await rnd.open()
-    same = await rnd.add_context("   ")
-    assert same.text == first.text
-    assert "context" not in [h["kind"] for h in rnd.history]
-
-
-async def test_rationale_persists_in_history(topics: list[Topic]) -> None:
-    backend = _scripted(
-        _action("query", "Is this about contacting someone?", rationale="exploring contact"),
-    )
-    rnd = Round(_topic(topics, "my_people"), llm=backend)
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
     await rnd.open()
-    await rnd.answer(Answer.NO)
-    query_entry = next(h for h in rnd.history if h["kind"] == "query")
-    assert query_entry["rationale"] == "exploring contact"
+    await rnd.answer(Answer.YES)
+    ev = await rnd.answer(Answer.YES)
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.NO)  # rejects the proposal — round continues
+    assert rnd.outcome is None
+    assert ev.kind in ("query", "synthesis")
 
 
-async def test_preface_flows_to_query_event(topics: list[Topic]) -> None:
-    backend = _scripted(
-        json.dumps(
-            {
-                "action": "query",
-                "content": "Are you thirsty right now?",
-                "preface": "Okay, not food then —",
-                "rationale": "pivoting to drink",
-            }
-        )
+async def test_add_context_steers_next_question(topics: list[Topic]) -> None:
+    backend = _controller_backend(
+        asks=[("Is it something you want?", ["h1", "h2"]), ("Is it a drink?", ["h1"])]
     )
     rnd = Round(_topic(topics, "physical_health"), llm=backend)
-    ev = await rnd.open()
-    assert ev.kind == "query"
-    assert ev.preface == "Okay, not food then —"
+    first = await rnd.open()
+    refreshed = await rnd.add_context("She keeps pointing at the empty cup.")
+    assert refreshed.kind == "query"
+    assert "context" in [h["kind"] for h in rnd.history]
+    assert refreshed.text != first.text
 
 
-async def test_preface_dropped_when_identical_to_question(topics: list[Topic]) -> None:
-    q = "Are you thirsty right now?"
-    backend = _scripted(json.dumps({"action": "query", "content": q, "preface": q}))
-    rnd = Round(_topic(topics, "physical_health"), llm=backend)
-    ev = await rnd.open()
-    assert ev.kind == "query" and ev.preface == ""
-
-
-async def test_malformed_llm_degrades_to_fallback(topics: list[Topic]) -> None:
+async def test_malformed_seed_degrades_to_fallback(topics: list[Topic]) -> None:
     backend = MockBackend(responder=lambda _m: "this is not json")
     rnd = Round(_topic(topics, "physical_health"), llm=backend)
     ev = await rnd.open()
@@ -191,12 +181,9 @@ def test_session_tracks_topic_sequence(topics: list[Topic]) -> None:
     assert session.topic_sequence == ["my_people", "physical_health"]
 
 
-def test_reason_messages_includes_emotional_reading() -> None:
-    messages = reason_messages(
+def test_seed_messages_includes_emotional_reading() -> None:
+    messages = seed_messages(
         "My feelings",
-        [],
-        1,
-        20,
         emotional_state={"sad_happy": -0.6, "anxious_calm": 0.4},
     )
     content = messages[1]["content"]

@@ -22,19 +22,22 @@ def _fallback_client() -> TestClient:
     return TestClient(create_app(replace(Config.from_env(), llm_enabled=False), backend=None))
 
 
-def _scripted(*responses: str) -> MockBackend:
-    state = {"i": 0}
+def _controller_backend(
+    *, seed: list[str], question: str, yes_ids: list[str], utterance: str
+) -> MockBackend:
+    """A MockBackend that plays the seed/ask/synthesize protocol."""
 
-    def responder(_msgs: list) -> str:
-        i = min(state["i"], len(responses) - 1)
-        state["i"] += 1
-        return responses[i]
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "candidate NEEDS to test" in system:
+            return json.dumps({"hypotheses": seed})
+        if "best SPLITS" in system:
+            return json.dumps(
+                {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "r"}
+            )
+        return json.dumps({"utterance": utterance})
 
     return MockBackend(responder=responder)
-
-
-def _action(kind: str, content: str) -> str:
-    return json.dumps({"action": kind, "content": content, "rationale": "r"})
 
 
 def test_health_and_topics() -> None:
@@ -115,9 +118,18 @@ def test_unknown_topic_returns_400() -> None:
 
 
 def test_reasoning_round_via_injected_backend() -> None:
-    backend = _scripted(
-        _action("query", "Is this about someone you would like to contact today?"),
-        _action("synthesis", "I would like to call my son this afternoon."),
+    # A "yes" to a question pointing at just h1 concentrates the belief past the
+    # synthesis threshold, so the next event is the proposed utterance.
+    backend = _controller_backend(
+        seed=[
+            "I would like to call my son this afternoon",
+            "I want to see a visitor",
+            "I miss my friend",
+            "I want to write a letter",
+        ],
+        question="Is this about phoning someone today?",
+        yes_ids=["h1"],
+        utterance="I would like to call my son this afternoon.",
     )
     client = TestClient(create_app(Config.from_env(), backend=backend))
     sid = client.post("/api/sessions").json()["session_id"]
@@ -128,6 +140,7 @@ def test_reasoning_round_via_injected_backend() -> None:
     state = client.get(f"/api/sessions/{sid}/rounds/{rid}").json()
     assert state["engine"] == "reasoning"
     assert state["event"]["kind"] == "query"
+    assert len(state["event"]["hypotheses"]) == 4  # the honest tile is populated
 
     state = client.post(
         f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"}

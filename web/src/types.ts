@@ -21,6 +21,12 @@ export type EventKind =
   | "synthesized"
   | "abandoned";
 
+// One candidate need in the live belief, with its current weight (0..1).
+export interface Hypothesis {
+  need: string;
+  weight: number;
+}
+
 export interface RoundEvent {
   kind: EventKind;
   text: string;
@@ -30,6 +36,7 @@ export interface RoundEvent {
   engine: "reasoning" | "fallback";
   emergency_screen: EmergencyScreen | null;
   pictogram: string | null;
+  hypotheses: Hypothesis[]; // live belief over candidate needs (honest tile)
 }
 
 export interface HistoryEntry {
