@@ -13,10 +13,12 @@ class OllamaBackend:
         base_url: str = "http://localhost:11434",
         model: str = "llama3.2:3b",
         timeout_s: float = 30.0,
+        temperature: float = 0.4,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
+        self.temperature = temperature
 
     async def chat(
         self,
@@ -29,7 +31,7 @@ class OllamaBackend:
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {"num_predict": max_tokens, "temperature": 0.4},
+            "options": {"num_predict": max_tokens, "temperature": self.temperature},
         }
         if json_mode:
             payload["format"] = "json"

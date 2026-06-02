@@ -218,3 +218,6 @@ __marimo__/
 
 # Local-only reference doc generated for the owner — not part of the repo.
 /tool-summary.html
+
+# model bench results
+bench_*.json
