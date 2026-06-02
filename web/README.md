@@ -33,7 +33,14 @@ npm run typecheck  # tsc --noEmit
 Two tabs in the topbar: **Live** (the cockpit) and **Review** (session
 playback). Topbar also has the topic ▼, engine badge, a **Model** selector
 (pick the local Ollama model for human-interaction trials — applies to the next
-question), ⬇ Save, recording light, 🔊 audio toggle, and theme.
+question), a **⌁ Zoom** toggle (augmented hierarchical-zoom reasoning, applies to
+the next round), ⬇ Save, recording light, 🔊 audio toggle, and theme.
+
+With **⌁ Zoom ON**, the reasoning tile also shows the zoom **breadcrumb**
+(need → object → modifier) and a **reasoning trace** — labelled *strategy* (the
+explicit deliberate/critique passes) vs *model thinking* (a thinking model's
+hidden reasoning, summarized). The thinking summary appears even with Zoom off,
+so the explicit strategy can be compared against a model's opaque reasoning.
 
 While the model is generating, the **Conversation** window shows a prominent
 animated "Thinking…" banner (latency feedback where the caregiver is looking,
