@@ -221,3 +221,4 @@ __marimo__/
 
 # model bench results
 bench_*.json
+bench_*.log
