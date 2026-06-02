@@ -31,7 +31,9 @@ def _controller_backend(
         system = messages[0]["content"]
         if "candidate NEEDS to test" in system:
             return json.dumps({"hypotheses": seed})
-        if "best SPLITS" in system:
+        if "Think it through" in system:  # deliberate
+            return question
+        if "Convert a drafted" in system:  # format
             return json.dumps(
                 {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "r"}
             )

@@ -32,6 +32,7 @@ class OllamaBackend:
         *,
         max_tokens: int = 200,
         json_mode: bool = False,
+        think: bool | None = None,
     ) -> str:
         payload: dict = {
             "model": self.model,
@@ -41,8 +42,10 @@ class OllamaBackend:
         }
         if json_mode:
             payload["format"] = "json"
-        if self.think is not None:
-            payload["think"] = self.think
+        # Per-call think overrides the backend default (None).
+        eff_think = think if think is not None else self.think
+        if eff_think is not None:
+            payload["think"] = eff_think
         try:
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 resp = await client.post(f"{self.base_url}/api/chat", json=payload)

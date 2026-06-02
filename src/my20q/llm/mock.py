@@ -18,6 +18,7 @@ class MockBackend:
         *,
         max_tokens: int = 200,
         json_mode: bool = False,
+        think: bool | None = None,
     ) -> str:
         self.calls.append(messages)
         return self.responder(messages)

@@ -44,6 +44,7 @@ class AnthropicBackend:
         *,
         max_tokens: int = 200,
         json_mode: bool = False,
+        think: bool | None = None,  # noqa: ARG002 - no Ollama-style toggle here
     ) -> str:
         import anthropic
 

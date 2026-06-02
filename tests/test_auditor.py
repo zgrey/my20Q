@@ -28,14 +28,17 @@ def test_audit_flags_open_wh_question() -> None:
 
 
 async def test_ask_reprompts_until_query_passes() -> None:
-    # The first question is an either/or (fails the audit); the reasoner feeds
-    # the reason back and re-asks until it gets a clean yes/no.
+    # The first formatted question is an either/or (fails the audit); the
+    # reasoner feeds the reason back and re-deliberates until it gets a clean
+    # yes/no. The ask is two-phase — deliberate (free-form) then format (JSON).
     bad = json.dumps({"question": "Is it inside or outside?", "yes_ids": ["h1"], "rationale": "x"})
     good = json.dumps({"question": "Is it inside the house?", "yes_ids": ["h1"], "rationale": "x"})
     state = {"i": 0}
 
-    def responder(_msgs: list) -> str:
-        out = [bad, good][min(state["i"], 1)]
+    def responder(messages: list) -> str:
+        if "Think it through" in messages[0]["content"]:  # deliberate
+            return "Let's narrow by location."
+        out = [bad, good][min(state["i"], 1)]  # format
         state["i"] += 1
         return out
 

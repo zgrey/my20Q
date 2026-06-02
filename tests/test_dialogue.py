@@ -44,7 +44,9 @@ def _controller_backend(
             return json.dumps({"hypotheses": seed})
         if "HIGH-TRUST context" in system:
             return json.dumps({"hypotheses": expand or [], "boost_ids": boost or []})
-        if "best SPLITS" in system:
+        if "Think it through" in system:  # deliberate (free-form) — return a draft
+            return asks[min(state["ask"], len(asks) - 1)][0]
+        if "Convert a drafted" in system:  # format the draft into JSON
             i = min(state["ask"], len(asks) - 1)
             state["ask"] += 1
             question, yes_ids = asks[i]

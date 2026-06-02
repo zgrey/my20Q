@@ -36,29 +36,42 @@ OUTPUT — STRICT JSON, nothing else:
 - No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
 """
 
-ASK_SYSTEM = """\
-You help narrow down what a person with aphasia needs. You are given the current
-CANDIDATE needs (each with an id). Ask the ONE yes/no question that best SPLITS
-them — ideally about half of them would answer "yes".
+# The "ask" is two decoupled calls: first DELIBERATE (free-form reasoning — a
+# thinking model thinks as long as it wants, with no JSON budget pressure), then
+# FORMAT (a cheap, constrained call that turns the draft into strict JSON). This
+# is what lets thinking models drive the reasoner cleanly, and is the foundation
+# for scaling reasoning depth as a round narrows. See docs/design/beta-retool §7.
+
+DELIBERATE_SYSTEM = """\
+You help a caregiver narrow down what a person with aphasia needs. You are given
+the current CANDIDATE needs (each with an id and a confidence) and the dialogue
+so far. Work out the SINGLE best yes/no question to ask next.
+
+A good question SPLITS the candidates — ideally about half would answer "yes" —
+and moves from the general toward the specific as the candidates narrow
+(topic → subject/action → the specific thing → its modifiers). Favour questions
+that separate WANTS from FEELINGS from BODY problems from PEOPLE.
+
+Think it through, then state the ONE question you will ask. It must be a single
+plain yes/no question the caregiver can answer yes / no / kinda / not sure —
+NEVER an either/or or multiple-choice question. Do not repeat a question already
+asked. Weight any [caregiver context] heavily. No medical advice.
+"""
+
+FORMAT_SYSTEM = """\
+Convert a drafted question into the strict format the cockpit needs.
 
 OUTPUT — STRICT JSON, nothing else:
 {"question": "...", "yes_ids": ["h2","h5"], "preface": "...", "rationale": "..."}
 
-- "question": ONE plain yes/no question, ~8-16 everyday words. The caregiver can
-  only answer yes, no, kinda, or not sure — so NEVER an either/or or
-  multiple-choice question ("Is it A or B?"). Pick one idea and ask it plainly.
-  Prefer questions that separate WANTS from FEELINGS from BODY problems from
-  PEOPLE, rather than drilling deeper into one need.
-- "yes_ids": exactly the candidate ids whose need would answer YES to your
-  question. It MUST be a non-empty STRICT subset (some yes AND some no) — that
-  split is what makes the question informative.
-- "preface": a SHORT spoken lead-in (<=12 words) read to the person right before
-  the question — warm, plain, varies each turn, gives gentle context, never just
-  restates the question.
+- "question": the single yes/no question from the draft, cleaned to one plain
+  everyday sentence (no either/or).
+- "yes_ids": exactly the candidate ids whose need would answer YES to it — a
+  non-empty STRICT subset (some yes AND some no).
+- "preface": a SHORT spoken lead-in (<=12 words) read just before the question —
+  warm, plain, never just restating the question.
 - "rationale": one short sentence for the caregiver's panel; never spoken.
-
-Never repeat a question already in the history. Weight any [caregiver context]
-heavily. No medical advice, URLs, markup, or emoji.
+No medical advice, URLs, markup, or emoji.
 """
 
 SYNTH_SYSTEM = """\
@@ -174,7 +187,7 @@ def seed_messages(
     ]
 
 
-def ask_messages(
+def deliberate_messages(
     topic_label: str,
     candidates: list[tuple[str, str, float]],
     history: list[dict],
@@ -185,9 +198,11 @@ def ask_messages(
     emotional_state: dict | None = None,
     corrections: list[str] | None = None,
 ) -> list[LLMMessage]:
-    """Ask for the next discriminating yes/no question over ``candidates``.
+    """Free-form reasoning to choose the next yes/no question (no JSON).
 
-    ``candidates`` is ``(id, need, weight)`` for the live hypotheses.
+    ``candidates`` is ``(id, need, weight)`` for the live hypotheses. The model
+    may think as long as it likes; the structured output comes from a separate
+    format call.
     """
     listing = "\n".join(
         f"  {hid}: {need}  [confidence {weight:.2f}]" for hid, need, weight in candidates
@@ -209,13 +224,27 @@ def ask_messages(
         instruction += (
             "YOUR PREVIOUS ATTEMPT WAS REJECTED:\n"
             f"{joined}\n"
-            "Produce a corrected question that splits the candidates.\n\n"
+            "Choose a corrected question that splits the candidates.\n\n"
         )
-    instruction += (
-        'Return the single best yes/no question and its "yes_ids" as strict JSON.'
+    instruction += "Reason it through, then give the single best yes/no question to ask next."
+    return [
+        {"role": "system", "content": DELIBERATE_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def format_question_messages(
+    candidates: list[tuple[str, str, float]], draft: str
+) -> list[LLMMessage]:
+    """Turn a free-form deliberation/draft into the strict question JSON."""
+    listing = "\n".join(f"  {hid}: {need}" for hid, need, _ in candidates)
+    instruction = (
+        f"Candidate needs (id: need):\n{listing}\n\n"
+        f"Drafted reasoning / question:\n{draft}\n\n"
+        "Return the cockpit JSON for the final yes/no question."
     )
     return [
-        {"role": "system", "content": ASK_SYSTEM},
+        {"role": "system", "content": FORMAT_SYSTEM},
         {"role": "user", "content": instruction},
     ]
 
