@@ -95,17 +95,30 @@ SCENARIOS: list[Scenario] = [
 
 _SIM_SYSTEM = """\
 You role-play a person with aphasia who is trying to communicate ONE specific
-need to a caregiver. You answer the caregiver's yes/no questions truthfully,
-about THIS need only:
+need to a caregiver. Answer the caregiver's yes/no questions truthfully, about
+THIS need only:
 
   YOUR NEED: {need}
 
-Reply with EXACTLY ONE word, lowercase, no punctuation:
-- "yes"      — the question is true of your need.
-- "no"       — the question is false of your need.
-- "kinda"    — partly true / on the right track but not exact.
-- "not_sure" — the question is unrelated to your need.
-Never explain. One word only.
+Reply with EXACTLY ONE lowercase word, no punctuation:
+- "yes"      the question is TRUE of your need — judge by MEANING, so broader
+             or synonym phrasings still count (e.g. "pain", "hurts", "sore",
+             "aching", "discomfort" all match a need that hurts; "drink",
+             "thirsty", "water" all match wanting water).
+- "no"       the question is FALSE of your need.
+- "kinda"    partly true / on the right track but not exact.
+- "not_sure" the question is UNRELATED to your need (a different topic entirely).
+
+Reserve "not_sure" for questions with nothing to do with your need. If a
+question points at the right thing even loosely, answer "yes". Never explain —
+one word only.
+
+EXAMPLES (for an example need "my left foot hurts"):
+  "Is something hurting you?"            -> yes
+  "Is the pain in your foot?"            -> yes
+  "Is it a general discomfort or pain?"  -> yes
+  "Are you hungry?"                      -> not_sure
+  "Is it your hand?"                     -> no
 """
 
 _SIM_CONFIRM = """\
@@ -157,6 +170,7 @@ class RoundResult:
     queries: int
     reasks: int
     degraded: bool  # the candidate fell back to deterministic mode mid-round
+    degrade_reason: str  # why it degraded (ReasonerError text), if it did
     final_utterance: str
     transcript: list[str] = field(default_factory=list)
     reasoner_latencies: list[float] = field(default_factory=list)
@@ -180,9 +194,6 @@ class ModelReport:
     @property
     def degraded(self) -> int:
         return sum(1 for r in self.rounds if r.degraded)
-
-
-_ANSWER_LABEL = {a: a.value for a in Answer}
 
 
 async def _drive_round(
@@ -235,6 +246,7 @@ async def _drive_round(
         queries=rnd.query_count,
         reasks=reasks,
         degraded=rnd.engine == "fallback",
+        degrade_reason=rnd.degrade_reason,
         final_utterance=rnd.final_utterance,
         transcript=transcript,
         reasoner_latencies=latencies,
@@ -273,6 +285,12 @@ async def _bench_model(
         report.error = f"not pulled (ollama pull {model})"
         return report
     report.available = True
+
+    # Warm-up: load the model into VRAM once so the first scenario's latency
+    # (and any cold-load timeout that would unfairly degrade it) is excluded.
+    console.print(f"[dim]  warming {model}…[/dim]")
+    with contextlib.suppress(LLMUnavailable):
+        await reasoner.chat([{"role": "user", "content": "Reply: ready"}], max_tokens=4)
 
     for sc in scenarios:
         topic = find_topic(topics, sc.topic_id)
@@ -344,6 +362,8 @@ def _render_transcripts(reports: list[ModelReport], scenarios: list[Scenario]) -
             mark = "[green]✓[/green]" if res.converged else "[red]✗[/red]"
             tag = " [yellow](degraded→fallback)[/yellow]" if res.degraded else ""
             console.print(f"{mark} [bold cyan]{model}[/bold cyan]  ({res.outcome}){tag}")
+            if res.degraded and res.degrade_reason:
+                console.print(f"    [yellow]degrade reason:[/yellow] {res.degrade_reason}")
             for line in res.transcript:
                 console.print(f"    {line}")
             console.print()
@@ -354,6 +374,9 @@ async def _run(
 ) -> list[ModelReport]:
     topics = load_topics()
     sim = OllamaBackend(model=simulator, timeout_s=60.0, temperature=0.0)
+    # Pre-load the simulator so it co-resides with the first candidate.
+    with contextlib.suppress(LLMUnavailable):
+        await sim.chat([{"role": "user", "content": "Reply: ready"}], max_tokens=4)
     reports: list[ModelReport] = []
     for model in models:
         console.print(f"[dim]benchmarking {model} (sim: {simulator})…[/dim]")

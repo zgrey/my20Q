@@ -90,6 +90,10 @@ class Round:
         # keeps it in sync mid-round). See docs/design/beta-retool.md §6.
         self.emotional_state: dict[str, float] = dict(emotional_state or {})
         self.engine: Engine = "reasoning" if llm is not None else "fallback"
+        #: Why the round dropped from reasoning to fallback mid-round, if it
+        #: did — surfaced for diagnostics (e.g. the model bench). Empty unless
+        #: a ReasonerError forced the degrade.
+        self.degrade_reason: str = ""
         self._reasoner = Reasoner(llm) if llm is not None else None
         self._history: list[dict] = []
         self._pending: ReasonerAction | None = None
@@ -265,15 +269,16 @@ class Round:
             )
         except ReasonerError as exc:
             log.warning("reasoner failed (%s) — degrading to fallback mode", exc)
-            return self._degrade_to_fallback()
+            return self._degrade_to_fallback(str(exc))
 
         self._pending = action
         self._pending_qid = None
         return self._event_for(action)
 
-    def _degrade_to_fallback(self) -> RoundEvent:
+    def _degrade_to_fallback(self, reason: str = "") -> RoundEvent:
         """Switch to deterministic fallback mid-round (LLM became unusable)."""
         self.engine = "fallback"
+        self.degrade_reason = reason
         self._reasoner = None
         self._pending = None
         self._pending_qid = None
