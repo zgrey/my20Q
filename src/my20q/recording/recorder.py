@@ -61,6 +61,9 @@ def build_round_record(
     shape) — so recorded data and exported data are one uniform corpus.
     See docs/design/beta-retool.md §8.
     """
+    # `zoom` entries are internal belief-control markers, not dialogue turns —
+    # keep them out of the training corpus / review playback.
+    history = [h for h in history if h.get("kind") != "zoom"]
     return {
         "session_id": session_id,
         "round_id": round_id,

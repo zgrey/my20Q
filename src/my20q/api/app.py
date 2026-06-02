@@ -261,11 +261,14 @@ def _register_routes(app: FastAPI) -> None:
             history=[
                 schemas.HistoryEntryOut(
                     kind=e["kind"],
-                    text=e["text"],
+                    text=e.get("text", ""),
                     answer=e.get("answer"),
                     rationale=e.get("rationale", ""),
                 )
+                # `zoom` entries are internal belief-control markers (no text) —
+                # the breadcrumb conveys them; never show them as a transcript row.
                 for e in r.history
+                if e["kind"] != "zoom"
             ],
             outcome=r.outcome,
             final_utterance=r.final_utterance,

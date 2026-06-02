@@ -167,6 +167,43 @@ def test_reasoning_toggle() -> None:
     assert client.get("/api/reasoning").json()["augmented"] is True
 
 
+def test_augmented_round_serializes_past_a_zoom() -> None:
+    # Regression: a zoom entry has no "text"; round-state serialization must skip
+    # it instead of raising KeyError('text') (a 500 on every augmented answer).
+    seed = ["I want a drink", "My foot hurts", "I feel lonely", "I want to call someone"]
+    asks = [("Is it a drink you want?", ["h1"]), ("Is it cold water?", ["h5"])]
+    st = {"ask": 0}
+
+    def responder(messages: list) -> str:
+        sysmsg = messages[0]["content"]
+        if "candidate NEEDS to test" in sysmsg:
+            return json.dumps({"hypotheses": seed})
+        if "Refine it ONE level" in sysmsg:
+            return json.dumps({"hypotheses": ["a glass of cold water", "a cup of tea"]})
+        if "You critique" in sysmsg:
+            return "be more specific"
+        if "Think it through" in sysmsg:
+            return asks[min(st["ask"], len(asks) - 1)][0]
+        if "Convert a drafted" in sysmsg:
+            i = min(st["ask"], len(asks) - 1)
+            st["ask"] += 1
+            q, y = asks[i]
+            return json.dumps({"question": q, "yes_ids": y, "preface": "", "rationale": "r"})
+        return json.dumps({"utterance": "I would like a glass of cold water."})
+
+    client = TestClient(create_app(Config.from_env(), backend=MockBackend(responder=responder)))
+    client.post("/api/reasoning", json={"augmented": True})
+    sid = client.post("/api/sessions").json()["session_id"]
+    rid = client.post(
+        f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
+    ).json()["round_id"]
+    resp = client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+    assert resp.status_code == 200, resp.text  # was 500: KeyError('text') on the zoom entry
+    state = resp.json()
+    assert all(h["kind"] != "zoom" for h in state["history"])  # internal markers hidden
+    assert state["event"]["breadcrumb"] == ["I want a drink"]
+
+
 def test_sse_payload_formatting() -> None:
     assert _sse({"phase": "thinking"}) == 'data: {"phase": "thinking"}\n\n'
 
