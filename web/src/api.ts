@@ -4,6 +4,7 @@
 
 import type {
   Answer,
+  ModelsStatus,
   RecordingFile,
   RecordingStatus,
   RoundRecord,
@@ -58,6 +59,8 @@ export const api = {
   recordingRecords: (sid: string) =>
     request<RoundRecord[]>(`/recordings/${encodeURIComponent(sid)}`),
   ttsStatus: () => request<TTSStatus>("/tts/status"),
+  models: () => request<ModelsStatus>("/models"),
+  selectModel: (model: string) => post<ModelsStatus>("/model", { model }),
 };
 
 /** Turn a fetch failure into a caregiver-readable message. */

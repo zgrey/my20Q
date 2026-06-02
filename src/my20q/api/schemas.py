@@ -20,6 +20,18 @@ class HealthOut(BaseModel):
     real_patient: bool
 
 
+class ModelsOut(BaseModel):
+    """Local Ollama models available for human-trial selection."""
+
+    models: list[str] = Field(default_factory=list)
+    current: str | None = None
+    can_select: bool = False  # false when the backend isn't local Ollama
+
+
+class ModelSelectIn(BaseModel):
+    model: str
+
+
 class CreateSessionOut(BaseModel):
     session_id: str
 

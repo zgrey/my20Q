@@ -41,6 +41,10 @@ interface TopicBarProps {
   audioOn: boolean;
   onToggleAudio: () => void;
   ttsAvailable: boolean;
+  models: string[];
+  currentModel: string | null;
+  canSelectModel: boolean;
+  onSelectModel: (model: string) => void;
 }
 
 /** Persistent header: view tabs, topic, engine badge, save, rec, theme. */
@@ -62,6 +66,10 @@ export function TopicBar(props: TopicBarProps) {
     audioOn,
     onToggleAudio,
     ttsAvailable,
+    models,
+    currentModel,
+    canSelectModel,
+    onSelectModel,
   } = props;
   const reviewing = view === "review";
   const audioTitle = !audioOn
@@ -94,6 +102,23 @@ export function TopicBar(props: TopicBarProps) {
         <span class={`engine-badge ${engine}`} title="Active dialogue engine">
           {engine}
         </span>
+      )}
+      {!reviewing && canSelectModel && models.length > 0 && (
+        <label
+          class="model-select"
+          title="Model used for questioning & reasoning — applies to the next question"
+        >
+          <span>Model</span>
+          <select
+            value={currentModel ?? ""}
+            disabled={busy}
+            onChange={(e) => onSelectModel((e.target as HTMLSelectElement).value)}
+          >
+            {models.map((m) => (
+              <option value={m}>{m}</option>
+            ))}
+          </select>
+        </label>
       )}
       <span class="tb-spacer" />
       {!reviewing && (
@@ -191,9 +216,11 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
 export function ConversationTile({
   round,
   busy,
+  phase,
 }: {
   round: RoundState | null;
   busy: boolean;
+  phase: string | null;
 }) {
   const streamRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -215,21 +242,35 @@ export function ConversationTile({
         {round.history.map((h, i) => (
           <HistoryRow entry={h} key={i} />
         ))}
-        {!terminal && ev.kind === "query" && (
+        {!terminal && !busy && ev.kind === "query" && (
           <div class="turn question pending">
             {ev.preface && <div class="preface">{ev.preface}</div>}
             <div class="q">{ev.text}</div>
             <div class="awaiting">awaiting answer</div>
           </div>
         )}
-        {!terminal && ev.kind === "synthesis" && (
+        {!terminal && !busy && ev.kind === "synthesis" && (
           <div class="synthesis proposed">
             <div class="label">Proposed message — confirm with the patient</div>
             <div class="utterance">“{ev.text}”</div>
             <div class="confirm-note">Yes confirms it · any other answer keeps going.</div>
           </div>
         )}
-        {awaitingAnswer && lastEntry?.kind === "context" && (
+        {busy && !terminal && (
+          <div class="thinking" aria-live="polite">
+            <span class="thinking-dots">
+              <i />
+              <i />
+              <i />
+            </span>
+            <span class="thinking-text">
+              {phase === "re-asking"
+                ? "Re-checking the question…"
+                : "Thinking — working out the next question…"}
+            </span>
+          </div>
+        )}
+        {!busy && awaitingAnswer && lastEntry?.kind === "context" && (
           <div class="ctx-hint">
             Context added — the question above was refreshed to use it.
           </div>

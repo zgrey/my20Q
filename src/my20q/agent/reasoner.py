@@ -37,6 +37,17 @@ MAX_AUDIT_RETRIES = 2
 MIN_HYPOTHESES = 4
 MAX_HYPOTHESES = 10
 
+# Output ceilings (num_predict). These are NOT a cost limit — inference is local
+# and free — they only guard against a runaway/looping generation hanging the
+# live cockpit. Because every call uses format=json, Ollama stops at the closing
+# brace, so a generous ceiling never adds latency to a normal response; it only
+# avoids truncating a longer one into invalid JSON. Kept roomy so the model can
+# produce its best questioning/reasoning without being clipped.
+SEED_MAX_TOKENS = 1024
+ASK_MAX_TOKENS = 512
+SYNTH_MAX_TOKENS = 256
+EXPAND_MAX_TOKENS = 512
+
 
 class ReasonerError(RuntimeError):
     """Raised when LLM output cannot be used — the engine should fall back."""
@@ -115,7 +126,7 @@ class Reasoner:
             topic_hint=topic_hint,
             emotional_state=emotional_state,
         )
-        data = await self._chat_json(messages, max_tokens=400)
+        data = await self._chat_json(messages, max_tokens=SEED_MAX_TOKENS)
         items = data.get("hypotheses")
         if not isinstance(items, list):
             raise ReasonerError(f"seed: no hypotheses list in {data!r}")
@@ -168,7 +179,7 @@ class Reasoner:
                 emotional_state=emotional_state,
                 corrections=corrections,
             )
-            data = await self._chat_json(messages, max_tokens=240)
+            data = await self._chat_json(messages, max_tokens=ASK_MAX_TOKENS)
             question = data.get("question", "")
             if not isinstance(question, str) or not question.strip():
                 raise ReasonerError("ask: empty question")
@@ -243,7 +254,7 @@ class Reasoner:
             emotional_state=emotional_state,
         )
         try:
-            data = await self._chat_json(messages, max_tokens=300)
+            data = await self._chat_json(messages, max_tokens=EXPAND_MAX_TOKENS)
         except ReasonerError:
             return [], []
         existing_ids = {hid for hid, _ in existing}
@@ -293,7 +304,7 @@ class Reasoner:
             topic_hint=topic_hint,
             emotional_state=emotional_state,
         )
-        data = await self._chat_json(messages, max_tokens=120)
+        data = await self._chat_json(messages, max_tokens=SYNTH_MAX_TOKENS)
         utterance = data.get("utterance", "")
         cleaned = sanitize_utterance(utterance) if isinstance(utterance, str) else ""
         if not cleaned:  # fall back to the leading need itself

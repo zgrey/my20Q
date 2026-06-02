@@ -52,6 +52,9 @@ export function App() {
   const [emotion, setEmotion] = useState<Record<string, number>>({});
   const [audioOn, setAudioOn] = useState<boolean>(initialAudio);
   const [ttsAvailable, setTtsAvailable] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [currentModel, setCurrentModel] = useState<string | null>(null);
+  const [canSelectModel, setCanSelectModel] = useState(false);
   const lastSpokenRef = useRef<string>("");
 
   // Bootstrap: load topics, create a session, open the first round.
@@ -118,6 +121,31 @@ export function App() {
       .then((s) => setTtsAvailable(s.available))
       .catch(() => setTtsAvailable(false));
   }, []);
+
+  // Local models available for human-trial selection (Ollama only).
+  useEffect(() => {
+    api
+      .models()
+      .then((s) => {
+        setModels(s.models);
+        setCurrentModel(s.current);
+        setCanSelectModel(s.can_select);
+      })
+      .catch(() => setCanSelectModel(false));
+  }, []);
+
+  // Switch the active model — takes effect on the next question (the backend
+  // mutates the shared Ollama backend, which the reasoner reads per call).
+  const selectModel = (model: string) => {
+    setCurrentModel(model); // optimistic
+    api
+      .selectModel(model)
+      .then((s) => {
+        setModels(s.models);
+        setCurrentModel(s.current);
+      })
+      .catch((e) => setError(friendlyError(e)));
+  };
 
   // Speak each new query / proposed / confirmed utterance aloud (live mode
   // only, when audio is on and piper is available). The ref guards against
@@ -304,6 +332,10 @@ export function App() {
         audioOn={audioOn}
         onToggleAudio={toggleAudio}
         ttsAvailable={ttsAvailable}
+        models={models}
+        currentModel={currentModel}
+        canSelectModel={canSelectModel}
+        onSelectModel={selectModel}
       />
       {error && <div class="errorbar">{error}</div>}
       {view === "review" ? (
@@ -312,7 +344,7 @@ export function App() {
         </main>
       ) : (
         <main class="grid">
-          <ConversationTile round={round} busy={busy} />
+          <ConversationTile round={round} busy={busy} phase={phase} />
           {/* Pictogram tile shelved — the curated retrieval mostly fell back
               to "?" in real sessions. Component + backend retrieval are kept;
               re-mount once the image slot is driven by a generator (task). */}

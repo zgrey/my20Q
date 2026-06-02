@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -36,6 +37,7 @@ from my20q.agent.safety import for_speech
 from my20q.api import schemas
 from my20q.config import Config
 from my20q.llm import select_backend
+from my20q.llm.ollama_client import OllamaBackend
 from my20q.pictograms import Pictogram, load_catalog, retrieve
 from my20q.profiles import is_real_patient, load_profile
 from my20q.recording import Recorder, build_round_record, transcript
@@ -275,6 +277,48 @@ def _register_routes(app: FastAPI) -> None:
             engine="reasoning" if state.llm is not None else "fallback",
             real_patient=is_real_patient(state.profile),
         )
+
+    @app.get("/api/models", response_model=schemas.ModelsOut)
+    async def list_models() -> schemas.ModelsOut:
+        """Pulled Ollama models available for human-trial model selection.
+
+        Meaningful only when the active backend is a local Ollama backend; the
+        cockpit hides the selector otherwise (can_select=false).
+        """
+        backend = state.llm
+        current = getattr(backend, "model", None)
+        if not isinstance(backend, OllamaBackend):
+            return schemas.ModelsOut(models=[], current=current, can_select=False)
+        models: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{backend.base_url}/api/tags")
+                resp.raise_for_status()
+                tags = resp.json().get("models", [])
+            models = sorted(
+                m["name"]
+                for m in tags
+                if isinstance(m.get("name"), str) and "embed" not in m["name"]
+            )
+        except httpx.HTTPError:
+            models = [current] if current else []
+        return schemas.ModelsOut(models=models, current=current, can_select=True)
+
+    @app.post("/api/model", response_model=schemas.ModelsOut)
+    async def select_model(body: schemas.ModelSelectIn) -> schemas.ModelsOut:
+        """Switch the active model at runtime (for human-interaction trials).
+
+        Mutating the shared backend's model swaps it for every session's next
+        call — the Reasoner reads ``backend.model`` per call — so it takes effect
+        on the next question without a restart.
+        """
+        backend = state.llm
+        if not isinstance(backend, OllamaBackend):
+            raise HTTPException(409, "model selection requires a local Ollama backend")
+        backend.model = body.model
+        state.model_label = body.model
+        log.info("active model switched to %s (human-trial selection)", body.model)
+        return await list_models()
 
     @app.get("/api/topics", response_model=list[schemas.TopicOut])
     def topics() -> list[schemas.TopicOut]:

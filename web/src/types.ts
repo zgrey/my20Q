@@ -74,6 +74,13 @@ export interface TTSStatus {
   reason: string;
 }
 
+// Local Ollama models available for human-trial selection.
+export interface ModelsStatus {
+  models: string[];
+  current: string | null;
+  can_select: boolean;
+}
+
 // One recorded session on disk (the review dashboard's server picker).
 export interface RecordingFile {
   session_id: string;
