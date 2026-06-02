@@ -24,6 +24,11 @@ PY="$HOME/venv/Scripts/python.exe"
 export MY20Q_PIPER_BIN="${MY20Q_PIPER_BIN:-/c/Users/grey_/piper/piper/piper.exe}"
 export MY20Q_PIPER_MODEL="${MY20Q_PIPER_MODEL:-/c/Users/grey_/piper/voices/en_US-amy-medium.onnx}"
 
+# Per-LLM-call timeout. Augmented (hierarchical-zoom) reasoning makes several
+# deliberate/critique passes per question and a thinking model is slow, so the
+# 30s default is too tight — give it room before degrading to fallback.
+export MY20Q_OLLAMA_TIMEOUT="${MY20Q_OLLAMA_TIMEOUT:-120}"
+
 magic_url() {
   local dns
   dns="$(tailscale status --json 2>/dev/null \
@@ -51,7 +56,7 @@ start() {
     echo "Already running in tmux '$SESSION'.  logs: $0 logs   stop: $0 stop"
   else
     tmux new-session -d -s "$SESSION" -c "$REPO" \
-      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
+      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
     echo "API started in tmux '$SESSION' (127.0.0.1:$PORT)"
   fi
 
