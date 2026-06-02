@@ -10,7 +10,7 @@ imported lazily so the package works without it for local-only deployments.
 
 from __future__ import annotations
 
-from my20q.llm.base import LLMMessage, LLMUnavailable
+from my20q.llm.base import ChatResult, LLMMessage, LLMUnavailable
 
 _JSON_DIRECTIVE = (
     "Respond with a single valid JSON object and nothing else — "
@@ -44,8 +44,21 @@ class AnthropicBackend:
         *,
         max_tokens: int = 200,
         json_mode: bool = False,
-        think: bool | None = None,  # noqa: ARG002 - no Ollama-style toggle here
+        think: bool | None = None,
     ) -> str:
+        result = await self.chat_full(
+            messages, max_tokens=max_tokens, json_mode=json_mode, think=think
+        )
+        return result.content
+
+    async def chat_full(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int = 200,
+        json_mode: bool = False,
+        think: bool | None = None,  # noqa: ARG002 - no Ollama-style toggle here
+    ) -> ChatResult:
         import anthropic
 
         # The Anthropic API takes the system prompt separately from the
@@ -77,9 +90,12 @@ class AnthropicBackend:
             raise LLMUnavailable(f"Anthropic call failed: {exc}") from exc
 
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        thinking = "".join(
+            getattr(b, "thinking", "") for b in resp.content if b.type == "thinking"
+        ).strip()
         if not text:
             raise LLMUnavailable("Anthropic returned an empty response")
-        return text
+        return ChatResult(content=text, thinking=thinking)
 
     async def health(self) -> bool:
         import anthropic

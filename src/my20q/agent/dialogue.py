@@ -44,6 +44,10 @@ class Answer(StrEnum):
 
 _AFFIRMED = {Answer.YES.value, Answer.KINDA.value}
 
+#: How many times augmented reasoning may zoom into finer sub-needs
+#: (need → object → modifier).
+MAX_DEPTH = 3
+
 EventKind = Literal["query", "synthesis", "emergency", "synthesized", "abandoned"]
 Engine = Literal["reasoning", "fallback"]
 
@@ -63,6 +67,21 @@ class RoundEvent:
     # drove this question. Empty in fallback/emergency/terminal events. Powers
     # the cockpit's honest reasoning tile.
     hypotheses: list[dict] = field(default_factory=list)
+    # Labelled reasoning trace ({kind: "thinking"|"strategy", text}) — the
+    # model's summarized opaque reasoning and the explicit augmented passes.
+    reasoning_trace: list[dict] = field(default_factory=list)
+    # The path of confirmed needs as the belief zoomed deeper (need → object →
+    # modifier), for the cockpit breadcrumb.
+    breadcrumb: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _Level:
+    """One level of the zoomed belief — a sub-belief under a confirmed need."""
+
+    parent: str | None  # the need this level refines (None at level 0)
+    hyps: list[Hypothesis]
+    weights: dict[str, float]
 
 
 class Round:
@@ -85,11 +104,16 @@ class Round:
         seed_context: str = "",
         profile_context: str = "",
         emotional_state: dict[str, float] | None = None,
+        augmented: bool = False,
     ) -> None:
         self.topic = topic
         self.llm = llm
         self.max_queries = max(1, max_queries)
         self.mode = mode
+        # Augmented reasoning: hierarchical zoom + depth-scaled deliberate/critique
+        # loops + a visible reasoning trace. Off = flat single-pass (the opaque
+        # baseline for comparing against a thinking model's hidden reasoning).
+        self.augmented = augmented
         self.seed_context = seed_context.strip()
         self.profile_context = profile_context.strip()
         # Caregiver emotional-slider reading; steers question tone (the API
@@ -224,14 +248,15 @@ class Round:
             and self._reasoner is not None
             and self._seed_hypotheses
         ):
-            active, _ = self._replay_belief()
+            levels = self._replay_belief()
+            active = levels[-1]
             new_needs, boost_ids = await self._reasoner.expand_hypotheses(
                 context=text,
-                existing=[(h.id, h.need) for h in active],
+                existing=[(h.id, h.need) for h in active.hyps],
                 history=self._history,
                 **self._reasoner_ctx(),
             )
-            base = len(active)
+            base = self._total_hyps(levels)
             added = [
                 {"id": f"h{base + i + 1}", "need": need}
                 for i, need in enumerate(new_needs)
@@ -270,6 +295,12 @@ class Round:
             raise RuntimeError("undo() called before open()")
         if self._outcome == "emergency":
             raise RuntimeError("cannot undo an emergency round")
+        # A `zoom` entry is auto-generated when a need takes root — it is not a
+        # user step, so skip past trailing zooms before popping the last actual
+        # answer (otherwise undo would immediately re-zoom and appear to do
+        # nothing).
+        while self._history and self._history[-1]["kind"] == "zoom":
+            self._history.pop()
         if self._history:
             self._history.pop()
         self._outcome = None
@@ -305,14 +336,35 @@ class Round:
                 self._seed_hypotheses = await self._reasoner.seed_hypotheses(
                     **self._reasoner_ctx()
                 )
-            active, weights = self._replay_belief()
-            by_id = {h.id: h for h in active}
+            levels = self._replay_belief()
+            active = levels[-1]
+            weights = active.weights
+            by_id = {h.id: h for h in active.hyps}
+            depth = len(levels) - 1
 
             if final or hyp.should_synthesize(weights):
                 top = hyp.leader(weights)
                 leader_hyp = by_id.get(top[0]) if top else None
                 if leader_hyp is None:
                     return self._degrade_to_fallback("no leading hypothesis")
+                # Augmented: a need has taken root — zoom one level finer before
+                # synthesizing, if there's room and it can be refined further.
+                if self.augmented and not final and depth < MAX_DEPTH:
+                    subs = await self._reasoner.zoom(
+                        parent_need=leader_hyp.need,
+                        history=self._history,
+                        **self._reasoner_ctx(),
+                    )
+                    if subs:
+                        base = self._total_hyps(levels)
+                        added = [
+                            {"id": f"h{base + i + 1}", "need": n}
+                            for i, n in enumerate(subs)
+                        ]
+                        self._history.append(
+                            {"kind": "zoom", "parent_need": leader_hyp.need, "added": added}
+                        )
+                        return await self._advance()  # descend and ask in the new level
                 action = await self._reasoner.synthesize(
                     leading_need=leader_hyp.need,
                     history=self._history,
@@ -320,12 +372,14 @@ class Round:
                 )
                 action.hyp_id = leader_hyp.id
             else:
-                ranked = hyp.ranked(active, weights)
+                ranked = hyp.ranked(active.hyps, weights)
                 candidates = [(h.id, h.need, w) for h, w in ranked]
                 action = await self._reasoner.ask(
                     candidates=candidates,
                     weights=weights,
                     history=self._history,
+                    effort=(1 + depth) if self.augmented else 1,
+                    augmented=self.augmented,
                     **self._reasoner_ctx(),
                 )
         except ReasonerError as exc:
@@ -334,7 +388,9 @@ class Round:
 
         self._pending = action
         self._pending_qid = None
-        return self._event_for(action, self._belief_view(active, weights))
+        return self._event_for(
+            action, self._belief_view(active.hyps, weights), self._breadcrumb(levels)
+        )
 
     def _reasoner_ctx(self) -> dict:
         """Shared keyword context passed to every reasoner call."""
@@ -347,37 +403,56 @@ class Round:
             "on_phase": self.on_phase,
         }
 
-    def _replay_belief(self) -> tuple[list[Hypothesis], dict[str, float]]:
-        """Rebuild the active hypothesis set and its weights from history.
+    def _replay_belief(self) -> list[_Level]:
+        """Rebuild the belief level-stack from history (undo = pop-and-recompute).
 
-        Walks events in order so undo is just pop-and-recompute:
-        - start from the seed prior;
-        - a [caregiver context] entry that added hypotheses inserts them at a
-          boosted prior (high-trust context outranks the seeds);
-        - a query folds its yes/no split;
+        Walks events in order, always operating on the deepest (top) level:
+        - level 0 is the seed prior;
+        - a [caregiver context] entry adds/boosts on the top level;
+        - a *zoom* entry pushes a new, finer level (its sub-needs);
+        - a query folds its yes/no split into the top level;
         - a *rejected* synthesis eliminates the need it proposed.
+
+        With no zoom entries this is one level — identical to the flat belief.
         """
-        active = list(self._seed_hypotheses)
-        weights = hyp.seed_weights(active)
+        level0 = list(self._seed_hypotheses)
+        levels = [_Level(parent=None, hyps=level0, weights=hyp.seed_weights(level0))]
         for h in self._history:
             kind = h["kind"]
+            top = levels[-1]
             if kind == "context":
                 added = h.get("added") or []
                 boost = h.get("boost") or []
                 if added or boost:
-                    active = active + [Hypothesis(a["id"], a["need"]) for a in added]
-                    weights = hyp.apply_context(
-                        weights, [a["id"] for a in added], boost
+                    top.hyps = top.hyps + [Hypothesis(a["id"], a["need"]) for a in added]
+                    top.weights = hyp.apply_context(
+                        top.weights, [a["id"] for a in added], boost
                     )
+            elif kind == "zoom":
+                subs = [Hypothesis(a["id"], a["need"]) for a in (h.get("added") or [])]
+                levels.append(
+                    _Level(parent=h.get("parent_need"), hyps=subs, weights=hyp.seed_weights(subs))
+                )
             elif kind == "query":
                 answer = h.get("answer")
                 if answer:
-                    weights = hyp.update_weights(weights, set(h.get("yes_ids", [])), answer)
+                    top.weights = hyp.update_weights(
+                        top.weights, set(h.get("yes_ids", [])), answer
+                    )
             elif kind == "synthesis":
                 answer = h.get("answer")
                 if answer and answer != Answer.YES.value and h.get("hyp_id"):
-                    weights = hyp.update_weights(weights, {h["hyp_id"]}, Answer.NO.value)
-        return active, weights
+                    top.weights = hyp.update_weights(
+                        top.weights, {h["hyp_id"]}, Answer.NO.value
+                    )
+        return levels
+
+    @staticmethod
+    def _breadcrumb(levels: list[_Level]) -> list[str]:
+        return [lvl.parent for lvl in levels if lvl.parent]
+
+    def _total_hyps(self, levels: list[_Level]) -> int:
+        return sum(len(lvl.hyps) for lvl in levels)
 
     def _belief_view(
         self, active: list[Hypothesis], weights: dict[str, float]
@@ -391,8 +466,13 @@ class Round:
         """Re-emit the current pending query with its current belief view."""
         assert self._pending is not None
         if self.engine == "reasoning" and self._seed_hypotheses:
-            active, weights = self._replay_belief()
-            return self._event_for(self._pending, self._belief_view(active, weights))
+            levels = self._replay_belief()
+            active = levels[-1]
+            return self._event_for(
+                self._pending,
+                self._belief_view(active.hyps, active.weights),
+                self._breadcrumb(levels),
+            )
         return self._event_for(self._pending)
 
     def _degrade_to_fallback(self, reason: str = "") -> RoundEvent:
@@ -463,7 +543,10 @@ class Round:
         return next((q for q in self.topic.fallback_questions if q.id == qid), None)
 
     def _event_for(
-        self, action: ReasonerAction, belief: list[dict] | None = None
+        self,
+        action: ReasonerAction,
+        belief: list[dict] | None = None,
+        breadcrumb: list[str] | None = None,
     ) -> RoundEvent:
         idx = self.query_count + (1 if action.kind == "query" else 0)
         return RoundEvent(
@@ -474,6 +557,8 @@ class Round:
             query_index=idx,
             engine=self.engine,
             hypotheses=belief or [],
+            reasoning_trace=action.trace,
+            breadcrumb=breadcrumb or [],
         )
 
 
@@ -495,7 +580,9 @@ class Session:
         self.rounds: list[Round] = []
         self.emotional_state: dict[str, float] = {}
 
-    def start_round(self, topic_id: str, *, seed_context: str = "") -> Round:
+    def start_round(
+        self, topic_id: str, *, seed_context: str = "", augmented: bool = False
+    ) -> Round:
         topic = find_topic(self.topics, topic_id)
         if topic is None:
             raise ValueError(f"Unknown topic: {topic_id!r}")
@@ -507,6 +594,7 @@ class Session:
             seed_context=seed_context,
             profile_context=(self.profile.context or "") if self.profile else "",
             emotional_state=self.emotional_state,
+            augmented=augmented,
         )
         self.rounds.append(round_)
         return round_

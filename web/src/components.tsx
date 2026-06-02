@@ -45,6 +45,8 @@ interface TopicBarProps {
   currentModel: string | null;
   canSelectModel: boolean;
   onSelectModel: (model: string) => void;
+  augmented: boolean;
+  onToggleAugmented: () => void;
 }
 
 /** Persistent header: view tabs, topic, engine badge, save, rec, theme. */
@@ -70,6 +72,8 @@ export function TopicBar(props: TopicBarProps) {
     currentModel,
     canSelectModel,
     onSelectModel,
+    augmented,
+    onToggleAugmented,
   } = props;
   const reviewing = view === "review";
   const audioTitle = !audioOn
@@ -119,6 +123,19 @@ export function TopicBar(props: TopicBarProps) {
             ))}
           </select>
         </label>
+      )}
+      {!reviewing && (
+        <button
+          class={`augment-toggle${augmented ? " on" : ""}`}
+          onClick={onToggleAugmented}
+          title={
+            augmented
+              ? "Augmented reasoning ON — hierarchical zoom + depth loops + a visible trace (applies to the next round)"
+              : "Augmented reasoning OFF — flat single-pass (the opaque baseline). Click to enable; applies to the next round."
+          }
+        >
+          ⌁ Zoom{augmented ? " ON" : " off"}
+        </button>
       )}
       <span class="tb-spacer" />
       {!reviewing && (
@@ -480,6 +497,8 @@ export function ReasoningTile({
         ? "Connecting to the live progress channel…"
         : "Live progress channel disconnected — events may be delayed";
   const hypotheses = event?.hypotheses ?? [];
+  const trace = event?.reasoning_trace ?? [];
+  const breadcrumb = event?.breadcrumb ?? [];
   return (
     <section class="tile reasoning">
       <h2>
@@ -488,6 +507,28 @@ export function ReasoningTile({
         {live && phaseLabel && <span class="phase-tag">{phaseLabel}</span>}
       </h2>
       <p class="reason-text">{text}</p>
+      {trace.length > 0 && (
+        <div class="trace">
+          {trace.map((t, i) => (
+            <div class={`trace-line ${t.kind}`} key={i}>
+              <span class="trace-tag">
+                {t.kind === "thinking" ? "model thinking" : "strategy"}
+              </span>
+              <span class="trace-text">{t.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {breadcrumb.length > 0 && (
+        <div class="breadcrumb" title="Narrowing path (need → object → modifier)">
+          {breadcrumb.map((b, i) => (
+            <span class="crumb" key={i}>
+              {i > 0 && <span class="crumb-arrow">→</span>}
+              {b}
+            </span>
+          ))}
+        </div>
+      )}
       {hypotheses.length > 0 && (
         <div class="belief">
           <div class="belief-head">What the need might be</div>

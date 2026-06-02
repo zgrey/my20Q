@@ -27,6 +27,13 @@ export interface Hypothesis {
   weight: number;
 }
 
+// One reasoning-trace line: a thinking model's summarized opaque reasoning
+// ("thinking") or an explicit augmented deliberate/critique step ("strategy").
+export interface TraceLine {
+  kind: "thinking" | "strategy" | string;
+  text: string;
+}
+
 export interface RoundEvent {
   kind: EventKind;
   text: string;
@@ -37,6 +44,8 @@ export interface RoundEvent {
   emergency_screen: EmergencyScreen | null;
   pictogram: string | null;
   hypotheses: Hypothesis[]; // live belief over candidate needs (honest tile)
+  reasoning_trace: TraceLine[]; // model thinking + explicit strategy passes
+  breadcrumb: string[]; // confirmed needs as the belief zoomed deeper
 }
 
 export interface HistoryEntry {
@@ -79,6 +88,11 @@ export interface ModelsStatus {
   models: string[];
   current: string | null;
   can_select: boolean;
+}
+
+// Whether augmented (hierarchical-zoom) reasoning is on for new rounds.
+export interface ReasoningStatus {
+  augmented: boolean;
 }
 
 // One recorded session on disk (the review dashboard's server picker).

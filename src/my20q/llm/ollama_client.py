@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from my20q.llm.base import LLMMessage, LLMUnavailable
+from my20q.llm.base import ChatResult, LLMMessage, LLMUnavailable
 
 
 class OllamaBackend:
@@ -34,6 +34,19 @@ class OllamaBackend:
         json_mode: bool = False,
         think: bool | None = None,
     ) -> str:
+        result = await self.chat_full(
+            messages, max_tokens=max_tokens, json_mode=json_mode, think=think
+        )
+        return result.content
+
+    async def chat_full(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int = 200,
+        json_mode: bool = False,
+        think: bool | None = None,
+    ) -> ChatResult:
         payload: dict = {
             "model": self.model,
             "messages": messages,
@@ -54,10 +67,15 @@ class OllamaBackend:
         except (httpx.HTTPError, ValueError) as exc:
             raise LLMUnavailable(f"Ollama call failed: {exc}") from exc
 
-        content = data.get("message", {}).get("content")
+        message = data.get("message", {})
+        content = message.get("content")
         if not isinstance(content, str) or not content.strip():
             raise LLMUnavailable("Ollama returned empty response")
-        return content.strip()
+        thinking = message.get("thinking")
+        return ChatResult(
+            content=content.strip(),
+            thinking=thinking.strip() if isinstance(thinking, str) else "",
+        )
 
     async def health(self) -> bool:
         try:

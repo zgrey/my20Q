@@ -79,6 +79,8 @@ def _event_out(ev: RoundEvent, catalog: list[Pictogram]) -> schemas.EventOut:
         emergency_screen=ev.emergency_screen,
         pictogram=match.id if match else None,
         hypotheses=ev.hypotheses,
+        reasoning_trace=ev.reasoning_trace,
+        breadcrumb=ev.breadcrumb,
     )
 
 
@@ -216,6 +218,8 @@ def create_app(config: Config | None = None, *, backend: object = _UNSET) -> Fas
     )
     app.state.recording_paused = False
     app.state.model_label = getattr(llm, "model", None) or "fallback"
+    # Augmented (hierarchical-zoom) reasoning toggle for human-trial comparisons.
+    app.state.augmented = False
     # Local-only TTS (piper). May be unavailable until installed — the
     # status endpoint reports why, and the cockpit stays silent.
     app.state.tts = select_tts(config)
@@ -320,6 +324,17 @@ def _register_routes(app: FastAPI) -> None:
         log.info("active model switched to %s (human-trial selection)", body.model)
         return await list_models()
 
+    @app.get("/api/reasoning", response_model=schemas.ReasoningOut)
+    def get_reasoning() -> schemas.ReasoningOut:
+        return schemas.ReasoningOut(augmented=state.augmented)
+
+    @app.post("/api/reasoning", response_model=schemas.ReasoningOut)
+    def set_reasoning(body: schemas.ReasoningIn) -> schemas.ReasoningOut:
+        """Toggle augmented (hierarchical-zoom) reasoning for new rounds."""
+        state.augmented = body.augmented
+        log.info("augmented reasoning %s", "on" if body.augmented else "off")
+        return schemas.ReasoningOut(augmented=state.augmented)
+
     @app.get("/api/topics", response_model=list[schemas.TopicOut])
     def topics() -> list[schemas.TopicOut]:
         return [
@@ -345,7 +360,9 @@ def _register_routes(app: FastAPI) -> None:
                 prior.round.abandon()
                 _maybe_record(state, prior)
         try:
-            rnd = session.start_round(body.topic_id, seed_context=body.seed_context)
+            rnd = session.start_round(
+                body.topic_id, seed_context=body.seed_context, augmented=state.augmented
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         event = await rnd.open()

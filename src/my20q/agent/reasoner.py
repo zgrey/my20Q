@@ -27,7 +27,7 @@ from my20q.agent import prompts
 from my20q.agent.auditor import audit_query
 from my20q.agent.hypotheses import Hypothesis, is_balanced
 from my20q.agent.safety import sanitize_llm_text, sanitize_utterance
-from my20q.llm.base import LLMBackend, LLMUnavailable
+from my20q.llm.base import ChatResult, LLMBackend, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +50,16 @@ DELIBERATE_MAX_TOKENS = 2048
 FORMAT_MAX_TOKENS = 512
 SYNTH_MAX_TOKENS = 256
 EXPAND_MAX_TOKENS = 512
+CRITIQUE_MAX_TOKENS = 512
+SUMMARY_MAX_TOKENS = 256
+#: Cap on augmented deliberate→critique→refine passes per question.
+MAX_EFFORT = 3
+
+
+def _clip(text: str, limit: int = 160) -> str:
+    """Collapse whitespace and truncate — for short trace lines."""
+    out = " ".join(text.split())
+    return out[: limit - 1] + "…" if len(out) > limit else out
 
 
 class ReasonerError(RuntimeError):
@@ -68,6 +78,10 @@ class ReasonerAction:
     #: For a synthesis: the hypothesis id it was built from (so a rejection can
     #: eliminate it on belief replay).
     hyp_id: str = ""
+    #: Labelled reasoning trace for the cockpit — each {"kind": "thinking" |
+    #: "strategy", "text": ...}. "thinking" = a thinking model's summarized
+    #: opaque reasoning; "strategy" = the explicit deliberate/critique passes.
+    trace: list[dict] = field(default_factory=list)
 
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
@@ -163,41 +177,62 @@ class Reasoner:
         profile_context: str = "",
         topic_hint: str = "",
         emotional_state: dict | None = None,
+        effort: int = 1,
+        augmented: bool = False,
         on_phase: Callable[[str], None] | None = None,
     ) -> ReasonerAction:
         """Propose the next discriminating yes/no question over ``candidates``.
 
         Two decoupled phases: **deliberate** (free-form reasoning — a thinking
         model thinks at length, no JSON budget pressure) then **format** (a cheap
-        thinking-off call → strict JSON). Re-prompts (bounded) when the question
-        fails the format audit or the ``yes_ids`` don't split the belief.
+        thinking-off call → strict JSON). In augmented mode ``effort`` adds
+        deliberate→critique→refine passes; a thinking model's hidden reasoning is
+        summarized into the trace either way. Re-prompts (bounded) on a bad
+        question.
         """
+        ctx = {
+            "seed_context": seed_context,
+            "profile_context": profile_context,
+            "topic_hint": topic_hint,
+            "emotional_state": emotional_state,
+        }
         live_ids = {hid for hid, _, _ in candidates}
         corrections: list[str] = []
+        trace: list[dict] = []
+        captured_thinking = False
         best: ReasonerAction | None = None
         for attempt in range(MAX_AUDIT_RETRIES + 1):
             if on_phase is not None:
                 on_phase("re-asking" if attempt else "thinking")
             # Phase 1 — deliberate (backend-default thinking; roomy; no JSON).
-            deliberate_msgs = prompts.deliberate_messages(
-                topic_label,
-                candidates,
-                history,
-                seed_context=seed_context,
-                profile_context=profile_context,
-                topic_hint=topic_hint,
-                emotional_state=emotional_state,
-                corrections=corrections,
+            result = await self._deliberate(
+                topic_label, candidates, history, corrections, ctx
             )
-            try:
-                draft = await self.llm.chat(
-                    deliberate_msgs, max_tokens=DELIBERATE_MAX_TOKENS, json_mode=False
-                )
-            except LLMUnavailable as exc:
-                raise ReasonerError(f"llm unreachable: {exc}") from exc
-            if not draft.strip():
+            draft = result.content.strip()
+            # Surface the model's opaque reasoning once, summarized.
+            if result.thinking and not captured_thinking:
+                captured_thinking = True
+                summary = await self.summarize_thinking(result.thinking)
+                if summary:
+                    trace.append({"kind": "thinking", "text": summary})
+            if not draft:
                 corrections.append("the reasoning produced no question; state one plainly")
                 continue
+            if augmented:
+                trace.append({"kind": "strategy", "text": f"draft: {_clip(draft)}"})
+            # Augmented refinement: critique the draft and re-deliberate.
+            for _ in range(max(0, min(effort, MAX_EFFORT) - 1)):
+                crit = await self.critique(candidates, history, draft)
+                if not crit:
+                    break
+                trace.append({"kind": "strategy", "text": f"critique: {crit}"})
+                refined = await self._deliberate(
+                    topic_label, candidates, history,
+                    [*corrections, f"a critique of your last draft: {crit}"], ctx,
+                )
+                if refined.content.strip():
+                    draft = refined.content.strip()
+                    trace.append({"kind": "strategy", "text": f"refined: {_clip(draft)}"})
             # Phase 2 — format the draft into strict JSON (thinking forced off).
             data = await self._chat_json(
                 prompts.format_question_messages(candidates, draft),
@@ -236,14 +271,111 @@ class Reasoner:
                     "answer yes"
                 )
                 continue
+            action.trace = trace
             return action
 
         # Retries exhausted — accept a best effort that at least splits the set,
         # rather than dead-ending the round; flag it for the caregiver.
         if best is not None and best.yes_ids and set(best.yes_ids) != live_ids:
             best.rationale = f"(imperfect split accepted) {best.rationale}".strip()
+            best.trace = trace
             return best
         raise ReasonerError("ask: could not produce a discriminating question")
+
+    async def _deliberate(
+        self,
+        topic_label: str,
+        candidates: list[tuple[str, str, float]],
+        history: list[dict],
+        corrections: list[str],
+        ctx: dict,
+    ) -> ChatResult:
+        """One free-form reasoning pass → a draft question (+ thinking channel)."""
+        messages = prompts.deliberate_messages(
+            topic_label, candidates, history, corrections=corrections, **ctx
+        )
+        try:
+            return await self.llm.chat_full(
+                messages, max_tokens=DELIBERATE_MAX_TOKENS, json_mode=False
+            )
+        except LLMUnavailable as exc:
+            raise ReasonerError(f"llm unreachable: {exc}") from exc
+
+    async def critique(
+        self,
+        candidates: list[tuple[str, str, float]],
+        history: list[dict],
+        draft: str,
+    ) -> str:
+        """Short critique of a drafted question (augmented refinement). Lenient."""
+        try:
+            out = await self.llm.chat(
+                prompts.critique_messages(candidates, history, draft),
+                max_tokens=CRITIQUE_MAX_TOKENS,
+                think=False,
+            )
+        except LLMUnavailable:
+            return ""
+        return _clip(out, 200)
+
+    async def summarize_thinking(self, thinking: str) -> str:
+        """Condense a thinking model's opaque reasoning to a few short points."""
+        try:
+            out = await self.llm.chat(
+                prompts.summarize_thinking_messages(thinking[:4000]),
+                max_tokens=SUMMARY_MAX_TOKENS,
+                think=False,
+            )
+        except LLMUnavailable:
+            return ""
+        return out.strip()[:400]
+
+    async def zoom(
+        self,
+        *,
+        topic_label: str,
+        parent_need: str,
+        history: list[dict],
+        seed_context: str = "",
+        profile_context: str = "",
+        topic_hint: str = "",
+        emotional_state: dict | None = None,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> list[str]:
+        """Finer, self-contained sub-needs of a confirmed need (zoom deeper).
+
+        Best-effort: returns [] when the need is already specific enough or the
+        call fails, so the round synthesizes instead of descending.
+        """
+        if on_phase is not None:
+            on_phase("thinking")
+        messages = prompts.zoom_messages(
+            topic_label,
+            parent_need,
+            history,
+            seed_context=seed_context,
+            profile_context=profile_context,
+            topic_hint=topic_hint,
+            emotional_state=emotional_state,
+        )
+        try:
+            data = await self._chat_json(messages, max_tokens=EXPAND_MAX_TOKENS, think=False)
+        except ReasonerError:
+            return []
+        items = data.get("hypotheses")
+        if not isinstance(items, list):
+            return []
+        seen = {parent_need.casefold()}
+        out: list[str] = []
+        for it in items:
+            if not isinstance(it, str):
+                continue
+            clean = sanitize_llm_text(it)
+            key = clean.casefold()
+            if clean and key not in seen:
+                seen.add(key)
+                out.append(clean)
+        return out[:6]
 
     async def expand_hypotheses(
         self,

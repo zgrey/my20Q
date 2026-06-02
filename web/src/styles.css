@@ -623,6 +623,63 @@ body,
   font-size: 12px;
 }
 
+/* ---- breadcrumb: the narrowing path as the belief zooms deeper ---- */
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.crumb:last-child {
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+.crumb-arrow {
+  color: var(--ink-soft);
+}
+
+/* ---- reasoning trace: model thinking (opaque) vs explicit strategy ---- */
+.trace {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+.trace-line {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+}
+.trace-tag {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.trace-line.thinking .trace-tag {
+  color: var(--warn, #e0921c);
+}
+.trace-line.strategy .trace-tag {
+  color: var(--accent-hover);
+}
+.trace-text {
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
 /* ----------------------------------------------------------------- input */
 
 .input {
@@ -775,6 +832,28 @@ body,
   background: var(--nested);
   color: var(--ink);
   max-width: 160px;
+}
+
+/* Augmented-reasoning toggle (hierarchical zoom for trials). */
+.augment-toggle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.augment-toggle.on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .synthesis.proposed {

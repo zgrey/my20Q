@@ -32,6 +32,16 @@ class ModelSelectIn(BaseModel):
     model: str
 
 
+class ReasoningOut(BaseModel):
+    """Whether augmented (hierarchical-zoom) reasoning is on for new rounds."""
+
+    augmented: bool = False
+
+
+class ReasoningIn(BaseModel):
+    augmented: bool
+
+
 class CreateSessionOut(BaseModel):
     session_id: str
 
@@ -63,6 +73,10 @@ class EventOut(BaseModel):
     # Live belief over candidate needs ([{need, weight}], sorted) — the honest
     # reasoning tile. Empty for fallback/emergency/terminal events.
     hypotheses: list[dict] = Field(default_factory=list)
+    # Labelled reasoning trace ([{kind, text}]) — summarized model thinking +
+    # the explicit augmented passes; and the zoom breadcrumb (need → object → …).
+    reasoning_trace: list[dict] = Field(default_factory=list)
+    breadcrumb: list[str] = Field(default_factory=list)
 
 
 class HistoryEntryOut(BaseModel):

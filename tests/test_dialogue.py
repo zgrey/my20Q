@@ -30,11 +30,14 @@ def _controller_backend(
     utterance: str = "I would like a glass of water.",
     expand: list[str] | None = None,
     boost: list[str] | None = None,
+    zoom_subs: list[str] | None = None,
+    critique: str = "",
 ) -> MockBackend:
-    """A MockBackend that plays the seed/ask/expand/synthesize protocol.
+    """A MockBackend that plays the full reasoner protocol.
 
-    Branches on the system prompt: returns the seed set, the `expand` needs +
-    `boost` ids for a context note, the next `asks`, or the utterance.
+    Branches on the system prompt: seed set, expand (note) needs+boost, zoom
+    sub-needs, a critique, the deliberate draft / format JSON for each ask, or
+    the synthesized utterance.
     """
     state = {"ask": 0}
 
@@ -44,6 +47,10 @@ def _controller_backend(
             return json.dumps({"hypotheses": seed})
         if "HIGH-TRUST context" in system:
             return json.dumps({"hypotheses": expand or [], "boost_ids": boost or []})
+        if "Refine it ONE level" in system:  # zoom
+            return json.dumps({"hypotheses": zoom_subs or []})
+        if "You critique" in system:  # augmented refinement
+            return critique
         if "Think it through" in system:  # deliberate (free-form) — return a draft
             return asks[min(state["ask"], len(asks) - 1)][0]
         if "Convert a drafted" in system:  # format the draft into JSON
@@ -221,6 +228,62 @@ async def test_undo_removes_context_hypotheses(topics: list[Topic]) -> None:
     ev = await rnd.undo()  # pops the context entry -> the added need disappears
     assert len(ev.hypotheses) == 4
     assert all("thirsty" not in h["need"] for h in ev.hypotheses)
+
+
+AUG_SEED = ["I want a drink", "My foot hurts", "I feel lonely", "I want to call someone"]
+
+
+async def test_augmented_zooms_on_take_root(topics: list[Topic]) -> None:
+    backend = _controller_backend(
+        seed=AUG_SEED,
+        asks=[("Is it a drink you want?", ["h1"]), ("Is it cold water?", ["h5"])],
+        zoom_subs=["a glass of cold water", "a cup of hot tea", "a glass of juice"],
+        critique="be more specific about which drink",
+    )
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20, augmented=True)
+    await rnd.open()
+    ev = await rnd.answer(Answer.YES)  # h1 takes root -> zoom -> ask in level 1
+    assert ev.kind == "query"
+    assert any(h["kind"] == "zoom" for h in rnd.history)
+    assert ev.breadcrumb == ["I want a drink"]
+    needs = [h["need"] for h in ev.hypotheses]
+    assert "a glass of cold water" in needs  # belief now over the finer sub-needs
+    assert any(t["kind"] == "strategy" for t in ev.reasoning_trace)  # explicit passes
+
+
+async def test_augmented_off_does_not_zoom(topics: list[Topic]) -> None:
+    backend = _controller_backend(
+        seed=AUG_SEED,
+        asks=[("Is it a drink you want?", ["h1"])],
+        zoom_subs=["a glass of cold water"],
+    )
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)  # augmented off
+    await rnd.open()
+    ev = await rnd.answer(Answer.YES)  # take-root -> synthesize (no zoom)
+    assert ev.kind == "synthesis"
+    assert not any(h["kind"] == "zoom" for h in rnd.history)
+    assert ev.breadcrumb == []
+    assert ev.reasoning_trace == []
+
+
+async def test_undo_unwinds_a_zoom(topics: list[Topic]) -> None:
+    backend = _controller_backend(
+        seed=AUG_SEED,
+        asks=[
+            ("Is it a drink you want?", ["h1"]),
+            ("Is it cold water?", ["h5"]),
+            ("Is it a drink you want?", ["h1"]),
+        ],
+        zoom_subs=["a glass of cold water", "a cup of hot tea", "a glass of juice"],
+        critique="be more specific",
+    )
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20, augmented=True)
+    await rnd.open()
+    ev = await rnd.answer(Answer.YES)  # zoomed into level 1
+    assert ev.breadcrumb == ["I want a drink"]
+    ev = await rnd.undo()  # skips the auto zoom + the answer that triggered it
+    assert not any(h["kind"] == "zoom" for h in rnd.history)
+    assert ev.breadcrumb == []  # back at level 0
 
 
 async def test_malformed_seed_degrades_to_fallback(topics: list[Topic]) -> None:

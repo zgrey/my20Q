@@ -160,6 +160,13 @@ def test_sse_event_route_is_registered() -> None:
     assert "/api/sessions/{sid}/rounds/{rid}/events" in paths
 
 
+def test_reasoning_toggle() -> None:
+    client = _fallback_client()
+    assert client.get("/api/reasoning").json()["augmented"] is False
+    assert client.post("/api/reasoning", json={"augmented": True}).json()["augmented"] is True
+    assert client.get("/api/reasoning").json()["augmented"] is True
+
+
 def test_sse_payload_formatting() -> None:
     assert _sse({"phase": "thinking"}) == 'data: {"phase": "thinking"}\n\n'
 

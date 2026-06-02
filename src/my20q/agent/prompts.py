@@ -88,6 +88,41 @@ OUTPUT — STRICT JSON, nothing else:
 """
 
 
+# Augmented reasoning (the "crescendo"): once a need takes root, ZOOM into finer
+# sub-needs; CRITIQUE drafts to push for specificity; SUMMARIZE a thinking model's
+# opaque reasoning so it can be measured against the explicit strategy.
+
+ZOOM_SYSTEM = """\
+A person with aphasia has CONFIRMED a need. Refine it ONE level more specific —
+list the concrete variations that narrow it further so a yes/no question can tell
+them apart. Move down the ladder: general need → the specific thing → its
+modifiers (e.g. "I want a drink" → "a glass of water" / "a cup of tea";
+"a glass of water" → "a glass of ICE water" / "a bottle of water").
+
+OUTPUT — STRICT JSON, nothing else:
+{"hypotheses": ["I would like a glass of cold water", ...]}
+
+- Each ONE short FIRST-PERSON, SELF-CONTAINED need that fully restates the
+  specific want ("I would like a glass of ice water"), never a bare modifier.
+- 3 to 6 distinct, plausible refinements of the confirmed need.
+- If it is already specific enough to act on, return {"hypotheses": []}.
+- No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
+"""
+
+CRITIQUE_SYSTEM = """\
+You critique a drafted yes/no question for narrowing what a person with aphasia
+needs. In one or two short sentences say whether it is specific and useful, or
+too vague / a repeat of an earlier question / an either-or — and if so, how to
+make it sharper and more specific. Be concise. No JSON.
+"""
+
+SUMMARIZE_THINKING_SYSTEM = """\
+Summarize the following model reasoning into 2-3 very short bullet points (one
+line each) capturing WHY it chose its question, for a caregiver to skim. Output
+only the bullets, each starting with "- ". No preamble. No medical advice.
+"""
+
+
 EXPAND_SYSTEM = """\
 A caregiver or medical professional just added a NOTE about what the person with
 aphasia needs. Their note is HIGH-TRUST context — far more reliable than any
@@ -112,10 +147,13 @@ def _format_history(history: list[dict]) -> str:
         return "(nothing asked yet)"
     lines: list[str] = []
     for i, h in enumerate(history, start=1):
-        if h["kind"] == "context":
+        kind = h["kind"]
+        if kind == "context":
             lines.append(f'{i}. [caregiver context] "{h["text"]}"')
+        elif kind == "zoom":
+            lines.append(f'{i}. [zoomed into] "{h.get("parent_need", "")}"')
         else:
-            lines.append(f'{i}. [{h["kind"]}] "{h["text"]}" -> {h.get("answer")}')
+            lines.append(f'{i}. [{kind}] "{h.get("text", "")}" -> {h.get("answer")}')
     return "\n".join(lines)
 
 
@@ -311,4 +349,58 @@ def synthesize_messages(
     return [
         {"role": "system", "content": SYNTH_SYSTEM},
         {"role": "user", "content": instruction},
+    ]
+
+
+def zoom_messages(
+    topic_label: str,
+    parent_need: str,
+    history: list[dict],
+    *,
+    seed_context: str = "",
+    profile_context: str = "",
+    topic_hint: str = "",
+    emotional_state: dict | None = None,
+) -> list[LLMMessage]:
+    """Ask for finer sub-needs of a confirmed need (the zoom one level deeper)."""
+    instruction = f"Topic for this round: {topic_label}\n\n"
+    instruction += _context_block(
+        profile_context=profile_context,
+        seed_context=seed_context,
+        topic_hint=topic_hint,
+        emotional_state=emotional_state,
+    )
+    instruction += (
+        f'CONFIRMED need to refine:\n  "{parent_need}"\n\n'
+        f"History so far:\n{_format_history(history)}\n\n"
+        "List the more-specific refinements of this need, as strict JSON."
+    )
+    return [
+        {"role": "system", "content": ZOOM_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def critique_messages(
+    candidates: list[tuple[str, str, float]], history: list[dict], draft: str
+) -> list[LLMMessage]:
+    """Ask for a short critique of a drafted question (augmented refinement)."""
+    listing = "\n".join(f"  {hid}: {need}" for hid, need, _ in candidates)
+    instruction = (
+        f"Candidate needs (id: need):\n{listing}\n\n"
+        f"History so far:\n{_format_history(history)}\n\n"
+        f"Drafted question / reasoning:\n{draft}\n\n"
+        "Critique it briefly and suggest a sharper, more specific question if needed."
+    )
+    return [
+        {"role": "system", "content": CRITIQUE_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def summarize_thinking_messages(thinking: str) -> list[LLMMessage]:
+    """Condense a thinking model's opaque reasoning into a few short points."""
+    return [
+        {"role": "system", "content": SUMMARIZE_THINKING_SYSTEM},
+        {"role": "user", "content": thinking},
     ]

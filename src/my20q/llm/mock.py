@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from my20q.llm.base import LLMMessage
+from my20q.llm.base import ChatResult, LLMMessage
 
 
 class MockBackend:
@@ -22,6 +22,16 @@ class MockBackend:
     ) -> str:
         self.calls.append(messages)
         return self.responder(messages)
+
+    async def chat_full(
+        self,
+        messages: list[LLMMessage],
+        *,
+        max_tokens: int = 200,
+        json_mode: bool = False,
+        think: bool | None = None,
+    ) -> ChatResult:
+        return ChatResult(content=await self.chat(messages))
 
     async def health(self) -> bool:
         return True

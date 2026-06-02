@@ -55,6 +55,7 @@ export function App() {
   const [models, setModels] = useState<string[]>([]);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [canSelectModel, setCanSelectModel] = useState(false);
+  const [augmented, setAugmented] = useState(false);
   const lastSpokenRef = useRef<string>("");
 
   // Bootstrap: load topics, create a session, open the first round.
@@ -145,6 +146,24 @@ export function App() {
         setCurrentModel(s.current);
       })
       .catch((e) => setError(friendlyError(e)));
+  };
+
+  // Augmented (hierarchical-zoom) reasoning — applies to the next round.
+  useEffect(() => {
+    api
+      .reasoning()
+      .then((s) => setAugmented(s.augmented))
+      .catch(() => undefined);
+  }, []);
+  const toggleAugmented = () => {
+    setAugmented((on) => {
+      const next = !on;
+      api
+        .setReasoning(next)
+        .then((s) => setAugmented(s.augmented))
+        .catch((e) => setError(friendlyError(e)));
+      return next;
+    });
   };
 
   // Speak each new query / proposed / confirmed utterance aloud (live mode
@@ -336,6 +355,8 @@ export function App() {
         currentModel={currentModel}
         canSelectModel={canSelectModel}
         onSelectModel={selectModel}
+        augmented={augmented}
+        onToggleAugmented={toggleAugmented}
       />
       {error && <div class="errorbar">{error}</div>}
       {view === "review" ? (

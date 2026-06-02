@@ -5,6 +5,7 @@
 import type {
   Answer,
   ModelsStatus,
+  ReasoningStatus,
   RecordingFile,
   RecordingStatus,
   RoundRecord,
@@ -61,6 +62,9 @@ export const api = {
   ttsStatus: () => request<TTSStatus>("/tts/status"),
   models: () => request<ModelsStatus>("/models"),
   selectModel: (model: string) => post<ModelsStatus>("/model", { model }),
+  reasoning: () => request<ReasoningStatus>("/reasoning"),
+  setReasoning: (augmented: boolean) =>
+    post<ReasoningStatus>("/reasoning", { augmented }),
 };
 
 /** Turn a fetch failure into a caregiver-readable message. */
