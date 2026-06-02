@@ -31,8 +31,13 @@ npm run typecheck  # tsc --noEmit
 ## Layout
 
 Two tabs in the topbar: **Live** (the cockpit) and **Review** (session
-playback). Topbar also has the topic ▼, engine badge, ⬇ Save, recording
-light, 🔊 audio toggle, and theme.
+playback). Topbar also has the topic ▼, engine badge, a **Model** selector
+(pick the local Ollama model for human-interaction trials — applies to the next
+question), ⬇ Save, recording light, 🔊 audio toggle, and theme.
+
+While the model is generating, the **Conversation** window shows a prominent
+animated "Thinking…" banner (latency feedback where the caregiver is looking,
+not just in the reasoning tile).
 
 ```
 ┌─ brand · Live|Review ── Topic ▼ ── ⬇ · ● REC · 🔊 · ☀ ─┐
