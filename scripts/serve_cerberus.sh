@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# One-command start/stop for the my20Q cockpit on cerberus, for remote trials
+# over Termius (SSH) + Tailscale. Cerberus is a Windows box driven via
+# MSYS2 / git-bash + tmux, so this is a bash script that launches the Windows
+# venv python and tmux. The API lives in a detached tmux session, so it survives
+# your SSH disconnect and you can re-attach any time to watch the logs.
+#
+#   ./scripts/serve_cerberus.sh          start: API in tmux + Tailscale serve
+#   ./scripts/serve_cerberus.sh logs     attach to the API tmux (Ctrl-b then d to detach)
+#   ./scripts/serve_cerberus.sh status   what's running + the cockpit URL
+#   ./scripts/serve_cerberus.sh stop     tear it all down
+#
+# Run it from the repo root. If not executable: `bash scripts/serve_cerberus.sh`.
+set -uo pipefail
+
+SESSION="my20q"
+PORT="${MY20Q_API_PORT:-8000}"
+REPO="$HOME/Git/GitHub/my20Q"
+PY="$HOME/venv/Scripts/python.exe"
+
+# Local piper TTS — use the shell's values if already exported, else the paths
+# persisted on cerberus (via setx). Inlined into the tmux command below so the
+# API gets them even if the tmux server was started with a stale environment.
+export MY20Q_PIPER_BIN="${MY20Q_PIPER_BIN:-/c/Users/grey_/piper/piper/piper.exe}"
+export MY20Q_PIPER_MODEL="${MY20Q_PIPER_MODEL:-/c/Users/grey_/piper/voices/en_US-amy-medium.onnx}"
+
+magic_url() {
+  local dns
+  dns="$(tailscale status --json 2>/dev/null \
+    | "$PY" -c "import json,sys;
+try: print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))
+except Exception: pass" 2>/dev/null)"
+  [ -n "${dns:-}" ] && echo "https://$dns/" || echo "https://<cerberus-magicdns>/"
+}
+
+wait_health() {
+  for _ in $(seq 1 20); do
+    curl -fsS --max-time 2 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 1
+}
+
+start() {
+  command -v tmux >/dev/null || { echo "tmux not found on PATH"; exit 1; }
+  # Reasoning needs Ollama; warn (non-fatal — the app degrades to fallback).
+  curl -fsS --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1 \
+    || echo "WARN: Ollama not reachable on :11434 — reasoning will fall back. (ollama serve)"
+
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "Already running in tmux '$SESSION'.  logs: $0 logs   stop: $0 stop"
+  else
+    tmux new-session -d -s "$SESSION" -c "$REPO" \
+      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
+    echo "API started in tmux '$SESSION' (127.0.0.1:$PORT)"
+  fi
+
+  # Front it over HTTPS on the tailnet (Tailscale backgrounds this itself).
+  if tailscale serve --bg "$PORT" >/dev/null 2>&1; then
+    echo "Tailscale serve -> 127.0.0.1:$PORT"
+  else
+    echo "WARN: 'tailscale serve --bg $PORT' failed — run it manually."
+  fi
+
+  if wait_health; then
+    echo "Health: OK"
+  else
+    echo "Health: not up yet — check the logs ($0 logs)."
+  fi
+  echo
+  echo "  cockpit:  $(magic_url)"
+  echo "  logs:     $0 logs        (Ctrl-b then d to detach, leaves it running)"
+  echo "  stop:     $0 stop"
+}
+
+case "${1:-start}" in
+  start) start ;;
+  logs)  tmux attach -t "$SESSION" ;;
+  stop)
+    tmux kill-session -t "$SESSION" 2>/dev/null && echo "tmux '$SESSION' stopped" \
+      || echo "no tmux '$SESSION'"
+    tailscale serve reset >/dev/null 2>&1 && echo "tailscale serve reset" || true
+    ;;
+  status)
+    tmux has-session -t "$SESSION" 2>/dev/null \
+      && echo "tmux '$SESSION': RUNNING" || echo "tmux '$SESSION': not running"
+    curl -fsS --max-time 2 "http://127.0.0.1:$PORT/api/health" 2>/dev/null \
+      && echo "  (API health OK on :$PORT)" || echo "  (API not responding on :$PORT)"
+    echo "--- tailscale serve ---"; tailscale serve status 2>/dev/null || true
+    echo "  cockpit:  $(magic_url)"
+    ;;
+  *) echo "usage: $0 [start|logs|status|stop]"; exit 1 ;;
+esac
