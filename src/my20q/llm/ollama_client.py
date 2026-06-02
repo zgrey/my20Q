@@ -14,11 +14,17 @@ class OllamaBackend:
         model: str = "llama3.2:3b",
         timeout_s: float = 30.0,
         temperature: float = 0.4,
+        think: bool | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
         self.temperature = temperature
+        # Thinking-model control. None = leave it to the model's default;
+        # False disables the reasoning phase so all tokens go to content (e.g.
+        # gemma4's thinking would otherwise exhaust num_predict before the JSON
+        # answer is emitted). Harmlessly ignored by non-thinking models.
+        self.think = think
 
     async def chat(
         self,
@@ -35,6 +41,8 @@ class OllamaBackend:
         }
         if json_mode:
             payload["format"] = "json"
+        if self.think is not None:
+            payload["think"] = self.think
         try:
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
                 resp = await client.post(f"{self.base_url}/api/chat", json=payload)

@@ -15,18 +15,23 @@ re-asks, and average reasoner latency per query — plus the full transcripts,
 grouped by scenario, for eyeballing the reasoning quality side by side.
 
 The simulator is held constant across all candidates, so its own quirks bias
-every model equally; its answers are logged so you can audit them. Run it at
-temperature 0 for reproducibility (the default here).
+every model equally; its answers are logged so you can audit them. It defaults
+to Anthropic Haiku (reliable, no VRAM cost, permitted here since these are
+synthetic personas — real_patient=false); pass a local --simulator to stay
+offline. Candidates run at temperature 0 with think=False (so gemma4's hidden
+reasoning tokens don't exhaust the budget before the JSON answer).
 
 Prerequisites:
   1. ``ollama serve`` running (default http://localhost:11434).
-  2. The candidate + simulator models are pulled (`ollama pull`). Models that
-     aren't pulled are skipped with a note — this script never pulls for you.
+  2. The candidate models are pulled (`ollama pull`). Models that aren't pulled
+     are skipped with a note — this script never pulls for you.
+  3. For the default Anthropic simulator: ANTHROPIC_API_KEY set and the
+     ``trials`` extra installed (pip install -e '.[trials]').
 
 Usage:
-  python scripts/bench_reasoning.py
+  python scripts/bench_reasoning.py                       # Haiku simulator
   python scripts/bench_reasoning.py --models gemma3:12b gemma4:e4b
-  python scripts/bench_reasoning.py --simulator gemma3:4b --max-queries 12
+  python scripts/bench_reasoning.py --simulator gemma3:12b  # fully local
   python scripts/bench_reasoning.py --json out.json --no-transcripts
 """
 
@@ -36,6 +41,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import os
 import statistics
 import sys
 import time
@@ -46,7 +52,7 @@ from rich.console import Console
 from rich.table import Table
 
 from my20q.agent.dialogue import Answer, Round
-from my20q.llm.base import LLMUnavailable
+from my20q.llm.base import LLMBackend, LLMUnavailable
 from my20q.llm.ollama_client import OllamaBackend
 from my20q.topics import Topic, find_topic, load_topics
 
@@ -67,9 +73,27 @@ DEFAULT_MODELS: list[str] = [
     "llama3.2:3b",  # baseline
 ]
 
-#: The patient simulator — held constant across all candidates. Small + fast,
-#: because it is called once per query. Override with --simulator.
-DEFAULT_SIMULATOR = "gemma3:4b"
+#: The patient simulator — held constant across all candidates. A name starting
+#: with "claude" uses the Anthropic backend (reliable, zero VRAM cost, permitted
+#: here since these are synthetic personas); anything else is a local Ollama
+#: model. Override with --simulator.
+DEFAULT_SIMULATOR = "claude-haiku-4-5-20251001"
+
+
+def _make_simulator(name: str) -> LLMBackend:
+    """Build the patient simulator backend from its model name."""
+    if name.startswith("claude"):
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise SystemExit(
+                f"ANTHROPIC_API_KEY is not set — required for the Anthropic "
+                f"simulator {name!r}. Set it (setx ANTHROPIC_API_KEY ...) or "
+                f"pass a local --simulator (e.g. gemma3:12b)."
+            )
+        from my20q.llm.anthropic_client import AnthropicBackend
+
+        return AnthropicBackend(api_key=key, model=name)
+    return OllamaBackend(model=name, timeout_s=60.0, temperature=0.0)
 
 
 @dataclass
@@ -133,7 +157,7 @@ Does that sentence correctly capture your need? Reply EXACTLY one word:
 _ANSWER_WORDS = {a.value: a for a in Answer}
 
 
-async def _simulate_answer(sim: OllamaBackend, need: str, question: str) -> Answer:
+async def _simulate_answer(sim: LLMBackend, need: str, question: str) -> Answer:
     messages = [
         {"role": "system", "content": _SIM_SYSTEM.format(need=need)},
         {"role": "user", "content": f'The caregiver asks: "{question}"'},
@@ -147,7 +171,7 @@ async def _simulate_answer(sim: OllamaBackend, need: str, question: str) -> Answ
     return _ANSWER_WORDS.get(token, Answer.NOT_SURE)
 
 
-async def _simulate_confirm(sim: OllamaBackend, need: str, utterance: str) -> bool:
+async def _simulate_confirm(sim: LLMBackend, need: str, utterance: str) -> bool:
     messages = [
         {"role": "system", "content": "Answer with exactly one word: yes or no."},
         {"role": "user", "content": _SIM_CONFIRM.format(utterance=utterance, need=need)},
@@ -199,7 +223,7 @@ class ModelReport:
 async def _drive_round(
     *,
     reasoner: OllamaBackend,
-    sim: OllamaBackend,
+    sim: LLMBackend,
     topic: Topic,
     scenario: Scenario,
     max_queries: int,
@@ -268,7 +292,7 @@ async def _model_pulled(backend: OllamaBackend) -> bool:
 
 async def _bench_model(
     model: str,
-    sim: OllamaBackend,
+    sim: LLMBackend,
     topics: list[Topic],
     scenarios: list[Scenario],
     max_queries: int,
@@ -276,7 +300,11 @@ async def _bench_model(
 ) -> ModelReport:
     # Generous timeout: gemma4:26b spills past 16 GB VRAM and runs partly on
     # CPU, so a single call can be slow — don't unfairly clip it to fallback.
-    reasoner = OllamaBackend(model=model, timeout_s=240.0, temperature=temperature)
+    # think=False stops gemma4's reasoning tokens from eating num_predict before
+    # the JSON answer (harmlessly ignored by non-thinking models like gemma3).
+    reasoner = OllamaBackend(
+        model=model, timeout_s=240.0, temperature=temperature, think=False
+    )
     report = ModelReport(model=model, available=False)
     if not await reasoner.health():
         report.error = "ollama not reachable"
@@ -373,8 +401,8 @@ async def _run(
     models: list[str], simulator: str, max_queries: int, temperature: float
 ) -> list[ModelReport]:
     topics = load_topics()
-    sim = OllamaBackend(model=simulator, timeout_s=60.0, temperature=0.0)
-    # Pre-load the simulator so it co-resides with the first candidate.
+    sim = _make_simulator(simulator)
+    # Pre-load a local simulator so it co-resides with the first candidate.
     with contextlib.suppress(LLMUnavailable):
         await sim.chat([{"role": "user", "content": "Reply: ready"}], max_tokens=4)
     reports: list[ModelReport] = []
