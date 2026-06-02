@@ -27,6 +27,10 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
   input), persistent topic bar, recording light, session **Review** dashboard,
   SSE progress channel, JSONL recording/export, and **local piper TTS**
   (voice readouts of queries/utterances; review auto-play reads each step).
+- **Reasoning controller** ✓ The engine maintains an explicit belief over
+  candidate needs and asks the most-discriminating yes/no question each turn
+  (seed → ask → synthesize); the cockpit's reasoning tile renders the live
+  belief. See `src/my20q/agent/hypotheses.py`.
 - **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
   graph write path).
 

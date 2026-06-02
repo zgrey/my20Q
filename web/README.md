@@ -38,8 +38,8 @@ light, 🔊 audio toggle, and theme.
 ┌─ brand · Live|Review ── Topic ▼ ── ⬇ · ● REC · 🔊 · ☀ ─┐
 │ ┌──────────────────────┐ ┌─────────────────────┐ │
 │ │ 1 Conversation       │ │ 2 Live reasoning    │ │
-│ │   transcript + live  │ │   narration + SSE   │ │
-│ │   query / synthesis  │ │   + emotion sliders │ │
+│ │   transcript + live  │ │   belief panel +    │ │
+│ │   query / synthesis  │ │   SSE + sliders     │ │
 │ ├──────────────────────┤ │                     │ │
 │ │ 3 Input  y/n/k/s/u/q │ │                     │ │
 │ └──────────────────────┘ └─────────────────────┘ │
@@ -49,6 +49,11 @@ light, 🔊 audio toggle, and theme.
 > The Pictogram tile is shelved (curated retrieval mostly fell back to "?" in
 > real sessions). The component and backend retrieval are retained — re-mount
 > once the image slot is driven by a generator.
+
+**Belief panel** (in the reasoning tile): the honest reasoning view. The engine
+maintains a live belief over candidate needs and asks the most-discriminating
+yes/no question each turn; the tile renders those candidates ranked with weight
+bars, leader highlighted, updating with every answer (from `event.hypotheses`).
 
 **Emotion sliders** (in the reasoning tile): ten opposed-emotion pairs, each a
 coarse 5-detent scale (strong/mild each side + neutral) with large pole labels.
