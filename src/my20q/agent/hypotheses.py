@@ -73,6 +73,27 @@ def update_weights(
     return _normalize(out)
 
 
+def apply_context(
+    weights: dict[str, float], new_ids: list[str], boost_ids: list[str]
+) -> dict[str, float]:
+    """Fold a high-trust caregiver note into the belief.
+
+    New needs the note implies (``new_ids``) enter at the current mean; then the
+    note is applied as a strong "yes" toward all context-relevant needs (the new
+    ones plus existing ``boost_ids`` the note confirms), which lifts them and
+    suppresses the rest. Caregiver / clinical context outranks the seeds.
+    """
+    if not new_ids and not boost_ids:
+        return _normalize(dict(weights))
+    out = dict(weights)
+    if new_ids:
+        mean = (sum(out.values()) / len(out)) if out else 1.0
+        for nid in new_ids:
+            out[nid] = mean
+        out = _normalize(out)
+    return update_weights(out, {*new_ids, *boost_ids}, "yes")
+
+
 def recompute(
     hyps: list[Hypothesis], answered: list[tuple[set[str], str]]
 ) -> dict[str, float]:

@@ -101,9 +101,11 @@ class Round:
         #: a ReasonerError forced the degrade.
         self.degrade_reason: str = ""
         self._reasoner = Reasoner(llm) if llm is not None else None
-        # The round's candidate-need set (the belief prior), seeded once by the
-        # reasoner on the first advance. Weights are recomputed from history.
-        self._hypotheses: list[Hypothesis] = []
+        # The round's *seed* candidate-need set (the belief prior), generated
+        # once by the reasoner on the first advance. The active set also grows
+        # with hypotheses the caregiver's context implies; both the active set
+        # and the weights are recomputed from history (see _replay_belief).
+        self._seed_hypotheses: list[Hypothesis] = []
         self._history: list[dict] = []
         self._pending: ReasonerAction | None = None
         self._pending_qid: str | None = None
@@ -196,24 +198,51 @@ class Round:
         return await self._advance()
 
     async def add_context(self, text: str) -> RoundEvent:
-        """Inject caregiver context mid-round and refresh the pending query.
+        """Inject caregiver context mid-round and re-propose forward.
 
-        The current (unanswered) query lives in ``_pending``, not in
-        history — so we append the context and re-propose against the
-        updated history, returning a fresh query that actually accounts
-        for what the caregiver just said. Empty context is a no-op that
-        leaves the current query in place. In fallback mode there is no
-        LLM to steer, so the deterministic walk re-proposes the same
-        question.
+        A note from a caregiver / medical professional is **high-trust** signal
+        — far more reliable than the generic seeds. In reasoning mode we ask the
+        reasoner for any NEW candidate needs the note implies and add them to the
+        belief at a boosted prior (see ``_replay_belief`` / ``add_with_boost``),
+        so the next question discriminates over what the caregiver just told us.
+        The added needs are recorded on the context entry, keeping the belief
+        reconstructible for undo. Empty context is a no-op; fallback mode has no
+        LLM, so its deterministic walk simply re-proposes.
         """
         if self._outcome is not None:
             raise RuntimeError("round is already terminal")
         text = text.strip()
         if not text:
             if self._pending is not None:
-                return self._event_for(self._pending)
+                return self._pending_event()
             return await self._advance()
-        self._history.append({"kind": "context", "text": text, "answer": None})
+
+        added: list[dict] = []
+        boost_ids: list[str] = []
+        if (
+            self.engine == "reasoning"
+            and self._reasoner is not None
+            and self._seed_hypotheses
+        ):
+            active, _ = self._replay_belief()
+            new_needs, boost_ids = await self._reasoner.expand_hypotheses(
+                context=text,
+                existing=[(h.id, h.need) for h in active],
+                history=self._history,
+                **self._reasoner_ctx(),
+            )
+            base = len(active)
+            added = [
+                {"id": f"h{base + i + 1}", "need": need}
+                for i, need in enumerate(new_needs)
+            ]
+
+        entry: dict = {"kind": "context", "text": text, "answer": None}
+        if added:
+            entry["added"] = added
+        if boost_ids:
+            entry["boost"] = boost_ids
+        self._history.append(entry)
         self._pending = None
         self._pending_qid = None
         return await self._advance()
@@ -272,15 +301,16 @@ class Round:
         assert self._reasoner is not None
         try:
             # Seed the candidate-need set once, on the first advance.
-            if not self._hypotheses:
-                self._hypotheses = await self._reasoner.seed_hypotheses(
+            if not self._seed_hypotheses:
+                self._seed_hypotheses = await self._reasoner.seed_hypotheses(
                     **self._reasoner_ctx()
                 )
-            weights = hyp.recompute(self._hypotheses, self._replay_pairs())
+            active, weights = self._replay_belief()
+            by_id = {h.id: h for h in active}
 
             if final or hyp.should_synthesize(weights):
                 top = hyp.leader(weights)
-                leader_hyp = self._hyp_by_id(top[0]) if top else None
+                leader_hyp = by_id.get(top[0]) if top else None
                 if leader_hyp is None:
                     return self._degrade_to_fallback("no leading hypothesis")
                 action = await self._reasoner.synthesize(
@@ -290,7 +320,7 @@ class Round:
                 )
                 action.hyp_id = leader_hyp.id
             else:
-                ranked = hyp.ranked(self._hypotheses, weights)
+                ranked = hyp.ranked(active, weights)
                 candidates = [(h.id, h.need, w) for h, w in ranked]
                 action = await self._reasoner.ask(
                     candidates=candidates,
@@ -304,7 +334,7 @@ class Round:
 
         self._pending = action
         self._pending_qid = None
-        return self._event_for(action, weights)
+        return self._event_for(action, self._belief_view(active, weights))
 
     def _reasoner_ctx(self) -> dict:
         """Shared keyword context passed to every reasoner call."""
@@ -317,33 +347,53 @@ class Round:
             "on_phase": self.on_phase,
         }
 
-    def _replay_pairs(self) -> list[tuple[set[str], str]]:
-        """(yes_ids, answer) pairs to fold over the seed prior for the belief.
+    def _replay_belief(self) -> tuple[list[Hypothesis], dict[str, float]]:
+        """Rebuild the active hypothesis set and its weights from history.
 
-        A query contributes its split; a *rejected* synthesis contributes an
-        elimination of the need it proposed (same as a "no" to "is it X?").
+        Walks events in order so undo is just pop-and-recompute:
+        - start from the seed prior;
+        - a [caregiver context] entry that added hypotheses inserts them at a
+          boosted prior (high-trust context outranks the seeds);
+        - a query folds its yes/no split;
+        - a *rejected* synthesis eliminates the need it proposed.
         """
-        pairs: list[tuple[set[str], str]] = []
+        active = list(self._seed_hypotheses)
+        weights = hyp.seed_weights(active)
         for h in self._history:
-            answer = h.get("answer")
-            if not answer:
-                continue
-            if h["kind"] == "query":
-                pairs.append((set(h.get("yes_ids", [])), answer))
-            elif h["kind"] == "synthesis" and answer != Answer.YES.value:
-                hid = h.get("hyp_id")
-                if hid:
-                    pairs.append(({hid}, Answer.NO.value))
-        return pairs
+            kind = h["kind"]
+            if kind == "context":
+                added = h.get("added") or []
+                boost = h.get("boost") or []
+                if added or boost:
+                    active = active + [Hypothesis(a["id"], a["need"]) for a in added]
+                    weights = hyp.apply_context(
+                        weights, [a["id"] for a in added], boost
+                    )
+            elif kind == "query":
+                answer = h.get("answer")
+                if answer:
+                    weights = hyp.update_weights(weights, set(h.get("yes_ids", [])), answer)
+            elif kind == "synthesis":
+                answer = h.get("answer")
+                if answer and answer != Answer.YES.value and h.get("hyp_id"):
+                    weights = hyp.update_weights(weights, {h["hyp_id"]}, Answer.NO.value)
+        return active, weights
 
-    def _hyp_by_id(self, hid: str) -> Hypothesis | None:
-        return next((h for h in self._hypotheses if h.id == hid), None)
-
-    def _belief_view(self, weights: dict[str, float]) -> list[dict]:
+    def _belief_view(
+        self, active: list[Hypothesis], weights: dict[str, float]
+    ) -> list[dict]:
         return [
             {"need": h.need, "weight": round(w, 3)}
-            for h, w in hyp.ranked(self._hypotheses, weights)
+            for h, w in hyp.ranked(active, weights)
         ]
+
+    def _pending_event(self) -> RoundEvent:
+        """Re-emit the current pending query with its current belief view."""
+        assert self._pending is not None
+        if self.engine == "reasoning" and self._seed_hypotheses:
+            active, weights = self._replay_belief()
+            return self._event_for(self._pending, self._belief_view(active, weights))
+        return self._event_for(self._pending)
 
     def _degrade_to_fallback(self, reason: str = "") -> RoundEvent:
         """Switch to deterministic fallback mid-round (LLM became unusable)."""
@@ -413,7 +463,7 @@ class Round:
         return next((q for q in self.topic.fallback_questions if q.id == qid), None)
 
     def _event_for(
-        self, action: ReasonerAction, weights: dict[str, float] | None = None
+        self, action: ReasonerAction, belief: list[dict] | None = None
     ) -> RoundEvent:
         idx = self.query_count + (1 if action.kind == "query" else 0)
         return RoundEvent(
@@ -423,7 +473,7 @@ class Round:
             preface=action.preface,
             query_index=idx,
             engine=self.engine,
-            hypotheses=self._belief_view(weights) if weights is not None else [],
+            hypotheses=belief or [],
         )
 
 

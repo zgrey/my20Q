@@ -28,11 +28,13 @@ def _controller_backend(
     seed: list[str] = SEED_NEEDS,
     asks: list[tuple[str, list[str]]],
     utterance: str = "I would like a glass of water.",
+    expand: list[str] | None = None,
+    boost: list[str] | None = None,
 ) -> MockBackend:
-    """A MockBackend that plays the seed/ask/synthesize protocol.
+    """A MockBackend that plays the seed/ask/expand/synthesize protocol.
 
-    It returns the seed set, then walks `asks` (question, yes_ids) for each
-    ask call, then the synthesis utterance — branching on the system prompt.
+    Branches on the system prompt: returns the seed set, the `expand` needs +
+    `boost` ids for a context note, the next `asks`, or the utterance.
     """
     state = {"ask": 0}
 
@@ -40,6 +42,8 @@ def _controller_backend(
         system = messages[0]["content"]
         if "candidate NEEDS to test" in system:
             return json.dumps({"hypotheses": seed})
+        if "HIGH-TRUST context" in system:
+            return json.dumps({"hypotheses": expand or [], "boost_ids": boost or []})
         if "best SPLITS" in system:
             i = min(state["ask"], len(asks) - 1)
             state["ask"] += 1
@@ -165,6 +169,56 @@ async def test_add_context_steers_next_question(topics: list[Topic]) -> None:
     assert refreshed.kind == "query"
     assert "context" in [h["kind"] for h in rnd.history]
     assert refreshed.text != first.text
+
+
+async def test_add_context_expands_belief(topics: list[Topic]) -> None:
+    backend = _controller_backend(
+        seed=["My foot hurts", "I feel lonely", "I want to stand up", "I feel tired"],
+        asks=[("Is it about your body?", ["h1"]), ("Is it a drink?", ["h5"])],
+        expand=["I am thirsty and want a drink"],
+    )
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
+    ev = await rnd.open()
+    assert len(ev.hypotheses) == 4
+    ev = await rnd.add_context("She keeps pointing at the empty cup.")
+    # The note's need was added and — being high-trust — leads the belief.
+    assert len(ev.hypotheses) == 5
+    assert ev.hypotheses[0]["need"] == "I am thirsty and want a drink"
+    assert "added" in rnd.history[-1]  # recorded so undo can reconstruct
+
+
+async def test_context_boosts_an_existing_candidate(topics: list[Topic]) -> None:
+    # The note adds no new need but confirms an existing one (h1, thirst) — the
+    # high-trust signal makes it lead even though it was a uniform seed.
+    backend = _controller_backend(
+        asks=[("Is it about your body?", ["h2"])], expand=[], boost=["h1"]
+    )
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
+    await rnd.open()
+    ev = await rnd.add_context("She keeps reaching for her water cup.")
+    assert len(ev.hypotheses) == len(SEED_NEEDS)  # nothing new added
+    assert ev.hypotheses[0]["need"] == SEED_NEEDS[0]  # thirst now leads
+    assert ev.hypotheses[0]["weight"] > 0.5
+    assert rnd.history[-1]["boost"] == ["h1"]
+
+
+async def test_undo_removes_context_hypotheses(topics: list[Topic]) -> None:
+    backend = _controller_backend(
+        seed=["My foot hurts", "I feel lonely", "I want to stand up", "I feel tired"],
+        asks=[
+            ("Is it about your body?", ["h1"]),
+            ("Is it a drink?", ["h5"]),
+            ("Is it your body?", ["h1"]),
+        ],
+        expand=["I am thirsty and want a drink"],
+    )
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
+    await rnd.open()
+    ev = await rnd.add_context("pointing at the cup")
+    assert len(ev.hypotheses) == 5
+    ev = await rnd.undo()  # pops the context entry -> the added need disappears
+    assert len(ev.hypotheses) == 4
+    assert all("thirsty" not in h["need"] for h in ev.hypotheses)
 
 
 async def test_malformed_seed_degrades_to_fallback(topics: list[Topic]) -> None:

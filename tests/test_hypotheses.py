@@ -6,6 +6,7 @@ from my20q.agent.hypotheses import (
     PRUNE_EPS,
     SYNTH_THRESHOLD,
     Hypothesis,
+    apply_context,
     is_balanced,
     leader,
     live_ids,
@@ -94,6 +95,26 @@ def test_split_balance_and_is_balanced() -> None:
     assert is_balanced(w, {"h1", "h2"})
     assert not is_balanced(w, set())  # nobody answers yes
     assert not is_balanced(w, {"h1", "h2", "h3", "h4"})  # everybody does
+
+
+def test_apply_context_makes_a_confirmed_need_lead() -> None:
+    w = seed_weights(H)  # uniform over 4
+    w2 = apply_context(w, [], ["h1"])  # the note confirms existing h1
+    assert abs(sum(w2.values()) - 1) < 1e-9
+    assert w2["h1"] > 0.6  # one strong note -> clear leader
+    assert w2["h1"] > w2["h2"]
+
+
+def test_apply_context_inserts_a_new_need_on_top() -> None:
+    w = {"h1": 0.5, "h2": 0.5}
+    w2 = apply_context(w, ["h3"], [])
+    assert "h3" in w2
+    assert w2["h3"] > w2["h1"]
+
+
+def test_apply_context_is_noop_when_nothing() -> None:
+    w = {"h1": 0.6, "h2": 0.4}
+    assert apply_context(w, [], []) == w
 
 
 def test_ranked_is_sorted_descending() -> None:

@@ -210,6 +210,65 @@ class Reasoner:
             return best
         raise ReasonerError("ask: could not produce a discriminating question")
 
+    async def expand_hypotheses(
+        self,
+        *,
+        topic_label: str,
+        context: str,
+        existing: list[tuple[str, str]],
+        history: list[dict],
+        seed_context: str = "",
+        profile_context: str = "",
+        topic_hint: str = "",
+        emotional_state: dict | None = None,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """New needs + confirmed-existing ids implied by a caregiver note.
+
+        Never raises — context is additive, so a failure just means "no change"
+        and the round carries on. Returns ``(new_needs, boost_ids)``: sanitized
+        needs not already present (capped so the set stays bounded), and the ids
+        of existing candidates the note confirms.
+        """
+        if on_phase is not None:
+            on_phase("thinking")
+        messages = prompts.expand_messages(
+            topic_label,
+            context,
+            existing,
+            history,
+            seed_context=seed_context,
+            profile_context=profile_context,
+            topic_hint=topic_hint,
+            emotional_state=emotional_state,
+        )
+        try:
+            data = await self._chat_json(messages, max_tokens=300)
+        except ReasonerError:
+            return [], []
+        existing_ids = {hid for hid, _ in existing}
+        seen = {need.casefold() for _, need in existing}
+        new_needs: list[str] = []
+        items = data.get("hypotheses")
+        if isinstance(items, list):
+            for it in items:
+                if not isinstance(it, str):
+                    continue
+                clean = sanitize_llm_text(it)
+                key = clean.casefold()
+                if clean and key not in seen:
+                    seen.add(key)
+                    new_needs.append(clean)
+        room = max(0, MAX_HYPOTHESES - len(existing))
+        new_needs = new_needs[:room]
+        raw_boost = data.get("boost_ids")
+        boost_ids = (
+            [str(x) for x in raw_boost if str(x) in existing_ids]
+            if isinstance(raw_boost, list)
+            else []
+        )
+        return new_needs, boost_ids
+
     async def synthesize(
         self,
         *,

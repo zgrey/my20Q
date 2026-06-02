@@ -75,6 +75,25 @@ OUTPUT — STRICT JSON, nothing else:
 """
 
 
+EXPAND_SYSTEM = """\
+A caregiver or medical professional just added a NOTE about what the person with
+aphasia needs. Their note is HIGH-TRUST context — far more reliable than any
+guess. Use it two ways at once.
+
+OUTPUT — STRICT JSON, nothing else:
+{"hypotheses": ["I'm thirsty and want a drink", ...], "boost_ids": ["h1", ...]}
+
+- "hypotheses": any genuinely NEW candidate needs the note implies that are NOT
+  already in the current list. Each ONE short FIRST-PERSON need, concrete and
+  everyday. Empty list if the note implies nothing new.
+- "boost_ids": the ids of EXISTING candidates the note points to / makes more
+  likely (e.g. the note "reaching for her water cup" confirms an existing
+  "I'm thirsty" candidate). Empty list if none apply.
+- At least one of the two should usually be non-empty — the note is meaningful.
+- No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
+"""
+
+
 def _format_history(history: list[dict]) -> str:
     if not history:
         return "(nothing asked yet)"
@@ -197,6 +216,42 @@ def ask_messages(
     )
     return [
         {"role": "system", "content": ASK_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def expand_messages(
+    topic_label: str,
+    context: str,
+    existing: list[tuple[str, str]],
+    history: list[dict],
+    *,
+    seed_context: str = "",
+    profile_context: str = "",
+    topic_hint: str = "",
+    emotional_state: dict | None = None,
+) -> list[LLMMessage]:
+    """Ask for new + boosted candidate needs implied by a caregiver note.
+
+    ``existing`` is ``(id, need)`` for the current candidates, so the model can
+    name which ones the note confirms (``boost_ids``).
+    """
+    listing = "\n".join(f"  {hid}: {need}" for hid, need in existing) or "  (none yet)"
+    instruction = f"Topic for this round: {topic_label}\n\n"
+    instruction += _context_block(
+        profile_context=profile_context,
+        seed_context=seed_context,
+        topic_hint=topic_hint,
+        emotional_state=emotional_state,
+    )
+    instruction += (
+        f'CAREGIVER\'S NEW NOTE:\n  "{context}"\n\n'
+        f"Current candidate needs (id: need):\n{listing}\n\n"
+        f"History so far:\n{_format_history(history)}\n\n"
+        "Return new needs and/or the ids the note confirms, as strict JSON."
+    )
+    return [
+        {"role": "system", "content": EXPAND_SYSTEM},
         {"role": "user", "content": instruction},
     ]
 
