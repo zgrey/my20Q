@@ -10,6 +10,53 @@ let audioCtx: AudioContext | null = null;
 // a new readout) settles a pending caller rather than leaving it hanging.
 let endResolve: (() => void) | null = null;
 
+// Browsers block programmatic audio until the page has a real user gesture, so
+// the first query readouts (which fire from a load effect, not a click) get
+// dropped until enough interaction accrues. We unlock on the first gesture by
+// playing a silent clip *inside* that gesture; after that, readouts fired from
+// async effects are allowed. `blockedText` holds a readout that was dropped
+// before the gesture, so we can replay it the moment audio unlocks.
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+let audioPrimed = false;
+let blockedText = "";
+
+/** Install one-time listeners that unlock audio on the first user gesture.
+ *  Call once on startup. Idempotent. */
+export function installAudioUnlock(): void {
+  const prime = () => {
+    if (audioPrimed) return;
+    audioPrimed = true;
+    // Unlock HTMLAudio: a silent play *within* the gesture grants the page
+    // permission to play audio programmatically afterwards.
+    try {
+      const a = new Audio(SILENT_WAV);
+      a.volume = 0;
+      void a.play().catch(() => undefined);
+    } catch {
+      /* ignore */
+    }
+    // Resume the WebAudio context used by the input beep, if it exists.
+    try {
+      void audioCtx?.resume();
+    } catch {
+      /* ignore */
+    }
+    window.removeEventListener("pointerdown", prime, true);
+    window.removeEventListener("keydown", prime, true);
+    window.removeEventListener("touchstart", prime, true);
+    // Replay a readout that was dropped before the gesture.
+    if (blockedText) {
+      const t = blockedText;
+      blockedText = "";
+      void speak(t);
+    }
+  };
+  window.addEventListener("pointerdown", prime, true);
+  window.addEventListener("keydown", prime, true);
+  window.addEventListener("touchstart", prime, true);
+}
+
 /** Stop any in-flight voice readout (e.g. on a new query or muting). */
 export function stopSpeaking(): void {
   if (currentAudio) {
@@ -55,7 +102,16 @@ export async function speak(text: string): Promise<void> {
     };
     audio.onended = done;
     audio.onerror = done;
-    audio.play().catch(done); // autoplay blocked until a gesture — that's fine
+    audio
+      .play()
+      .then(() => {
+        blockedText = ""; // a readout started — clear any earlier blocked one
+      })
+      .catch(() => {
+        // Autoplay blocked (no user gesture yet) — remember to replay on unlock.
+        blockedText = t;
+        done();
+      });
   });
 }
 

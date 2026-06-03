@@ -8,7 +8,7 @@ import {
   TopicBar,
 } from "./components";
 import { ReviewDashboard } from "./review";
-import { confirmBeep, speak, stopSpeaking } from "./tts";
+import { confirmBeep, installAudioUnlock, speak, stopSpeaking } from "./tts";
 import type { Answer, RecordingStatus, RoundState, Topic } from "./types";
 
 /** Read the persisted audio preference (default on). */
@@ -120,6 +120,12 @@ export function App() {
       .ttsStatus()
       .then((s) => setTtsAvailable(s.available))
       .catch(() => setTtsAvailable(false));
+  }, []);
+
+  // Unlock browser audio on the first user gesture so the first query readouts
+  // aren't dropped by the autoplay policy.
+  useEffect(() => {
+    installAudioUnlock();
   }, []);
 
   // Local models available for human-trial selection (Ollama only).
