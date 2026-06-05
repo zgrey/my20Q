@@ -31,6 +31,13 @@ tts = [
     # must also be downloaded and pointed at via MY20Q_PIPER_MODEL.
     "piper-tts>=1.2",
 ]
+kokoro = [
+    # Local text-to-speech (Kokoro-82M) — warmer/less robotic than piper.
+    # Used by src/my20q/tts/kokoro_tts.py. The model (.onnx) and voices (.bin)
+    # files must also be downloaded; see that module's header. Pulls numpy +
+    # onnxruntime transitively.
+    "kokoro-onnx>=0.4",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

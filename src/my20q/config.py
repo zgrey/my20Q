@@ -9,6 +9,7 @@ from typing import Literal
 
 Mode = Literal["training", "operational"]
 BackendChoice = Literal["ollama", "anthropic"]
+TTSEngineChoice = Literal["piper", "kokoro"]
 
 
 @dataclass(frozen=True)
@@ -33,13 +34,22 @@ class Config:
     mode: Mode
     recording_dir: Path
     recording_threshold_bytes: int
-    # Text-to-speech (piper, local-only — never a cloud voice). The binary
-    # and a voice model are installed on the host; until then the cockpit
-    # reports audio as unavailable and stays silent. See tts/.
+    # Text-to-speech (local-only — never a cloud voice). The engine is
+    # selectable: `piper` (fast, flat) or `kokoro` (more natural). Models are
+    # installed on the host; until then the cockpit reports audio as unavailable
+    # and stays silent. See tts/.
     tts_enabled: bool
+    tts_engine: TTSEngineChoice
     piper_bin: str
     piper_model: Path | None
     piper_timeout_s: float
+    # Kokoro (kokoro-onnx) — used when tts_engine == "kokoro". Needs the model
+    # (.onnx) and voices (.bin) files downloaded once; see tts/kokoro_tts.py.
+    kokoro_model: Path | None
+    kokoro_voices: Path | None
+    kokoro_voice: str
+    kokoro_speed: float
+    kokoro_lang: str
 
     @classmethod
     def from_env(cls) -> Config:
@@ -55,6 +65,14 @@ class Config:
 
         profile_env = os.environ.get("MY20Q_PROFILE", "").strip()
         piper_model_env = os.environ.get("MY20Q_PIPER_MODEL", "").strip()
+
+        tts_engine = os.environ.get("MY20Q_TTS_ENGINE", "piper").strip().lower()
+        if tts_engine not in ("piper", "kokoro"):
+            raise ValueError(
+                f"MY20Q_TTS_ENGINE must be 'piper' or 'kokoro', got {tts_engine!r}"
+            )
+        kokoro_model_env = os.environ.get("MY20Q_KOKORO_MODEL", "").strip()
+        kokoro_voices_env = os.environ.get("MY20Q_KOKORO_VOICES", "").strip()
 
         return cls(
             ollama_base_url=os.environ.get("MY20Q_OLLAMA_URL", "http://localhost:11434"),
@@ -79,7 +97,13 @@ class Config:
                 int(os.environ.get("MY20Q_RECORDING_THRESHOLD_MB", "25")) * 1024 * 1024
             ),
             tts_enabled=os.environ.get("MY20Q_TTS", "1") != "0",
+            tts_engine=tts_engine,  # type: ignore[arg-type]
             piper_bin=os.environ.get("MY20Q_PIPER_BIN", "piper"),
             piper_model=Path(piper_model_env) if piper_model_env else None,
             piper_timeout_s=float(os.environ.get("MY20Q_PIPER_TIMEOUT", "20")),
+            kokoro_model=Path(kokoro_model_env) if kokoro_model_env else None,
+            kokoro_voices=Path(kokoro_voices_env) if kokoro_voices_env else None,
+            kokoro_voice=os.environ.get("MY20Q_KOKORO_VOICE", "af_heart"),
+            kokoro_speed=float(os.environ.get("MY20Q_KOKORO_SPEED", "1.0")),
+            kokoro_lang=os.environ.get("MY20Q_KOKORO_LANG", "en-us"),
         )

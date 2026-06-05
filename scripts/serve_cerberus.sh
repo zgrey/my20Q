@@ -24,6 +24,14 @@ PY="$HOME/venv/Scripts/python.exe"
 export MY20Q_PIPER_BIN="${MY20Q_PIPER_BIN:-/c/Users/grey_/piper/piper/piper.exe}"
 export MY20Q_PIPER_MODEL="${MY20Q_PIPER_MODEL:-/c/Users/grey_/piper/voices/en_US-amy-medium.onnx}"
 
+# Optional Kokoro TTS (warmer voice than piper). Only used when
+# MY20Q_TTS_ENGINE=kokoro; honored from the shell if exported. Inlined below for
+# the same stale-tmux reason. Empty = stay on piper.
+export MY20Q_TTS_ENGINE="${MY20Q_TTS_ENGINE:-}"
+export MY20Q_KOKORO_MODEL="${MY20Q_KOKORO_MODEL:-}"
+export MY20Q_KOKORO_VOICES="${MY20Q_KOKORO_VOICES:-}"
+export MY20Q_KOKORO_VOICE="${MY20Q_KOKORO_VOICE:-}"
+
 # Per-LLM-call timeout. Augmented (hierarchical-zoom) reasoning makes several
 # deliberate/critique passes per question and a thinking model is slow, so the
 # 30s default is too tight — give it room before degrading to fallback.
@@ -64,7 +72,7 @@ start() {
     echo "Already running in tmux '$SESSION'.  logs: $0 logs   stop: $0 stop"
   else
     tmux new-session -d -s "$SESSION" -c "$REPO" \
-      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
+      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_TTS_ENGINE='${MY20Q_TTS_ENGINE:-}' MY20Q_KOKORO_MODEL='${MY20Q_KOKORO_MODEL:-}' MY20Q_KOKORO_VOICES='${MY20Q_KOKORO_VOICES:-}' MY20Q_KOKORO_VOICE='${MY20Q_KOKORO_VOICE:-}' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
     echo "API started in tmux '$SESSION' (127.0.0.1:$PORT)"
     if [ -n "${MY20Q_PROFILE:-}" ]; then
       echo "Profile:  $MY20Q_PROFILE  (real-patient => local LLM + recording on)"

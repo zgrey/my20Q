@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from my20q.config import Config
-from my20q.tts import PiperTTS, TTSUnavailable, select_tts
+from my20q.tts import KokoroTTS, PiperTTS, TTSUnavailable, select_tts
 
 
 def test_piper_unavailable_without_model() -> None:
@@ -37,10 +37,50 @@ def test_select_tts_disabled_returns_none() -> None:
 
 
 def test_select_tts_enabled_returns_piper() -> None:
-    cfg = replace(Config.from_env(), tts_enabled=True, piper_model=None)
+    cfg = replace(Config.from_env(), tts_enabled=True, tts_engine="piper", piper_model=None)
     engine = select_tts(cfg)
     assert isinstance(engine, PiperTTS)
     assert engine.available is False  # not installed in CI
+
+
+# ------------------------------------------------------------------- kokoro
+
+
+def test_kokoro_unavailable_without_files() -> None:
+    engine = KokoroTTS(model=None, voices=None)
+    assert engine.available is False
+    assert engine.reason != "ready"
+    assert engine.voice == "af_heart"
+    with pytest.raises(TTSUnavailable):
+        engine.synthesize("hello")
+
+
+def test_kokoro_reports_missing_files(tmp_path: Path) -> None:
+    engine = KokoroTTS(model=tmp_path / "model.onnx", voices=tmp_path / "voices.bin")
+    assert engine.available is False  # files don't exist (and/or package absent)
+    assert engine.reason != "ready"
+
+
+def test_select_tts_kokoro_returns_kokoro() -> None:
+    cfg = replace(Config.from_env(), tts_enabled=True, tts_engine="kokoro")
+    engine = select_tts(cfg)
+    assert isinstance(engine, KokoroTTS)
+
+
+def test_kokoro_to_wav_is_valid_wav() -> None:
+    np = pytest.importorskip("numpy")
+    import io
+    import wave
+
+    from my20q.tts.kokoro_tts import _to_wav
+
+    samples = (0.5 * np.sin(np.linspace(0, 6.28 * 10, 2400))).astype("float32")
+    data = _to_wav(samples, 24000)
+    with wave.open(io.BytesIO(data), "rb") as w:
+        assert w.getnchannels() == 1
+        assert w.getsampwidth() == 2
+        assert w.getframerate() == 24000
+        assert w.getnframes() == 2400
 
 
 pytest.importorskip("fastapi")
