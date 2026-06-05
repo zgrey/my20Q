@@ -68,3 +68,35 @@ Make it cheaper *before* it can earn a place in the main line:
 - prefer a fast model;
 - and **prove a quality win against the single-call baseline** before paying any
   latency for it.
+
+## Re-integration log
+
+Features are being lifted back off `augmented-reasoning` one at a time, on
+`reasoning-conditional-decouple`, each made cheaper before it lands — per the
+conditions above.
+
+### 1. Conditional reason→format decouple (2026-06-05)
+
+The Stage-1 decouple (`b05bf42`) was originally **always-on**, which doubled the
+baseline to 2 calls/question — the cost the rollback rejected. Re-integrated it
+**gated on model capability** instead:
+
+- The ask is two-phase (**deliberate** → free-form reasoning, no JSON pressure;
+  **format** → cheap thinking-off JSON) **only when the active model declares
+  the `thinking` capability** (probed once per model via Ollama `/api/show`,
+  cached). gemma4 takes this path.
+- Every other model (gemma3:12b, the fallback line) keeps the **single fast
+  call** — the rolled-back baseline is untouched.
+- Mechanism: `chat()` gains a per-call `think` override across the `LLMBackend`
+  protocol + Ollama/Anthropic/mock; `OllamaBackend.is_thinking_model()` does the
+  probe; `Reasoner.ask()` branches on it. `prompts.ask_messages` (single-call)
+  is kept alongside the new `deliberate_messages`/`format_question_messages`.
+
+This satisfies "make it cheaper first" (no baseline regression) and "prefer a
+fast model" (the slow path is opt-in by model choice). Verified live: gemma3:12b
+→ 1 call; gemma4:e4b → two-phase, valid discriminating question (~33s for the
+two calls). Tests in `tests/test_reasoner_decouple.py`.
+
+**Not yet re-integrated** (still only on `augmented-reasoning`): the augmented
+hierarchical zoom + critique passes (`7318e4e`), the reasoning-trace UI, and the
+thinking-summary call. Each must still prove a quality win before it lands.

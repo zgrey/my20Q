@@ -44,6 +44,7 @@ class AnthropicBackend:
         *,
         max_tokens: int = 200,
         json_mode: bool = False,
+        think: bool | None = None,  # no local thinking mode to toggle; ignored
     ) -> str:
         import anthropic
 

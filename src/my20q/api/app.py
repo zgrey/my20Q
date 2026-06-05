@@ -318,6 +318,12 @@ def _register_routes(app: FastAPI) -> None:
         backend.model = body.model
         state.model_label = body.model
         log.info("active model switched to %s (human-trial selection)", body.model)
+        # Warm the new model before returning so the next reasoning turn isn't a
+        # cold load that overruns the per-call timeout and drops the round to
+        # fallback. Best-effort — a failed preload just means the first turn pays
+        # the load cost as before.
+        loaded = await backend.preload()
+        log.info("preload of %s: %s", body.model, "ok" if loaded else "failed")
         return await list_models()
 
     @app.get("/api/topics", response_model=list[schemas.TopicOut])

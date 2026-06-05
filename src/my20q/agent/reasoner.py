@@ -45,6 +45,10 @@ MAX_HYPOTHESES = 10
 # produce its best questioning/reasoning without being clipped.
 SEED_MAX_TOKENS = 1024
 ASK_MAX_TOKENS = 512
+# Two-phase ask (thinking models only): deliberate gets a big ceiling so the
+# model can reason at length before drafting; format is a cheap constrained call.
+DELIBERATE_MAX_TOKENS = 2048
+FORMAT_MAX_TOKENS = 512
 SYNTH_MAX_TOKENS = 256
 EXPAND_MAX_TOKENS = 512
 
@@ -88,9 +92,13 @@ class Reasoner:
 
     # --------------------------------------------------------------- helpers
 
-    async def _chat_json(self, messages: list, max_tokens: int) -> dict:
+    async def _chat_json(
+        self, messages: list, max_tokens: int, *, think: bool | None = None
+    ) -> dict:
         try:
-            raw = await self.llm.chat(messages, max_tokens=max_tokens, json_mode=True)
+            raw = await self.llm.chat(
+                messages, max_tokens=max_tokens, json_mode=True, think=think
+            )
         except LLMUnavailable as exc:
             raise ReasonerError(f"llm unreachable: {exc}") from exc
         try:
@@ -103,6 +111,22 @@ class Reasoner:
         if data is None:
             raise ReasonerError(f"invalid JSON from LLM: {raw!r}")
         return data
+
+    async def _thinking_model(self) -> bool:
+        """Whether the active backend is a thinking model.
+
+        Gates the two-phase ask: thinking models deliberate then format so the
+        reasoning never starves the JSON; everything else keeps the fast
+        single-call path. Backends without a probe (or a failing probe) are
+        treated as non-thinking.
+        """
+        probe = getattr(self.llm, "is_thinking_model", None)
+        if probe is None:
+            return False
+        try:
+            return bool(await probe())
+        except Exception:  # never let a probe failure break the ask
+            return False
 
     # ------------------------------------------------------------- the calls
 
@@ -160,26 +184,63 @@ class Reasoner:
     ) -> ReasonerAction:
         """Propose the next discriminating yes/no question over ``candidates``.
 
+        A thinking model takes two decoupled phases — **deliberate** (free-form
+        reasoning, no JSON budget pressure) then **format** (a cheap thinking-off
+        call → strict JSON); every other model takes a single fast JSON call.
         Re-prompts (bounded) when the question fails the format audit or the
         ``yes_ids`` don't split the live belief informatively.
         """
         live_ids = {hid for hid, _, _ in candidates}
         corrections: list[str] = []
         best: ReasonerAction | None = None
+        two_phase = await self._thinking_model()
         for attempt in range(MAX_AUDIT_RETRIES + 1):
             if on_phase is not None:
                 on_phase("re-asking" if attempt else "thinking")
-            messages = prompts.ask_messages(
-                topic_label,
-                candidates,
-                history,
-                seed_context=seed_context,
-                profile_context=profile_context,
-                topic_hint=topic_hint,
-                emotional_state=emotional_state,
-                corrections=corrections,
-            )
-            data = await self._chat_json(messages, max_tokens=ASK_MAX_TOKENS)
+            if two_phase:
+                # Phase 1 — deliberate (free-form; backend-default thinking; no
+                # JSON), then Phase 2 — format the draft into strict JSON with
+                # thinking forced off.
+                deliberate_msgs = prompts.deliberate_messages(
+                    topic_label,
+                    candidates,
+                    history,
+                    seed_context=seed_context,
+                    profile_context=profile_context,
+                    topic_hint=topic_hint,
+                    emotional_state=emotional_state,
+                    corrections=corrections,
+                )
+                try:
+                    draft = await self.llm.chat(
+                        deliberate_msgs,
+                        max_tokens=DELIBERATE_MAX_TOKENS,
+                        json_mode=False,
+                    )
+                except LLMUnavailable as exc:
+                    raise ReasonerError(f"llm unreachable: {exc}") from exc
+                if not draft.strip():
+                    corrections.append(
+                        "the reasoning produced no question; state one plainly"
+                    )
+                    continue
+                data = await self._chat_json(
+                    prompts.format_question_messages(candidates, draft),
+                    max_tokens=FORMAT_MAX_TOKENS,
+                    think=False,
+                )
+            else:
+                messages = prompts.ask_messages(
+                    topic_label,
+                    candidates,
+                    history,
+                    seed_context=seed_context,
+                    profile_context=profile_context,
+                    topic_hint=topic_hint,
+                    emotional_state=emotional_state,
+                    corrections=corrections,
+                )
+                data = await self._chat_json(messages, max_tokens=ASK_MAX_TOKENS)
             question = data.get("question", "")
             if not isinstance(question, str) or not question.strip():
                 raise ReasonerError("ask: empty question")

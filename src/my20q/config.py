@@ -59,7 +59,7 @@ class Config:
         return cls(
             ollama_base_url=os.environ.get("MY20Q_OLLAMA_URL", "http://localhost:11434"),
             ollama_model=os.environ.get("MY20Q_OLLAMA_MODEL", "gemma3:12b"),
-            ollama_timeout_s=float(os.environ.get("MY20Q_OLLAMA_TIMEOUT", "30")),
+            ollama_timeout_s=float(os.environ.get("MY20Q_OLLAMA_TIMEOUT", "120")),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
             anthropic_model=os.environ.get("MY20Q_ANTHROPIC_MODEL", "claude-opus-4-7"),
             llm_backend=backend,  # type: ignore[arg-type]

@@ -47,6 +47,12 @@ _AFFIRMED = {Answer.YES.value, Answer.KINDA.value}
 EventKind = Literal["query", "synthesis", "emergency", "synthesized", "abandoned"]
 Engine = Literal["reasoning", "fallback"]
 
+#: Consecutive reasoning failures tolerated before a round gives up on the LLM
+#: for good. A single transient failure (e.g. a model still cold-loading after a
+#: runtime switch) degrades to fallback for *that turn only* and retries the next
+#: turn; only a persistent fault sticks. A success resets the streak.
+MAX_CONSEC_REASON_FAILURES = 3
+
 
 @dataclass
 class RoundEvent:
@@ -100,6 +106,9 @@ class Round:
         #: did — surfaced for diagnostics (e.g. the model bench). Empty unless
         #: a ReasonerError forced the degrade.
         self.degrade_reason: str = ""
+        #: Consecutive reasoning failures; reset on any successful reasoning turn.
+        #: Drives transient-vs-permanent degrade (see _handle_reason_failure).
+        self._consec_failures = 0
         self._reasoner = Reasoner(llm) if llm is not None else None
         # The round's *seed* candidate-need set (the belief prior), generated
         # once by the reasoner on the first advance. The active set also grows
@@ -281,7 +290,11 @@ class Round:
     # -------------------------------------------------------- internal
 
     async def _advance(self) -> RoundEvent:
-        if self.engine == "fallback":
+        # Reasoning is gone for good only when there is no reasoner — no LLM was
+        # provided, or we gave up after repeated failures. A *transient* degrade
+        # keeps the reasoner so the next turn retries (see _handle_reason_failure).
+        if self._reasoner is None:
+            self.engine = "fallback"
             return self._fallback_advance()
 
         final = self.query_count >= self.max_queries
@@ -312,7 +325,7 @@ class Round:
                 top = hyp.leader(weights)
                 leader_hyp = by_id.get(top[0]) if top else None
                 if leader_hyp is None:
-                    return self._degrade_to_fallback("no leading hypothesis")
+                    return self._permanent_fallback("no leading hypothesis")
                 action = await self._reasoner.synthesize(
                     leading_need=leader_hyp.need,
                     history=self._history,
@@ -329,9 +342,12 @@ class Round:
                     **self._reasoner_ctx(),
                 )
         except ReasonerError as exc:
-            log.warning("reasoner failed (%s) — degrading to fallback mode", exc)
-            return self._degrade_to_fallback(str(exc))
+            return self._handle_reason_failure(str(exc))
 
+        # Reasoning succeeded — clear any failure streak and resume reasoning
+        # mode (it may have been "fallback" from a transient degrade last turn).
+        self._consec_failures = 0
+        self.engine = "reasoning"
         self._pending = action
         self._pending_qid = None
         return self._event_for(action, self._belief_view(active, weights))
@@ -395,8 +411,39 @@ class Round:
             return self._event_for(self._pending, self._belief_view(active, weights))
         return self._event_for(self._pending)
 
-    def _degrade_to_fallback(self, reason: str = "") -> RoundEvent:
-        """Switch to deterministic fallback mid-round (LLM became unusable)."""
+    def _handle_reason_failure(self, reason: str) -> RoundEvent:
+        """A reasoning call failed — fall back, transiently or for good.
+
+        Falls back for *this turn only* (keeping the reasoner so the next turn
+        retries) until failures pile up to ``MAX_CONSEC_REASON_FAILURES``, then
+        gives up on reasoning for the rest of the round. A transient blip — e.g.
+        a model still cold-loading after a runtime switch, or a one-off timeout —
+        should not permanently kill the round; only a persistent fault should.
+        """
+        self._consec_failures += 1
+        self.degrade_reason = reason
+        if self._consec_failures >= MAX_CONSEC_REASON_FAILURES:
+            log.warning(
+                "reasoner failed %d× (%s) — fallback for the rest of the round",
+                self._consec_failures,
+                reason,
+            )
+            return self._permanent_fallback(reason)
+        log.warning(
+            "reasoner failed (%s) — fallback this turn, will retry next turn (%d/%d)",
+            reason,
+            self._consec_failures,
+            MAX_CONSEC_REASON_FAILURES,
+        )
+        self.engine = "fallback"
+        return self._fallback_advance()
+
+    def _permanent_fallback(self, reason: str = "") -> RoundEvent:
+        """Give up on reasoning for the rest of the round (deterministic bank).
+
+        Drops the reasoner, which is what ``_advance`` checks to stay in
+        fallback for every remaining turn.
+        """
         self.engine = "fallback"
         self.degrade_reason = reason
         self._reasoner = None

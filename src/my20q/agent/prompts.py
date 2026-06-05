@@ -61,6 +61,44 @@ Never repeat a question already in the history. Weight any [caregiver context]
 heavily. No medical advice, URLs, markup, or emoji.
 """
 
+# Thinking models take a two-phase ask: first DELIBERATE (free-form reasoning —
+# the model thinks as long as it wants, no JSON budget pressure), then FORMAT
+# (a cheap thinking-off call that turns the draft into strict JSON). This keeps
+# the thinking from starving the JSON answer. Non-thinking models skip this and
+# use the single-call ASK_SYSTEM path above.
+
+DELIBERATE_SYSTEM = """\
+You help a caregiver narrow down what a person with aphasia needs. You are given
+the current CANDIDATE needs (each with an id and a confidence) and the dialogue
+so far. Work out the SINGLE best yes/no question to ask next.
+
+A good question SPLITS the candidates — ideally about half would answer "yes" —
+and moves from the general toward the specific as the candidates narrow
+(topic → subject/action → the specific thing → its modifiers). Favour questions
+that separate WANTS from FEELINGS from BODY problems from PEOPLE.
+
+Think it through, then state the ONE question you will ask. It must be a single
+plain yes/no question the caregiver can answer yes / no / kinda / not sure —
+NEVER an either/or or multiple-choice question. Do not repeat a question already
+asked. Weight any [caregiver context] heavily. No medical advice.
+"""
+
+FORMAT_SYSTEM = """\
+Convert a drafted question into the strict format the cockpit needs.
+
+OUTPUT — STRICT JSON, nothing else:
+{"question": "...", "yes_ids": ["h2","h5"], "preface": "...", "rationale": "..."}
+
+- "question": the single yes/no question from the draft, cleaned to one plain
+  everyday sentence (no either/or).
+- "yes_ids": exactly the candidate ids whose need would answer YES to it — a
+  non-empty STRICT subset (some yes AND some no).
+- "preface": a SHORT spoken lead-in (<=12 words) read just before the question —
+  warm, plain, never just restating the question.
+- "rationale": one short sentence for the caregiver's panel; never spoken.
+No medical advice, URLs, markup, or emoji.
+"""
+
 SYNTH_SYSTEM = """\
 You phrase a person's need in their own voice for the caregiver to confirm with
 them. Given the LEADING candidate need and the dialogue so far:
@@ -216,6 +254,70 @@ def ask_messages(
     )
     return [
         {"role": "system", "content": ASK_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def deliberate_messages(
+    topic_label: str,
+    candidates: list[tuple[str, str, float]],
+    history: list[dict],
+    *,
+    seed_context: str = "",
+    profile_context: str = "",
+    topic_hint: str = "",
+    emotional_state: dict | None = None,
+    corrections: list[str] | None = None,
+) -> list[LLMMessage]:
+    """Free-form reasoning to choose the next yes/no question (no JSON).
+
+    Phase 1 of the two-phase ask used only for thinking models; the structured
+    output comes from a separate :func:`format_question_messages` call.
+    ``candidates`` is ``(id, need, weight)`` for the live hypotheses.
+    """
+    listing = "\n".join(
+        f"  {hid}: {need}  [confidence {weight:.2f}]" for hid, need, weight in candidates
+    )
+    instruction = f"Topic for this round: {topic_label}\n\n"
+    instruction += _context_block(
+        profile_context=profile_context,
+        seed_context=seed_context,
+        topic_hint=topic_hint,
+        emotional_state=emotional_state,
+    )
+    instruction += (
+        "CANDIDATE needs still in play (id: need [confidence]):\n"
+        f"{listing}\n\n"
+        f"History so far:\n{_format_history(history)}\n\n"
+    )
+    if corrections:
+        joined = "\n".join(f"  - {c}" for c in corrections)
+        instruction += (
+            "YOUR PREVIOUS ATTEMPT WAS REJECTED:\n"
+            f"{joined}\n"
+            "Choose a corrected question that splits the candidates.\n\n"
+        )
+    instruction += (
+        "Reason it through, then give the single best yes/no question to ask next."
+    )
+    return [
+        {"role": "system", "content": DELIBERATE_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def format_question_messages(
+    candidates: list[tuple[str, str, float]], draft: str
+) -> list[LLMMessage]:
+    """Turn a free-form deliberation/draft into the strict question JSON."""
+    listing = "\n".join(f"  {hid}: {need}" for hid, need, _ in candidates)
+    instruction = (
+        f"Candidate needs (id: need):\n{listing}\n\n"
+        f"Drafted reasoning / question:\n{draft}\n\n"
+        "Return the cockpit JSON for the final yes/no question."
+    )
+    return [
+        {"role": "system", "content": FORMAT_SYSTEM},
         {"role": "user", "content": instruction},
     ]
 

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 
-from my20q.agent.dialogue import Answer, Round, Session
+from my20q.agent.dialogue import MAX_CONSEC_REASON_FAILURES, Answer, Round, Session
 from my20q.agent.prompts import seed_messages
 from my20q.llm import MockBackend
+from my20q.llm.base import LLMUnavailable
 from my20q.topics import Topic, find_topic
 
 SEED_NEEDS = [
@@ -76,6 +77,60 @@ async def test_fallback_yes_synthesizes_then_confirms(topics: list[Topic]) -> No
     ev = await rnd.answer(Answer.YES)
     assert ev.kind == "synthesized"
     assert rnd.is_terminal and rnd.final_utterance
+
+
+async def test_transient_reasoner_failure_recovers_next_turn(
+    topics: list[Topic],
+) -> None:
+    # A single transient failure (e.g. a model still cold-loading after a
+    # runtime switch) must NOT permanently kill the round — it falls back for
+    # that turn, then reasoning resumes on the next turn.
+    state = {"calls": 0}
+
+    def responder(messages: list) -> str:
+        state["calls"] += 1
+        if state["calls"] == 1:  # first reasoning call (the seed) blips out
+            raise LLMUnavailable("cold load timeout")
+        system = messages[0]["content"]
+        if "candidate NEEDS to test" in system:
+            return json.dumps({"hypotheses": SEED_NEEDS})
+        if "best SPLITS" in system:
+            return json.dumps(
+                {"question": "Is it about a drink?", "yes_ids": ["h1"],
+                 "preface": "", "rationale": "x"}
+            )
+        return json.dumps({"utterance": "I would like a glass of water."})
+
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend(responder=responder))
+    ev = await rnd.open()
+    assert ev.engine == "fallback" and ev.kind == "query"  # transient degrade
+    ev = await rnd.answer(Answer.NO)
+    assert ev.engine == "reasoning" and ev.kind == "query"  # recovered
+
+
+async def test_persistent_reasoner_failure_degrades_for_good(
+    topics: list[Topic],
+) -> None:
+    # Repeated failures (a genuinely-down LLM) eventually give up on reasoning
+    # for the rest of the round; once dropped it stays fallback even if the
+    # backend would now succeed.
+    state = {"calls": 0}
+
+    def responder(messages: list) -> str:
+        state["calls"] += 1
+        if state["calls"] <= MAX_CONSEC_REASON_FAILURES:
+            raise LLMUnavailable("down")
+        return json.dumps({"hypotheses": SEED_NEEDS})  # "recovers" — too late
+
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend(responder=responder))
+    ev = await rnd.open()  # failure 1 — transient
+    for _ in range(MAX_CONSEC_REASON_FAILURES - 1):
+        ev = await rnd.answer(Answer.NO)  # failures 2..N — last one goes permanent
+    assert ev.engine == "fallback"
+    calls_after_giveup = state["calls"]
+    ev = await rnd.answer(Answer.NO)
+    assert ev.engine == "fallback"  # stays fallback
+    assert state["calls"] == calls_after_giveup  # reasoner dropped — not called
 
 
 async def test_emergency_topic_short_circuits(topics: list[Topic]) -> None:
