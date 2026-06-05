@@ -29,6 +29,14 @@ export MY20Q_PIPER_MODEL="${MY20Q_PIPER_MODEL:-/c/Users/grey_/piper/voices/en_US
 # 30s default is too tight — give it room before degrading to fallback.
 export MY20Q_OLLAMA_TIMEOUT="${MY20Q_OLLAMA_TIMEOUT:-120}"
 
+# Patient profile. Honor an explicit MY20Q_PROFILE if exported; otherwise fall
+# back to the standard real-patient location when that file is present. A real
+# profile engages the privacy invariant (local-only LLM + recording on), so we
+# only default it in when the file actually exists — never invent a path.
+if [ -z "${MY20Q_PROFILE:-}" ] && [ -f "$REPO/patient_profiles/patient.yaml" ]; then
+  export MY20Q_PROFILE="$REPO/patient_profiles/patient.yaml"
+fi
+
 magic_url() {
   local dns
   dns="$(tailscale status --json 2>/dev/null \
@@ -56,8 +64,13 @@ start() {
     echo "Already running in tmux '$SESSION'.  logs: $0 logs   stop: $0 stop"
   else
     tmux new-session -d -s "$SESSION" -c "$REPO" \
-      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
+      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
     echo "API started in tmux '$SESSION' (127.0.0.1:$PORT)"
+    if [ -n "${MY20Q_PROFILE:-}" ]; then
+      echo "Profile:  $MY20Q_PROFILE  (real-patient => local LLM + recording on)"
+    else
+      echo "Profile:  none (synthetic/dev — no recording)"
+    fi
   fi
 
   # Front it over HTTPS on the tailnet (Tailscale backgrounds this itself).
