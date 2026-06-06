@@ -34,6 +34,15 @@
 - id: mental_health
   label: My feelings
   description: Emotional or mental state the patient wants to communicate.
+  # Feelings topic: physical wants (thirst, toilet, ...) are off-topic noise here.
+  seed_universal_wants: false
+  reasoning_hint: |
+    Stay on FEELINGS and emotional states — loneliness, fear, worry about loved
+    ones, frustration (especially at not being understood), sadness, boredom,
+    anger, restlessness, and positive feelings like wanting joy or company. Do
+    NOT seed physical needs (thirst, hunger, toilet, pain, temperature) — those
+    belong to the body topic. Lean on the patient profile for what they care
+    about and worry about.
   fallback_questions:
     - id: mh_anxious
       label: Worried or scared
@@ -76,6 +85,8 @@
   description: >-
     Family the patient wants to communicate about. Replace per-patient with
     real names via the caregiver profile (Phase 5).
+  # People topic: physical wants are off-topic; seed about the people instead.
+  seed_universal_wants: false
   reasoning_hint: |
     HARD EXCLUSION: never ask about physical or descriptive attributes of
     these people — appearance, age, height, weight, build, clothing, hair,

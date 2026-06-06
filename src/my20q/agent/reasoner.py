@@ -138,6 +138,7 @@ class Reasoner:
         profile_context: str = "",
         topic_hint: str = "",
         emotional_state: dict | None = None,
+        seed_universal_wants: bool = True,
         on_phase: Callable[[str], None] | None = None,
     ) -> list[Hypothesis]:
         """Propose the round's candidate needs (the belief's prior)."""
@@ -149,6 +150,7 @@ class Reasoner:
             profile_context=profile_context,
             topic_hint=topic_hint,
             emotional_state=emotional_state,
+            include_universal_wants=seed_universal_wants,
         )
         data = await self._chat_json(messages, max_tokens=SEED_MAX_TOKENS)
         items = data.get("hypotheses")

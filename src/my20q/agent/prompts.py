@@ -24,17 +24,25 @@ OUTPUT — STRICT JSON, nothing else:
 {"hypotheses": ["I'm thirsty and want a drink", "My foot hurts", ...]}
 
 - 6 to 10 items, each ONE short FIRST-PERSON need.
-- ALWAYS include the most common everyday needs, phrased naturally, EVEN IF the
-  topic seems narrow: being thirsty / wanting a drink, being hungry / wanting
-  food, needing the toilet, being in pain, and being too hot or too cold. A
-  basic want like thirst is easy to miss under a "body" topic — do not skip it.
-- THEN add items specific to the topic, spread across kinds — do not pile into
-  one: WANT (an object, to move), FEEL (lonely, scared, frustrated, tired),
-  WRONG/body (nausea, dizziness, weakness), PEOPLE (see or contact someone).
+- Stay ANCHORED to this topic. Cover several DISTINCT facets OF THIS TOPIC — do
+  not pile into one near-duplicate cluster. When topic guidance is given below,
+  spread across the facets it names; do NOT drift into other topics' territory
+  (e.g. no body complaints under a feelings or people topic).
+- GROUND them in the PATIENT PROFILE when one is given — use the person's actual
+  people, routines, and known concerns rather than generic placeholders.
 - Concrete, everyday words. Make them mutually DISTINCT so a yes/no question
   can tell them apart, and broad enough that the real need is likely among them.
 - No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
 """
+
+# Injected into the seed instruction only for topics with
+# ``seed_universal_wants`` (body / catch-all). Off-topic for feelings/people.
+_UNIVERSAL_WANTS = (
+    "ALSO include the most common everyday physical needs, phrased naturally, "
+    "EVEN IF the topic seems narrow: being thirsty / wanting a drink, being "
+    "hungry / wanting food, needing the toilet, being in pain, and being too hot "
+    "or too cold. A basic want like thirst is easy to miss — do not skip it."
+)
 
 ASK_SYSTEM = """\
 You help narrow down what a person with aphasia needs. You are given the current
@@ -193,8 +201,14 @@ def seed_messages(
     profile_context: str = "",
     topic_hint: str = "",
     emotional_state: dict | None = None,
+    include_universal_wants: bool = True,
 ) -> list[LLMMessage]:
-    """Ask the LLM for the round's candidate-need set (the belief prior)."""
+    """Ask the LLM for the round's candidate-need set (the belief prior).
+
+    ``include_universal_wants`` mirrors the topic's ``seed_universal_wants``: when
+    False (feelings, people, ...) the generic physical wants are NOT injected, so
+    they don't crowd out topic-appropriate, profile-grounded candidates.
+    """
     instruction = f"Topic for this round: {topic_label}\n\n"
     instruction += _context_block(
         profile_context=profile_context,
@@ -202,9 +216,11 @@ def seed_messages(
         topic_hint=topic_hint,
         emotional_state=emotional_state,
     )
+    if include_universal_wants:
+        instruction += _UNIVERSAL_WANTS + "\n\n"
     instruction += (
-        "List the candidate needs as strict JSON. Spread them across "
-        "want / feel / body / people, concrete and mutually distinct."
+        "List the candidate needs as strict JSON, anchored to the topic, "
+        "concrete and mutually distinct, grounded in the profile when given."
     )
     return [
         {"role": "system", "content": SEED_SYSTEM},

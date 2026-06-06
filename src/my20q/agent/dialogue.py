@@ -316,7 +316,8 @@ class Round:
             # Seed the candidate-need set once, on the first advance.
             if not self._seed_hypotheses:
                 self._seed_hypotheses = await self._reasoner.seed_hypotheses(
-                    **self._reasoner_ctx()
+                    seed_universal_wants=self.topic.seed_universal_wants,
+                    **self._reasoner_ctx(),
                 )
             active, weights = self._replay_belief()
             by_id = {h.id: h for h in active}

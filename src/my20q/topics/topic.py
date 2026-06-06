@@ -43,6 +43,16 @@ class Topic(BaseModel):
         default=None,
         description="Topic-scoped guidance threaded into the reasoning-mode prompt.",
     )
+    seed_universal_wants: bool = Field(
+        default=True,
+        description=(
+            "Whether seeding always injects the universal physical wants "
+            "(thirst, hunger, toilet, pain, temperature). True for body / "
+            "catch-all topics where a basic need is easy to miss; set False for "
+            "topics like feelings or people, where those wants are off-topic "
+            "noise that crowds out profile-grounded candidates."
+        ),
+    )
     image: str | None = Field(
         default=None,
         description="Optional curated pictogram override for the topic itself.",
