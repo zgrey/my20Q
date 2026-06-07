@@ -66,7 +66,9 @@ class Config:
         profile_env = os.environ.get("MY20Q_PROFILE", "").strip()
         piper_model_env = os.environ.get("MY20Q_PIPER_MODEL", "").strip()
 
-        tts_engine = os.environ.get("MY20Q_TTS_ENGINE", "piper").strip().lower()
+        # An empty value (e.g. the serve script exporting MY20Q_TTS_ENGINE='')
+        # means "unset" — fall back to the default rather than rejecting it.
+        tts_engine = (os.environ.get("MY20Q_TTS_ENGINE") or "piper").strip().lower()
         if tts_engine not in ("piper", "kokoro"):
             raise ValueError(
                 f"MY20Q_TTS_ENGINE must be 'piper' or 'kokoro', got {tts_engine!r}"

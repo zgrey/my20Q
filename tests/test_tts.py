@@ -67,6 +67,13 @@ def test_select_tts_kokoro_returns_kokoro() -> None:
     assert isinstance(engine, KokoroTTS)
 
 
+def test_empty_tts_engine_env_defaults_to_piper(monkeypatch) -> None:
+    # The serve script exports MY20Q_TTS_ENGINE='' (empty) — that must mean
+    # "unset", not an invalid value that crashes config / the whole API.
+    monkeypatch.setenv("MY20Q_TTS_ENGINE", "")
+    assert Config.from_env().tts_engine == "piper"
+
+
 def test_kokoro_to_wav_is_valid_wav() -> None:
     np = pytest.importorskip("numpy")
     import io
