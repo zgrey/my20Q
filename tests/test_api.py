@@ -33,14 +33,10 @@ def _controller_backend(
         system = messages[0]["content"]
         if "candidate NEEDS to test" in system:
             return json.dumps({"hypotheses": seed})
-        if "best SPLITS" in system:
-            return json.dumps(
-                {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "r"}
-            )
-        if "sharpen" in system:  # clarify / deepen the leading need
+        if "pin down the ONE specific" in system:  # ask / drill
             state["n"] += 1
             return json.dumps(
-                {"question": f"Is it about detail {state['n']}?", "preface": "", "rationale": "d"}
+                {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "r"}
             )
         return json.dumps({"utterance": utterance})
 

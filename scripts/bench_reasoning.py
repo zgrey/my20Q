@@ -66,8 +66,8 @@ console = Console(legacy_windows=False)
 
 # Full sweep + small-model baselines. Override with --models.
 DEFAULT_MODELS: list[str] = [
-    "gemma3:12b",  # current production default
-    "gemma4:e4b",
+    "gemma4:e4b",  # current production default (thinking; drills best)
+    "gemma3:12b",
     "gemma4:26b",  # spills past 16 GB VRAM — slow, but tests "bigger reasons better"
     "gemma3:4b",  # baseline
     "llama3.2:3b",  # baseline

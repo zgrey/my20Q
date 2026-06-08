@@ -58,7 +58,10 @@ class Config:
 
         return cls(
             ollama_base_url=os.environ.get("MY20Q_OLLAMA_URL", "http://localhost:11434"),
-            ollama_model=os.environ.get("MY20Q_OLLAMA_MODEL", "gemma3:12b"),
+            # gemma4:e4b (a thinking model) — drills down a warm trail far better
+            # than gemma3:12b, which wandered laterally. Two-phase + slower, but
+            # the quality win is worth it for the questioning. Swap via env.
+            ollama_model=os.environ.get("MY20Q_OLLAMA_MODEL", "gemma4:e4b"),
             ollama_timeout_s=float(os.environ.get("MY20Q_OLLAMA_TIMEOUT", "120")),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or None,
             anthropic_model=os.environ.get("MY20Q_ANTHROPIC_MODEL", "claude-opus-4-7"),

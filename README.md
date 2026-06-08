@@ -28,13 +28,15 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
   SSE progress channel, JSONL recording/export, and **local piper TTS**
   (voice readouts of queries/utterances; review auto-play reads each step).
 - **Reasoning controller** ✓ A **confirmation-driven** hypothesis controller
-  (LLM does language, `agent/hypotheses.py` does control). Each turn it either
-  **discriminates** (most-splitting yes/no over the belief, anchored to the
-  affirmed cluster), **deepens** (confirms/sharpens the frontrunner once one
-  emerges), or **synthesizes** — but **only after ≥5 "yes" confirmations** on a
-  concentrated leader, so it never guesses on thin evidence. There's no question
-  budget; a stuck round ends gracefully via a no-progress check. The cockpit's
-  reasoning tile renders the live belief. Mechanism + known risks:
+  (LLM does language, `agent/hypotheses.py` does control). Candidate needs carry
+  **additive points** — a "yes" adds points to the need a question targeted,
+  "kinda" is a softer "warm" signal, a "no" subtracts from that need only (it
+  never promotes the others; scores are not normalized). Each turn it asks the
+  next yes/no question that **drills more specific** along the warm trail
+  (body → leg → foot → big toe), and **synthesizes only after ≥5 "yes"
+  confirmations** — building the utterance from the confirmed trail. It **never
+  terminates early**: it keeps questioning until the gate is met. The cockpit's
+  reasoning tile renders the live points. Mechanism + known risks:
   `tool-summary.html` (local) and `docs/design/reasoning-retro.md`.
 - **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
   graph write path).
@@ -42,11 +44,11 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 ## Terminology
 
 Three-tier scale: **Session** (one open→close) ⊃ **Round** (one convergence
-attempt under a single topic, ending on synthesis / topic change / no-progress /
-session end) ⊃ **Query** (one generated question). **Synthesis is readiness-driven**
-(a concentrated leader confirmed by ≥5 yeses), never count-driven; there is no
-question budget by default — `MY20Q_MAX_QUERIES` is only an optional hard safety
-ceiling that stops a round without forcing an utterance.
+attempt under a single topic, ending on synthesis / topic change / session end)
+⊃ **Query** (one generated question). **Synthesis fires only after ≥5 "yes"
+confirmations** on the leading need; the round **never terminates early** on its
+own. There is no question budget by default — `MY20Q_MAX_QUERIES` is only an
+optional hard safety ceiling that stops a round without forcing an utterance.
 
 ## Privacy invariant
 
@@ -70,7 +72,7 @@ Optional — local LLM for reasoning mode:
 
 ```bash
 ollama serve &
-ollama pull gemma3:12b                   # default; any Ollama model works
+ollama pull gemma4:e4b                   # default (thinking model); any Ollama model works
 ```
 
 Optional — local TTS (piper). On Linux/macOS `pip install -e ".[tts]"` provides
@@ -127,7 +129,7 @@ and CLI):
 | `MY20Q_LLM` | `1` | Set `0` to disable the LLM (same as `--no-llm`) |
 | `MY20Q_BACKEND` | `ollama` | `ollama` / `anthropic` (anthropic gated off for real patients) |
 | `MY20Q_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
-| `MY20Q_OLLAMA_MODEL` | `gemma3:12b` | Ollama model tag (thinking models supported) |
+| `MY20Q_OLLAMA_MODEL` | `gemma4:e4b` | Ollama model tag (a thinking model; drills best) |
 | `MY20Q_OLLAMA_TIMEOUT` | `120` | Per-call timeout (s); the runaway guard for uncapped reasoning |
 | `MY20Q_ANTHROPIC_MODEL` | — | Anthropic model (synthetic personas only) |
 | `MY20Q_MAX_QUERIES` | `0` | `0` = unlimited; positive = hard safety ceiling (same as `--max-queries`) |

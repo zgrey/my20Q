@@ -23,7 +23,7 @@ A working dialogue engine with Ollama, exercised from a terminal before any UI.
   tests.
 
 **Verification**: `pytest` green; `python -m my20q` completes a full dialogue
-against `gemma3:12b`, or in `--no-llm` fallback mode.
+against `gemma4:e4b` (default), or in `--no-llm` fallback mode.
 
 The trials of this MVP motivated the retool — see `design/beta-retool.md` §1.
 The dialogue engine here is the seed for the Phase 2 cockpit.

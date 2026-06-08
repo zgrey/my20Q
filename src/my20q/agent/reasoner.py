@@ -25,23 +25,17 @@ from typing import Literal
 
 from my20q.agent import prompts
 from my20q.agent.auditor import audit_query
-from my20q.agent.hypotheses import Hypothesis, is_balanced
+from my20q.agent.hypotheses import Hypothesis
 from my20q.agent.safety import sanitize_llm_text, sanitize_utterance
 from my20q.llm.base import LLMBackend, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-#: How many times a query failing the audit/balance check is re-proposed.
+#: How many times a query failing the format audit is re-proposed.
 MAX_AUDIT_RETRIES = 2
 #: Bounds on the seed candidate set.
 MIN_HYPOTHESES = 4
 MAX_HYPOTHESES = 10
-#: A proposed question whose yes_ids overlap a recent question's this much
-#: (Jaccard) is treated as a near-repeat and re-prompted — this is what stops the
-#: reasoner re-slicing the same group of candidates over and over.
-REDUNDANCY_JACCARD = 0.8
-#: How many recent queries the redundancy check compares against.
-REDUNDANCY_WINDOW = 4
 
 # Output ceilings (num_predict). These are NOT a cost limit — inference is local
 # and free — they only guard against a runaway/looping generation hanging the
@@ -82,13 +76,6 @@ class ReasonerAction:
 
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
-
-
-def _jaccard(a: set[str], b: set[str]) -> float:
-    """Overlap of two id sets in [0, 1]; 0 if either is empty."""
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
 
 
 def _extract_json(raw: str) -> dict | None:
@@ -198,7 +185,6 @@ class Reasoner:
         *,
         topic_label: str,
         candidates: list[tuple[str, str, float]],
-        weights: dict[str, float],
         history: list[dict],
         seed_context: str = "",
         profile_context: str = "",
@@ -207,25 +193,19 @@ class Reasoner:
         anchored: bool = False,
         on_phase: Callable[[str], None] | None = None,
     ) -> ReasonerAction:
-        """Propose the next discriminating yes/no question over ``candidates``.
+        """Propose the next yes/no question, drilling toward the exact need.
 
-        A thinking model takes two decoupled phases — **deliberate** (free-form
-        reasoning, no JSON budget pressure) then **format** (a cheap thinking-off
-        call → strict JSON); every other model takes a single fast JSON call.
-        Re-prompts (bounded) when the question fails the format audit or the
-        ``yes_ids`` don't split the live belief informatively.
+        Builds on the warm trail: a recent "yes" means that question was correct
+        (get MORE specific about it); "kinda" means nearly correct (drill into it);
+        "no" means wrong (move away). ``yes_ids`` marks the candidate(s) the
+        question relates to (a "yes" adds points to them). A thinking model takes
+        the two-phase deliberate→format path; every other model takes one fast
+        JSON call. Re-prompts (bounded) on a format-audit failure.
         """
         live_ids = {hid for hid, _, _ in candidates}
         corrections: list[str] = []
         best: ReasonerAction | None = None
         two_phase = await self._thinking_model()
-        # Splits of recent questions — a new question that re-slices the same
-        # group is a near-repeat (the "circular questioning" failure mode).
-        recent_yes_sets = [
-            {str(x) for x in h.get("yes_ids", [])}
-            for h in history
-            if h.get("kind") == "query" and h.get("yes_ids")
-        ][-REDUNDANCY_WINDOW:]
         for attempt in range(MAX_AUDIT_RETRIES + 1):
             if on_phase is not None:
                 on_phase("re-asking" if attempt else "thinking")
@@ -312,32 +292,21 @@ class Reasoner:
             if not verdict.ok:
                 corrections.append(verdict.reason)
                 continue
-            if not yes_set or yes_set == live_ids:
+            # The question must relate to at least one live candidate (a "yes"
+            # has to credit some need). No balance/split requirement — a narrow,
+            # specific drill question is exactly what we want.
+            if not yes_set:
                 corrections.append(
-                    "yes_ids must mark SOME but not ALL candidates — a real split"
-                )
-                continue
-            if not is_balanced(weights, yes_set):
-                corrections.append(
-                    "the split was too lopsided; ask something about half would "
-                    "answer yes"
-                )
-                continue
-            if any(_jaccard(yes_set, prev) >= REDUNDANCY_JACCARD for prev in recent_yes_sets):
-                corrections.append(
-                    "that question splits the SAME group as a recent one — open a "
-                    "different dimension (a different feeling, or its cause), not a "
-                    "reworded repeat"
+                    "tag yes_ids with the candidate(s) a 'yes' would confirm"
                 )
                 continue
             return action
 
-        # Retries exhausted — accept a best effort that at least splits the set,
-        # rather than dead-ending the round; flag it for the caregiver.
-        if best is not None and best.yes_ids and set(best.yes_ids) != live_ids:
-            best.rationale = f"(imperfect split accepted) {best.rationale}".strip()
+        # Retries exhausted — accept the best effort rather than dead-end.
+        if best is not None and best.yes_ids:
+            best.rationale = f"(imperfect question accepted) {best.rationale}".strip()
             return best
-        raise ReasonerError("ask: could not produce a discriminating question")
+        raise ReasonerError("ask: could not produce a usable question")
 
     async def expand_hypotheses(
         self,
@@ -434,56 +403,6 @@ class Reasoner:
             content=cleaned,
             rationale="Proposed from the leading candidate need.",
         )
-
-    async def clarify(
-        self,
-        *,
-        topic_label: str,
-        leading_need: str,
-        leader_id: str,
-        history: list[dict],
-        seed_context: str = "",
-        profile_context: str = "",
-        topic_hint: str = "",
-        emotional_state: dict | None = None,
-        on_phase: Callable[[str], None] | None = None,
-    ) -> ReasonerAction:
-        """A confirming/sharpening yes/no question about the leading need.
-
-        The deepen phase: a frontrunner has emerged but not enough yes answers to
-        synthesize, so we gather positive confirmation (and refine the detail)
-        rather than guess early. The returned query carries ``yes_ids=[leader_id]``
-        so a "yes" both counts toward the synthesis gate and reinforces the leader;
-        a "no" is a soft down-weight that lets the round re-broaden.
-        """
-        corrections: list[str] = []
-        for attempt in range(MAX_AUDIT_RETRIES + 1):
-            if on_phase is not None:
-                on_phase("re-asking" if attempt else "thinking")
-            data = await self._chat_json(
-                prompts.clarify_messages(
-                    topic_label,
-                    leading_need,
-                    history,
-                    seed_context=seed_context,
-                    profile_context=profile_context,
-                    topic_hint=topic_hint,
-                    emotional_state=emotional_state,
-                    corrections=corrections,
-                ),
-                max_tokens=ASK_MAX_TOKENS,
-            )
-            question = data.get("question", "")
-            cleaned = sanitize_llm_text(question) if isinstance(question, str) else ""
-            if not cleaned:
-                corrections.append("question was unusable; ask one plainly")
-                continue
-            verdict = audit_query(cleaned)
-            if not verdict.ok:
-                corrections.append(verdict.reason)
-                continue
-            return self._ask_action(cleaned, [leader_id], data.get("preface", ""), data)
-        raise ReasonerError("clarify: could not produce a confirming question")
 
     def _ask_action(
         self, question: str, yes_ids: list[str], preface_raw: object, data: dict

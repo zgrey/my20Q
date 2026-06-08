@@ -7,7 +7,6 @@ import json
 from my20q.agent.dialogue import (
     MAX_CONSEC_REASON_FAILURES,
     MIN_YES_FOR_SYNTHESIS,
-    STALL_QUERIES,
     Answer,
     Round,
     Session,
@@ -38,32 +37,6 @@ def test_multi_need_no_does_not_eliminate(topics: list[Topic]) -> None:
     rnd._history = [{"kind": "query", "text": "q", "answer": "no", "yes_ids": ["h1", "h2"]}]
     _, weights = rnd._replay_belief()
     assert {"h1", "h2"} <= set(weights)
-
-
-def test_is_stalled_detects_no_progress(topics: list[Topic]) -> None:
-    # STALL_QUERIES uninformative queries (each touching every need => uniform
-    # update) leave the belief unmoved -> stalled.
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 4)]
-    rnd._history = [
-        {"kind": "query", "text": f"q{i}", "answer": "yes", "yes_ids": ["h1", "h2", "h3"]}
-        for i in range(STALL_QUERIES)
-    ]
-    _, weights = rnd._replay_belief()
-    assert rnd._is_stalled(weights) is True
-
-
-def test_is_stalled_false_while_converging(topics: list[Topic]) -> None:
-    # A leader emerging (confidence rising as a need is repeatedly affirmed) is
-    # progress, not a stall.
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 9)]
-    rnd._history = [
-        {"kind": "query", "text": f"q{i}", "answer": "yes", "yes_ids": ["h1"]}
-        for i in range(STALL_QUERIES)
-    ]
-    _, weights = rnd._replay_belief()
-    assert rnd._is_stalled(weights) is False
 
 
 def test_rejected_synthesis_eliminates_the_need(topics: list[Topic]) -> None:
@@ -117,18 +90,12 @@ def _controller_backend(
             return json.dumps({"hypotheses": seed})
         if "HIGH-TRUST context" in system:
             return json.dumps({"hypotheses": expand or [], "boost_ids": boost or []})
-        if "best SPLITS" in system:
+        if "pin down the ONE specific" in system:  # ask / drill
             i = min(state["ask"], len(asks) - 1)
             state["ask"] += 1
             question, yes_ids = asks[i]
             return json.dumps(
-                {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "split"}
-            )
-        if "sharpen" in system:  # clarify / deepen the leading need
-            state["clarify"] = state.get("clarify", 0) + 1
-            return json.dumps(
-                {"question": f"Is it about detail {state['clarify']}?",
-                 "preface": "", "rationale": "deepen"}
+                {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "drill"}
             )
         return json.dumps({"utterance": utterance})  # synthesize
 
@@ -172,7 +139,7 @@ async def test_transient_reasoner_failure_recovers_next_turn(
         system = messages[0]["content"]
         if "candidate NEEDS to test" in system:
             return json.dumps({"hypotheses": SEED_NEEDS})
-        if "best SPLITS" in system:
+        if "pin down the ONE specific" in system:
             return json.dumps(
                 {"question": "Is it about a drink?", "yes_ids": ["h1"],
                  "preface": "", "rationale": "x"}

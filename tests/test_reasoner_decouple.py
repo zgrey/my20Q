@@ -17,8 +17,7 @@ from my20q.llm import MockBackend
 _GOOD = json.dumps(
     {"question": "Is it inside the house?", "yes_ids": ["h1"], "rationale": "x"}
 )
-_CANDIDATES = [("h1", "it is inside", 0.5), ("h2", "it is outside", 0.5)]
-_WEIGHTS = {"h1": 0.5, "h2": 0.5}
+_CANDIDATES = [("h1", "it is inside", 0.0), ("h2", "it is outside", 0.0)]
 
 
 async def test_non_thinking_model_uses_a_single_call() -> None:
@@ -27,7 +26,6 @@ async def test_non_thinking_model_uses_a_single_call() -> None:
     action = await reasoner.ask(
         topic_label="My body",
         candidates=_CANDIDATES,
-        weights=_WEIGHTS,
         history=[],
     )
     assert action.content == "Is it inside the house?"
@@ -59,7 +57,6 @@ async def test_thinking_model_uses_two_phase_deliberate_then_format() -> None:
     action = await reasoner.ask(
         topic_label="My body",
         candidates=_CANDIDATES,
-        weights=_WEIGHTS,
         history=[],
     )
     assert action.content == "Is it inside the house?"

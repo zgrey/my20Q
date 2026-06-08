@@ -1,148 +1,85 @@
-"""Tests for the pure belief logic behind the reasoning controller."""
+"""Tests for the additive point-scoring belief behind the reasoning controller."""
 
 from __future__ import annotations
 
 from my20q.agent.hypotheses import (
-    PRUNE_EPS,
-    SYNTH_THRESHOLD,
+    KINDA_POINTS,
+    NO_POINTS,
+    YES_POINTS,
     Hypothesis,
     anchor_focus,
     apply_context,
-    is_balanced,
     leader,
     live_ids,
     ranked,
     recompute,
-    seed_weights,
-    should_synthesize,
-    split_balance,
-    update_weights,
+    seed_scores,
+    update_score,
 )
 
 H = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 5)]  # h1..h4
 
 
-def test_anchor_focus_no_affirmations_keeps_full_set() -> None:
-    rl = ranked(H, seed_weights(H))
-    focused, anchored = anchor_focus(rl, affirmed=set())
-    assert anchored is False
-    assert [h.id for h, _ in focused] == [h.id for h, _ in rl]
+def test_seed_scores_start_at_zero() -> None:
+    s = seed_scores(H)
+    assert set(s) == {"h1", "h2", "h3", "h4"}
+    assert all(v == 0.0 for v in s.values())
 
 
-def test_anchor_focus_restricts_to_affirmed_cluster() -> None:
-    rl = ranked(H, seed_weights(H))
-    focused, anchored = anchor_focus(rl, affirmed={"h2", "h3"})
+def test_yes_adds_points_to_targeted_only() -> None:
+    s = update_score(seed_scores(H), {"h1"}, "yes")
+    assert s["h1"] == YES_POINTS
+    assert s["h2"] == 0.0 and s["h3"] == 0.0  # untargeted needs are untouched
+
+
+def test_kinda_is_a_partial_positive() -> None:
+    s = update_score(seed_scores(H), {"h2"}, "kinda")
+    assert s["h2"] == KINDA_POINTS
+    assert 0.0 < KINDA_POINTS < YES_POINTS
+
+
+def test_no_subtracts_targeted_only_and_never_promotes_others() -> None:
+    s = update_score(seed_scores(H), {"h1"}, "no")
+    assert s["h1"] == -NO_POINTS
+    assert s["h2"] == 0.0 and s["h3"] == 0.0  # a "no" must NOT promote the others
+
+
+def test_not_sure_changes_nothing() -> None:
+    s = update_score(seed_scores(H), {"h1"}, "yes")
+    assert update_score(s, {"h1"}, "not_sure") == s
+
+
+def test_scores_do_not_sum_to_one() -> None:
+    s = update_score(seed_scores(H), {"h1", "h2"}, "yes")
+    assert abs(sum(s.values()) - 2 * YES_POINTS) < 1e-9  # additive, not normalized
+
+
+def test_leader_is_highest_points() -> None:
+    s = recompute(H, [({"h1"}, "yes"), ({"h2"}, "yes"), ({"h2"}, "yes")])
+    assert leader(s)[0] == "h2"
+
+
+def test_repeated_no_eliminates_a_need() -> None:
+    s = seed_scores(H)
+    for _ in range(3):  # drive h1 below the eliminate floor
+        s = update_score(s, {"h1"}, "no")
+    assert "h1" not in live_ids(s)
+    assert leader(s)[0] != "h1"
+
+
+def test_apply_context_adds_strong_points() -> None:
+    s = apply_context(seed_scores(H), ["h5"], ["h1"])
+    assert s["h5"] > 0.0 and s["h1"] > 0.0
+
+
+def test_anchor_focus_restricts_to_warm_cluster() -> None:
+    s = recompute(H, [({"h2"}, "kinda")])
+    focused, anchored = anchor_focus(ranked(H, s), {"h2"})
     assert anchored is True
-    assert {h.id for h, _ in focused} == {"h2", "h3"}  # never-affirmed h1/h4 dropped
+    assert {h.id for h, _ in focused} == {"h2"}  # cold needs dropped
 
 
-def test_anchor_focus_needs_a_pair_to_restrict() -> None:
-    # A single affirmed need can't be split — keep the full set (synthesis will
-    # fire on its own once the belief concentrates).
-    rl = ranked(H, seed_weights(H))
-    focused, anchored = anchor_focus(rl, affirmed={"h2"})
+def test_anchor_focus_keeps_full_set_when_nothing_warm() -> None:
+    focused, anchored = anchor_focus(ranked(H, seed_scores(H)), set())
     assert anchored is False
-    assert len(focused) == len(rl)
-
-
-def test_seed_weights_uniform() -> None:
-    w = seed_weights(H)
-    assert set(w) == {"h1", "h2", "h3", "h4"}
-    assert all(abs(v - 0.25) < 1e-9 for v in w.values())
-    assert abs(sum(w.values()) - 1) < 1e-9
-
-
-def test_seed_weights_empty() -> None:
-    assert seed_weights([]) == {}
-
-
-def test_yes_upweights_the_yes_set_and_normalizes() -> None:
-    w = seed_weights(H)
-    w2 = update_weights(w, {"h1", "h2"}, "yes")
-    assert w2["h1"] > w["h1"]
-    assert w2["h3"] < w["h3"]
-    assert abs(sum(w2.values()) - 1) < 1e-9
-
-
-def test_no_upweights_the_complement() -> None:
-    w = seed_weights(H)
-    w2 = update_weights(w, {"h1"}, "no")
-    assert w2["h1"] < w["h1"]
-    assert w2["h2"] > w["h2"]
-
-
-def test_kinda_is_a_softer_yes() -> None:
-    w = seed_weights(H)
-    yes = update_weights(w, {"h1"}, "yes")
-    kinda = update_weights(w, {"h1"}, "kinda")
-    assert w["h1"] < kinda["h1"] < yes["h1"]
-
-
-def test_not_sure_carries_no_information() -> None:
-    w = seed_weights(H)
-    assert update_weights(w, {"h1", "h2"}, "not_sure") == w
-
-
-def test_recompute_equals_sequential_folding() -> None:
-    pairs = [({"h1", "h2"}, "yes"), ({"h1"}, "no")]
-    manual = seed_weights(H)
-    for yes_ids, ans in pairs:
-        manual = update_weights(manual, yes_ids, ans)
-    assert recompute(H, pairs) == manual
-
-
-def test_live_ids_prunes_eliminated() -> None:
-    w = seed_weights(H)
-    for _ in range(5):
-        w = update_weights(w, {"h1", "h2"}, "yes")
-    assert set(live_ids(w)) == {"h1", "h2"}
-    assert all(w[k] < PRUNE_EPS for k in ("h3", "h4"))
-
-
-def test_leader_and_synthesis_trigger() -> None:
-    w = seed_weights(H)
-    assert not should_synthesize(w)  # uniform over 4 — keep asking
-    for _ in range(6):
-        w = update_weights(w, {"h1"}, "yes")
-    lid, lw = leader(w)
-    assert lid == "h1" and lw >= SYNTH_THRESHOLD
-    assert should_synthesize(w)
-
-
-def test_should_synthesize_when_one_live() -> None:
-    assert should_synthesize({"h1": 0.99, "h2": 0.001})
-
-
-def test_split_balance_and_is_balanced() -> None:
-    w = seed_weights(H)
-    assert abs(split_balance(w, {"h1", "h2"}) - 0.5) < 1e-9
-    assert is_balanced(w, {"h1", "h2"})
-    assert not is_balanced(w, set())  # nobody answers yes
-    assert not is_balanced(w, {"h1", "h2", "h3", "h4"})  # everybody does
-
-
-def test_apply_context_makes_a_confirmed_need_lead() -> None:
-    w = seed_weights(H)  # uniform over 4
-    w2 = apply_context(w, [], ["h1"])  # the note confirms existing h1
-    assert abs(sum(w2.values()) - 1) < 1e-9
-    assert w2["h1"] > 0.6  # one strong note -> clear leader
-    assert w2["h1"] > w2["h2"]
-
-
-def test_apply_context_inserts_a_new_need_on_top() -> None:
-    w = {"h1": 0.5, "h2": 0.5}
-    w2 = apply_context(w, ["h3"], [])
-    assert "h3" in w2
-    assert w2["h3"] > w2["h1"]
-
-
-def test_apply_context_is_noop_when_nothing() -> None:
-    w = {"h1": 0.6, "h2": 0.4}
-    assert apply_context(w, [], []) == w
-
-
-def test_ranked_is_sorted_descending() -> None:
-    w = update_weights(seed_weights(H), {"h2"}, "yes")
-    r = ranked(H, w)
-    assert r[0][0].id == "h2"
-    assert all(r[i][1] >= r[i + 1][1] for i in range(len(r) - 1))
+    assert len(focused) == 4

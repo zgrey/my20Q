@@ -77,7 +77,7 @@ for development.
 
 | Topic | Choice | Rationale |
 |-------|--------|-----------|
-| LLM runtime | **Ollama** | Simple HTTP API, easy model swap (default `gemma3:12b`) |
+| LLM runtime | **Ollama** | Simple HTTP API, easy model swap (default `gemma4:e4b`) |
 | LLM interface | **Abstracted behind `LLMBackend`** | llama.cpp / vLLM / Anthropic swap-in |
 | Dev-trial backend | **Anthropic (Opus)** | Strong model for iterating agentic logic — **synthetic personas only**, see Privacy |
 | Backend framework | **FastAPI** | Async, typed, SSE/WebSocket streaming |
@@ -162,7 +162,7 @@ Local LLM prerequisite:
 
 ```bash
 ollama serve &
-ollama pull gemma3:12b           # default
+ollama pull gemma4:e4b           # default (thinking model; drills best)
 ```
 
 Gate the integration test against a real Ollama instance:

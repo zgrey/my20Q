@@ -42,34 +42,9 @@ async def test_ask_reprompts_until_query_passes() -> None:
     reasoner = Reasoner(MockBackend(responder=responder))
     action = await reasoner.ask(
         topic_label="My body",
-        candidates=[("h1", "it is inside", 0.5), ("h2", "it is outside", 0.5)],
-        weights={"h1": 0.5, "h2": 0.5},
+        candidates=[("h1", "it is inside", 0.0), ("h2", "it is outside", 0.0)],
         history=[],
     )
     assert action.kind == "query"
     assert action.content == "Is it inside the house?"  # the re-prompted, clean query
     assert action.yes_ids == ["h1"]
-
-
-async def test_ask_rejects_a_question_that_reslices_a_recent_split() -> None:
-    # Anti-redundancy: a question whose yes_ids repeat a recent question's split
-    # is re-prompted, so the reasoner stops circling the same axis.
-    repeat = json.dumps(
-        {"question": "Is it about water?", "yes_ids": ["h1", "h2"], "rationale": "x"}
-    )
-    novel = json.dumps({"question": "Is it your foot?", "yes_ids": ["h1"], "rationale": "x"})
-    state = {"i": 0}
-
-    def responder(_msgs: list) -> str:
-        out = [repeat, novel][min(state["i"], 1)]
-        state["i"] += 1
-        return out
-
-    reasoner = Reasoner(MockBackend(responder=responder))
-    action = await reasoner.ask(
-        topic_label="My body",
-        candidates=[("h1", "a", 0.5), ("h2", "b", 0.3), ("h3", "c", 0.2)],
-        weights={"h1": 0.5, "h2": 0.3, "h3": 0.2},
-        history=[{"kind": "query", "text": "q", "answer": "yes", "yes_ids": ["h1", "h2"]}],
-    )
-    assert action.content == "Is it your foot?"  # the {h1,h2} re-slice was rejected

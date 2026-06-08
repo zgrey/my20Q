@@ -168,3 +168,33 @@ advantage**. Conclusion (now fair): thinking models *work*, but do not beat the
 gemma3:12b workhorse here — default stays gemma3:12b, thinking models available
 and no longer crippled, so the choice is informed. A cockpit thinking-trace (from
 `augmented-reasoning`) would be the right tool to evaluate them further.
+
+### 4. Additive point scoring + drill-down; gemma4:e4b default (2026-06-08)
+
+A live trial with a KNOWN hidden target ("pain in my right big toe") exposed that
+the §1–3 model still failed: it synthesized prematurely then dropped to fallback,
+over-fit the patient profile, and gave up after ~10 questions. Recording:
+`patient_data/Paula/a2d9...jsonl`. Owner's three directives drove a third model:
+
+- **Additive points, no normalization** (`hypotheses.py` rewrite). Scores
+  accumulate: yes +1, kinda +0.5, **no −1 to the targeted need ONLY** — a "no"
+  never promotes the leader (the normalized model let it win by elimination).
+  Scores need not sum to 1; the 0.65 concentration threshold and the balanced
+  -split requirement are gone.
+- **Synthesis only after ≥5 "yes" confirmations**, and the round **never
+  terminates early** — the no-progress terminator was removed. It keeps drilling
+  until the gate is met (or topic change / ceiling). Synthesis builds the utterance
+  from the *confirmed trail*, not just the leader label.
+- **kinda = "warm" drives specificity.** `ask` reads the yes/kinda trail and asks
+  one step MORE specific (body → leg → foot → big toe); narrow questions are
+  encouraged. The `clarify`/deepen split, the balance check, and the id-based
+  redundancy guard were removed (they blocked legitimate same-need drilling).
+- **Seeds mix generic + specific** and deliberately do NOT over-fit the profile.
+
+**Validation (sim, sharpened oracle).** gemma4:e4b rode leg → ankle → foot →
+toes → big toe, hit 5 yeses, synthesized "My big toe hurts, …" — the target,
+which was never seeded. gemma3:12b wandered laterally and never converged.
+**→ default changed to gemma4:e4b** (it drills; gemma3 does not), other models
+still available. Open risks (rounds can run forever; kinda never reaches the gate;
+anchoring can lock a wrong warm area; model-dependent drilling) are tracked in
+`tool-summary.html`.

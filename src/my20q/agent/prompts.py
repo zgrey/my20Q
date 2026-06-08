@@ -25,13 +25,18 @@ OUTPUT — STRICT JSON, nothing else:
 
 - 6 to 10 items, each ONE short FIRST-PERSON need.
 - Stay ANCHORED to this topic. Cover several DISTINCT facets OF THIS TOPIC — do
-  not pile into one near-duplicate cluster. When topic guidance is given below,
-  spread across the facets it names; do NOT drift into other topics' territory
-  (e.g. no body complaints under a feelings or people topic).
-- GROUND them in the PATIENT PROFILE when one is given — use the person's actual
-  people, routines, and known concerns rather than generic placeholders.
-- Concrete, everyday words. Make them mutually DISTINCT so a yes/no question
-  can tell them apart, and broad enough that the real need is likely among them.
+  not pile into one near-duplicate cluster; do NOT drift into other topics'
+  territory (e.g. no body complaints under a feelings or people topic).
+- MIX generic and specific. Include BROAD, common needs anyone could have in this
+  topic (these are starting points to narrow from) AND a few SPECIFIC ones — but
+  do NOT over-fit to the patient profile. The real need is often a plain, specific
+  thing the profile never mentions (a particular body part, a specific object);
+  the questioning will narrow to it, so the seeds only need to be good
+  starting points, not the exact answer.
+- GROUND some in the PATIENT PROFILE when given (named people, routines,
+  concerns); keep others generic so an un-profiled need is still reachable.
+- Concrete, everyday words. Make them mutually DISTINCT, and broad enough that the
+  real need is reachable by narrowing from one of them.
 - No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
 """
 
@@ -45,34 +50,35 @@ _UNIVERSAL_WANTS = (
 )
 
 ASK_SYSTEM = """\
-You help narrow down what a person with aphasia needs. You are given the current
-CANDIDATE needs (each with an id). Ask the ONE yes/no question that best SPLITS
-them — ideally about half of them would answer "yes".
+You help pin down the ONE specific thing a person with aphasia is trying to say.
+You are given CANDIDATE needs (each with an id and accumulated POINTS — higher =
+more confirmed) and the dialogue so far. Ask the next yes/no question that gets
+CLOSER to the exact need.
+
+Read the answers so far as a trail:
+- a recent "yes" means that question was CORRECT — now get MORE SPECIFIC within it
+  (e.g. body → leg → foot → big toe; a want → which object → which detail);
+- "kinda" means NEARLY correct — drill into that same area to pin it down;
+- "no" means wrong — move away from it;
+- "not sure" — try a different angle.
 
 OUTPUT — STRICT JSON, nothing else:
-{"question": "...", "yes_ids": ["h2","h5"], "preface": "...", "rationale": "..."}
+{"question": "...", "yes_ids": ["h2"], "preface": "...", "rationale": "..."}
 
 - "question": ONE plain yes/no question, ~8-16 everyday words. The caregiver can
-  only answer yes, no, kinda, or not sure — so NEVER an either/or or
-  multiple-choice question ("Is it A or B?"). Pick one idea and ask it plainly.
-  Separate the candidates along a real dimension — a different feeling, a
-  different cause, or a different person — moving from general toward the
-  specific as they narrow. Once it is clear WHICH need, drill INTO it.
-- "yes_ids": exactly the candidate ids whose need would answer YES to your
-  question. It MUST be a non-empty STRICT subset (some yes AND some no) — that
-  split is what makes the question informative.
-- "preface": a SHORT spoken lead-in (<=12 words) read to the person right before
-  the question — warm, plain, varies each turn, gives gentle context, never just
-  restates the question.
+  only answer yes / no / kinda / not sure — so NEVER an either/or or
+  multiple-choice question ("Is it A or B?"). It is GOOD to be narrow and
+  specific (e.g. "Is the pain in your foot?"); you do NOT need to split the
+  candidates in half. Build directly on the most recent yes/kinda — go one step
+  more specific. Never re-ask a question already in the history.
+- "yes_ids": the candidate id(s) a "yes" would confirm or relate to (>=1). If the
+  question drills into a more specific version of a candidate, tag that candidate.
+- "preface": a SHORT spoken lead-in (<=12 words) — warm, varies each turn, never
+  just restates the question.
 - "rationale": one short sentence for the caregiver's panel; never spoken.
 
-DRILL IN, DON'T CIRCLE. Each question must open a NEW dimension or narrow toward
-the specific need — never re-ask a prior question in different words, and never
-re-slice the same group of candidates.
-BANNED — vague meta-questions about whether the person WANTS to talk, share,
-express, tell someone, or "let people know" how they feel. Everyone answers yes,
-so they reveal nothing. Ask the SUBSTANCE instead: which feeling, how strong, and
-what or who it is about.
+BANNED — vague meta-questions about whether the person WANTS to talk / share /
+express how they feel (everyone says yes — no information). Ask the SUBSTANCE.
 Weight any [caregiver context] heavily. No medical advice, URLs, markup, or emoji.
 """
 
@@ -83,24 +89,21 @@ Weight any [caregiver context] heavily. No medical advice, URLs, markup, or emoj
 # use the single-call ASK_SYSTEM path above.
 
 DELIBERATE_SYSTEM = """\
-You help a caregiver narrow down what a person with aphasia needs. You are given
-the current CANDIDATE needs (each with an id and a confidence) and the dialogue
-so far. Work out the SINGLE best yes/no question to ask next.
+You help pin down the ONE specific thing a person with aphasia is trying to say.
+You are given CANDIDATE needs (each with an id and accumulated POINTS — higher =
+more confirmed) and the dialogue so far. Work out the SINGLE best yes/no question
+to ask next.
 
-A good question SPLITS the candidates — ideally about half would answer "yes" —
-and moves from the general toward the specific as the candidates narrow
-(topic → subject/action → the specific thing → its modifiers). Favour questions
-that separate the candidates along a real dimension — a different feeling, a
-different cause, or a different person. Once it is clear WHICH need, drill INTO it.
+Read the answers as a trail: a recent "yes" = that was correct, get MORE SPECIFIC
+within it (body → leg → foot → big toe); "kinda" = nearly correct, drill into that
+area; "no" = wrong, move away; "not sure" = try another angle. It is GOOD to be
+narrow and specific — you do NOT need to split the candidates in half.
 
-Think it through, then state the ONE question you will ask. It must be a single
-plain yes/no question the caregiver can answer yes / no / kinda / not sure —
-NEVER an either/or or multiple-choice question.
-DRILL IN, DON'T CIRCLE: open a NEW dimension or narrow toward the specific need;
-never re-ask a prior question in different words or re-slice the same group.
-BANNED — vague meta-questions about whether they WANT to talk / share / express /
-tell someone how they feel (everyone says yes). Ask the SUBSTANCE: which feeling,
-how strong, what or who it is about.
+Think it through, then state the ONE question. It must be a single plain yes/no
+question (yes / no / kinda / not sure) — never an either/or. Build on the most
+recent yes/kinda, one step more specific. Never re-ask a prior question.
+BANNED — vague meta-questions about whether they WANT to talk / share how they
+feel (everyone says yes). Ask the SUBSTANCE.
 Weight any [caregiver context] heavily. No medical advice.
 """
 
@@ -112,8 +115,8 @@ OUTPUT — STRICT JSON, nothing else:
 
 - "question": the single yes/no question from the draft, cleaned to one plain
   everyday sentence (no either/or).
-- "yes_ids": exactly the candidate ids whose need would answer YES to it — a
-  non-empty STRICT subset (some yes AND some no).
+- "yes_ids": the candidate id(s) a "yes" would confirm or relate to (>=1); if the
+  draft drills into a more specific version of a candidate, tag that candidate.
 - "preface": a SHORT spoken lead-in (<=12 words) read just before the question —
   warm, plain, never just restating the question.
 - "rationale": one short sentence for the caregiver's panel; never spoken.
@@ -122,34 +125,19 @@ No medical advice, URLs, markup, or emoji.
 
 SYNTH_SYSTEM = """\
 You phrase a person's need in their own voice for the caregiver to confirm with
-them. Given the LEADING candidate need and the dialogue so far:
+them. You are given a LEADING candidate need and the dialogue so far.
 
 OUTPUT — STRICT JSON, nothing else:
 {"utterance": "..."}
 
+- BUILD FROM THE CONFIRMED TRAIL, not just the leading-need label. Read every
+  yes/kinda answer in the history and incorporate those specific details — they
+  are what the person actually confirmed (e.g. yeses on "pain", "your foot",
+  "your big toe" → "I have pain in my right big toe", NOT just "my foot hurts").
 - "utterance": ONE complete FIRST-PERSON sentence, natural and concrete, ~6-16
-  words ("I would like a glass of water.", "I feel lonely and would like someone
-  to sit with me."). Build on the leading need and what the answers confirmed.
+  words. Specific over generic.
 - No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
 """
-
-CLARIFY_SYSTEM = """\
-A person with aphasia has nearly settled on ONE need (given below). Before we put
-words to it we need to be SURE — confirm it and sharpen it. Ask the ONE yes/no
-question that pins down a specific, NEW detail of THIS need: its cause, the person
-it involves, the place/time, or how strong it is.
-
-OUTPUT — STRICT JSON, nothing else:
-{"question": "...", "preface": "...", "rationale": "..."}
-
-- "question": ONE plain yes/no question, ~8-16 everyday words, about THIS need —
-  NEVER an either/or, and NEVER a vague "do you want to talk about it" (that adds
-  nothing). It must add a detail not already asked in the history.
-- "preface": a SHORT spoken lead-in (<=12 words) — warm, never just a restatement.
-- "rationale": one short sentence for the caregiver's panel; never spoken.
-No medical advice, URLs, markup, or emoji.
-"""
-
 
 EXPAND_SYSTEM = """\
 A caregiver or medical professional just added a NOTE about what the person with
@@ -262,10 +250,9 @@ def seed_messages(
 #: needs (see hypotheses.anchor_focus) — tells the model these are confirmed and
 #: the job is to drill in, not re-open the field.
 _ANCHOR_NOTE = (
-    "ALREADY CONFIRMED — every candidate below is something the person has "
-    "answered YES to. Do NOT introduce anything new: your question must clarify "
-    "WHICH of these it is, or a specific aspect of it (its cause, the person "
-    "involved, or how strong it is).\n\n"
+    "WARM AREA — the candidates below are what the person has already confirmed "
+    "(yes) or warmed to (kinda). Drill DEEPER here to get more specific; do not "
+    "wander off to cold needs.\n\n"
 )
 
 
@@ -281,13 +268,14 @@ def ask_messages(
     corrections: list[str] | None = None,
     anchored: bool = False,
 ) -> list[LLMMessage]:
-    """Ask for the next discriminating yes/no question over ``candidates``.
+    """Ask for the next drilling yes/no question over ``candidates``.
 
-    ``candidates`` is ``(id, need, weight)`` for the live hypotheses. ``anchored``
-    marks that the set is restricted to already-affirmed needs (drill-in mode).
+    ``candidates`` is ``(id, need, score)`` for the live hypotheses (score =
+    accumulated points). ``anchored`` marks the set is restricted to the warm
+    cluster (drill-in mode).
     """
     listing = "\n".join(
-        f"  {hid}: {need}  [confidence {weight:.2f}]" for hid, need, weight in candidates
+        f"  {hid}: {need}  [points {score:+.1f}]" for hid, need, score in candidates
     )
     instruction = f"Topic for this round: {topic_label}\n\n"
     instruction += _context_block(
@@ -299,7 +287,7 @@ def ask_messages(
     if anchored:
         instruction += _ANCHOR_NOTE
     instruction += (
-        "CANDIDATE needs still in play (id: need [confidence]):\n"
+        "CANDIDATE needs in play (id: need [points]):\n"
         f"{listing}\n\n"
         f"History so far:\n{_format_history(history)}\n\n"
     )
@@ -308,10 +296,10 @@ def ask_messages(
         instruction += (
             "YOUR PREVIOUS ATTEMPT WAS REJECTED:\n"
             f"{joined}\n"
-            "Produce a corrected question that splits the candidates.\n\n"
+            "Produce a corrected yes/no question.\n\n"
         )
     instruction += (
-        'Return the single best yes/no question and its "yes_ids" as strict JSON.'
+        'Return the next yes/no question and its "yes_ids" as strict JSON.'
     )
     return [
         {"role": "system", "content": ASK_SYSTEM},
@@ -335,11 +323,11 @@ def deliberate_messages(
 
     Phase 1 of the two-phase ask used only for thinking models; the structured
     output comes from a separate :func:`format_question_messages` call.
-    ``candidates`` is ``(id, need, weight)`` for the live hypotheses. ``anchored``
-    marks that the set is restricted to already-affirmed needs (drill-in mode).
+    ``candidates`` is ``(id, need, score)`` for the live hypotheses. ``anchored``
+    marks the set is restricted to the warm cluster (drill-in mode).
     """
     listing = "\n".join(
-        f"  {hid}: {need}  [confidence {weight:.2f}]" for hid, need, weight in candidates
+        f"  {hid}: {need}  [points {score:+.1f}]" for hid, need, score in candidates
     )
     instruction = f"Topic for this round: {topic_label}\n\n"
     instruction += _context_block(
@@ -351,7 +339,7 @@ def deliberate_messages(
     if anchored:
         instruction += _ANCHOR_NOTE
     instruction += (
-        "CANDIDATE needs still in play (id: need [confidence]):\n"
+        "CANDIDATE needs in play (id: need [points]):\n"
         f"{listing}\n\n"
         f"History so far:\n{_format_history(history)}\n\n"
     )
@@ -360,7 +348,7 @@ def deliberate_messages(
         instruction += (
             "YOUR PREVIOUS ATTEMPT WAS REJECTED:\n"
             f"{joined}\n"
-            "Choose a corrected question that splits the candidates.\n\n"
+            "Choose a corrected yes/no question.\n\n"
         )
     instruction += (
         "Reason it through, then give the single best yes/no question to ask next."
@@ -448,49 +436,5 @@ def synthesize_messages(
     )
     return [
         {"role": "system", "content": SYNTH_SYSTEM},
-        {"role": "user", "content": instruction},
-    ]
-
-
-def clarify_messages(
-    topic_label: str,
-    leading_need: str,
-    history: list[dict],
-    *,
-    seed_context: str = "",
-    profile_context: str = "",
-    topic_hint: str = "",
-    emotional_state: dict | None = None,
-    corrections: list[str] | None = None,
-) -> list[LLMMessage]:
-    """Ask one confirming/sharpening yes/no question about the leading need.
-
-    The deepen phase: a frontrunner has emerged but not enough yeses to synthesize,
-    so we gather positive confirmation and refine the detail before wording it.
-    """
-    instruction = f"Topic for this round: {topic_label}\n\n"
-    instruction += _context_block(
-        profile_context=profile_context,
-        seed_context=seed_context,
-        topic_hint=topic_hint,
-        emotional_state=emotional_state,
-    )
-    instruction += (
-        f"The person has nearly settled on this need:\n  \"{leading_need}\"\n\n"
-        f"History so far:\n{_format_history(history)}\n\n"
-    )
-    if corrections:
-        joined = "\n".join(f"  - {c}" for c in corrections)
-        instruction += (
-            "YOUR PREVIOUS ATTEMPT WAS REJECTED:\n"
-            f"{joined}\n"
-            "Ask a corrected yes/no question about this need.\n\n"
-        )
-    instruction += (
-        "Ask ONE yes/no question that confirms or sharpens a NEW detail of this "
-        "need, as strict JSON."
-    )
-    return [
-        {"role": "system", "content": CLARIFY_SYSTEM},
         {"role": "user", "content": instruction},
     ]

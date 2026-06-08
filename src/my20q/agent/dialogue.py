@@ -52,19 +52,12 @@ Engine = Literal["reasoning", "fallback"]
 #: runtime switch) degrades to fallback for *that turn only* and retries the next
 #: turn; only a persistent fault sticks. A success resets the streak.
 MAX_CONSEC_REASON_FAILURES = 3
-#: No-progress terminator. With no question budget, a round must still stop if it
-#: stops converging. If, over this many recent queries, the belief has not moved
-#: (same leader, no more confident, live set not smaller), the round is stuck and
-#: ends — gracefully, WITHOUT forcing an utterance. This replaces the old "20"
-#: count with a principled "keep asking only while making progress" rule.
-STALL_QUERIES = 6
-#: A leader must gain more than this share to count as "more confident".
-STALL_EPS = 0.05
 #: An utterance is never synthesized until the caregiver has given at least this
 #: many "yes" answers — positive confirmation that the round is on the right need.
-#: Concentration or elimination-to-one is NOT sufficient (it produced premature,
-#: wrong guesses). Until then the round keeps questioning (discriminate, then
-#: deepen the frontrunner).
+#: The round NEVER terminates early on its own: it keeps questioning (drilling
+#: more specific on each yes/kinda) until the gate is met, then synthesizes from
+#: the confirmed trail. Only a topic change, session end, or an explicit positive
+#: max_queries safety ceiling can stop it before then.
 MIN_YES_FOR_SYNTHESIS = 5
 
 
@@ -333,32 +326,21 @@ class Round:
                     seed_universal_wants=self.topic.seed_universal_wants,
                     **self._reasoner_ctx(),
                 )
-            active, weights = self._replay_belief()
+            active, scores = self._replay_belief()
             by_id = {h.id: h for h in active}
-            top = hyp.leader(weights)
-            leader_hyp = by_id.get(top[0]) if top else None
-            concentrated = top is not None and top[1] >= hyp.SYNTH_THRESHOLD
-            # Positive-evidence gate: an utterance is never proposed until the
-            # caregiver has confirmed with at least MIN_YES_FOR_SYNTHESIS "yes"
-            # answers. Concentration alone (or elimination-to-one) is not enough —
-            # that produced premature, wrong guesses.
+            # Positive-evidence gate: synthesize ONLY after the caregiver has given
+            # >= MIN_YES_FOR_SYNTHESIS "yes" answers. Otherwise keep questioning —
+            # the round never terminates early on its own. (Each yes/kinda drives
+            # the next question MORE specific; see prompts.ask_messages.)
             yes_count = sum(
                 1
                 for e in self._history
                 if e.get("kind") == "query" and e.get("answer") == Answer.YES.value
             )
-            ready = concentrated and yes_count >= MIN_YES_FOR_SYNTHESIS
 
-            if not ready and self._is_stalled(weights):
-                # Belief has stopped moving — keep questioning only while making
-                # progress; a stuck round ends gracefully, no forced utterance.
-                self._outcome = "abandoned"
-                self.degrade_reason = "no progress"
-                return RoundEvent(
-                    kind="abandoned", query_index=self.query_count, engine=self.engine
-                )
-
-            if ready:
+            if yes_count >= MIN_YES_FOR_SYNTHESIS:
+                top = hyp.leader(scores)
+                leader_hyp = by_id.get(top[0]) if top else None
                 if leader_hyp is None:
                     return self._permanent_fallback("no leading hypothesis")
                 action = await self._reasoner.synthesize(
@@ -367,35 +349,21 @@ class Round:
                     **self._reasoner_ctx(),
                 )
                 action.hyp_id = leader_hyp.id
-            elif concentrated:
-                # A frontrunner has emerged but not enough confirmation yet —
-                # DEEPEN: confirm/sharpen the leading need to gather more yes
-                # answers (toward MIN_YES_FOR_SYNTHESIS) before putting it into
-                # words. This keeps the round in reasoning rather than synthesizing
-                # early or dropping to fallback.
-                if leader_hyp is None:
-                    return self._permanent_fallback("no leading hypothesis")
-                action = await self._reasoner.clarify(
-                    leading_need=leader_hyp.need,
-                    leader_id=leader_hyp.id,
-                    history=self._history,
-                    **self._reasoner_ctx(),
-                )
             else:
-                # Discriminate. Anchor on "yes" content: once needs have been
-                # affirmed, drill into that confirmed cluster instead of drifting
-                # to needs the person never agreed to (see reasoning-retro).
-                affirmed = {
+                # Drill. Anchor on warm content: once any need has been confirmed
+                # (yes) or warmed (kinda), focus questions there and get MORE
+                # specific to pin down the exact need, instead of drifting to cold
+                # needs or asking laterally.
+                warm = {
                     str(x)
                     for e in self._history
                     if e.get("kind") == "query" and e.get("answer") in _AFFIRMED
                     for x in (e.get("yes_ids") or [])
                 }
-                focused, anchored = hyp.anchor_focus(hyp.ranked(active, weights), affirmed)
-                candidates = [(h.id, h.need, w) for h, w in focused]
+                focused, anchored = hyp.anchor_focus(hyp.ranked(active, scores), warm)
+                candidates = [(h.id, h.need, s) for h, s in focused]
                 action = await self._reasoner.ask(
                     candidates=candidates,
-                    weights=weights,
                     history=self._history,
                     anchored=anchored,
                     **self._reasoner_ctx(),
@@ -409,7 +377,7 @@ class Round:
         self.engine = "reasoning"
         self._pending = action
         self._pending_qid = None
-        return self._event_for(action, self._belief_view(active, weights))
+        return self._event_for(action, self._belief_view(active, scores))
 
     def _reasoner_ctx(self) -> dict:
         """Shared keyword context passed to every reasoner call."""
@@ -422,93 +390,52 @@ class Round:
             "on_phase": self.on_phase,
         }
 
-    def _replay_belief(
-        self, history: list[dict] | None = None
-    ) -> tuple[list[Hypothesis], dict[str, float]]:
-        """Rebuild the active hypothesis set and its weights from history.
+    def _replay_belief(self) -> tuple[list[Hypothesis], dict[str, float]]:
+        """Rebuild the active hypothesis set and its additive scores from history.
 
-        Walks events in order so undo is just pop-and-recompute (pass an explicit
-        ``history`` slice to rebuild the belief as of an earlier point — used by
-        the no-progress check):
-        - start from the seed prior;
-        - a [caregiver context] entry that added hypotheses inserts them at a
-          boosted prior (high-trust context outranks the seeds);
-        - a query folds its yes/no split; a single-need "no" eliminates it;
-        - a *rejected* synthesis eliminates the need it proposed.
+        Walks events in order so undo is just pop-and-recompute:
+        - start from zeroed seed scores;
+        - a [caregiver context] entry inserts the needs it implies and adds
+          high-trust points to them;
+        - a query adds points to the needs it targeted (yes/kinda positive, no
+          subtracts from those needs only — never promotes the others);
+        - a *rejected* synthesis eliminates the need it proposed (so the same
+          guess can't be re-led).
         """
         active = list(self._seed_hypotheses)
-        weights = hyp.seed_weights(active)
+        scores = hyp.seed_scores(active)
         eliminated: set[str] = set()
-        history = self._history if history is None else history
-        for h in history:
+        for h in self._history:
             kind = h["kind"]
             if kind == "context":
                 added = h.get("added") or []
                 boost = h.get("boost") or []
                 if added or boost:
                     active = active + [Hypothesis(a["id"], a["need"]) for a in added]
-                    weights = hyp.apply_context(
-                        weights, [a["id"] for a in added], boost
+                    scores = hyp.apply_context(
+                        scores, [a["id"] for a in added], boost
                     )
             elif kind == "query":
                 answer = h.get("answer")
                 if answer:
-                    # "no" stays a SOFT down-weight (never an elimination): hard
-                    # elimination collapsed the field so fast that synthesis fired
-                    # on the last-standing need before it was actually confirmed.
-                    # Convergence is positive-evidence-driven (yes), not by noes.
-                    weights = hyp.update_weights(weights, set(h.get("yes_ids", [])), answer)
+                    scores = hyp.update_score(scores, set(h.get("yes_ids", [])), answer)
             elif kind == "synthesis":
                 answer = h.get("answer")
                 if answer and answer != Answer.YES.value and h.get("hyp_id"):
-                    # A rejected synthesis ELIMINATES that need for the rest of the
-                    # round. A soft down-weight let a later generic "yes" targeting
-                    # the same need revive it, and the round looped re-proposing the
-                    # identical utterance (see reasoning-retro). Drop it entirely so
-                    # it can neither lead a synthesis nor be a question target again.
                     eliminated.add(h["hyp_id"])
         if eliminated:
             active = [h for h in active if h.id not in eliminated]
-            weights = {k: v for k, v in weights.items() if k not in eliminated}
-            total = sum(weights.values())
-            if total > 0:  # ratios among survivors are preserved
-                weights = {k: v / total for k, v in weights.items()}
-        return active, weights
-
-    def _history_before_last_n_queries(self, n: int) -> list[dict]:
-        """The history prefix as it stood ``n`` queries ago (for the stall check)."""
-        seen = 0
-        for i in range(len(self._history) - 1, -1, -1):
-            if self._history[i].get("kind") == "query":
-                seen += 1
-                if seen == n:
-                    return self._history[:i]
-        return []
-
-    def _is_stalled(self, weights: dict[str, float]) -> bool:
-        """True when the belief has not moved over the last ``STALL_QUERIES``.
-
-        No progress = the leader is no more confident AND the live set has not
-        shrunk. (We do NOT require the *same* leader — an oscillating leader stuck
-        near 50/50 is precisely the stall we must catch.) Deterministic from
-        history, so undo stays consistent.
-        """
-        if self.query_count < STALL_QUERIES:
-            return False
-        _, past = self._replay_belief(self._history_before_last_n_queries(STALL_QUERIES))
-        now_leader, past_leader = hyp.leader(weights), hyp.leader(past)
-        if now_leader is None or past_leader is None:
-            return False
-        no_confidence_gain = now_leader[1] <= past_leader[1] + STALL_EPS
-        no_field_reduction = len(hyp.live_ids(weights)) >= len(hyp.live_ids(past))
-        return no_confidence_gain and no_field_reduction
+            scores = {k: v for k, v in scores.items() if k not in eliminated}
+        return active, scores
 
     def _belief_view(
-        self, active: list[Hypothesis], weights: dict[str, float]
+        self, active: list[Hypothesis], scores: dict[str, float]
     ) -> list[dict]:
+        # The honest tile shows raw accumulated points (can be 0 / negative), not
+        # a normalized probability — that is the actual belief now.
         return [
-            {"need": h.need, "weight": round(w, 3)}
-            for h, w in hyp.ranked(active, weights)
+            {"need": h.need, "weight": round(s, 3)}
+            for h, s in hyp.ranked(active, scores)
         ]
 
     def _pending_event(self) -> RoundEvent:
