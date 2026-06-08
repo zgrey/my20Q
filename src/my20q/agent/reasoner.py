@@ -36,6 +36,12 @@ MAX_AUDIT_RETRIES = 2
 #: Bounds on the seed candidate set.
 MIN_HYPOTHESES = 4
 MAX_HYPOTHESES = 10
+#: A proposed question whose yes_ids overlap a recent question's this much
+#: (Jaccard) is treated as a near-repeat and re-prompted — this is what stops the
+#: reasoner re-slicing the same group of candidates over and over.
+REDUNDANCY_JACCARD = 0.8
+#: How many recent queries the redundancy check compares against.
+REDUNDANCY_WINDOW = 4
 
 # Output ceilings (num_predict). These are NOT a cost limit — inference is local
 # and free — they only guard against a runaway/looping generation hanging the
@@ -45,9 +51,13 @@ MAX_HYPOTHESES = 10
 # produce its best questioning/reasoning without being clipped.
 SEED_MAX_TOKENS = 1024
 ASK_MAX_TOKENS = 512
-# Two-phase ask (thinking models only): deliberate gets a big ceiling so the
-# model can reason at length before drafting; format is a cheap constrained call.
-DELIBERATE_MAX_TOKENS = 2048
+# Two-phase ask (thinking models only): the deliberate phase is the REASONING
+# phase — do NOT token-cap it, or a verbose thinking model gets truncated
+# mid-thought and emits nothing (we then can't judge whether its reasoning was
+# any good). -1 = generate until the model stops naturally; latency is bounded by
+# the per-call timeout, which is the proper runaway guard. The format phase stays
+# cheap and capped (it only emits the JSON).
+DELIBERATE_MAX_TOKENS = -1
 FORMAT_MAX_TOKENS = 512
 SYNTH_MAX_TOKENS = 256
 EXPAND_MAX_TOKENS = 512
@@ -74,6 +84,13 @@ class ReasonerAction:
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
 
 
+def _jaccard(a: set[str], b: set[str]) -> float:
+    """Overlap of two id sets in [0, 1]; 0 if either is empty."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
 def _extract_json(raw: str) -> dict | None:
     """Best-effort JSON extraction when the model wraps output in prose."""
     match = _JSON_OBJECT_RE.search(raw)
@@ -93,8 +110,13 @@ class Reasoner:
     # --------------------------------------------------------------- helpers
 
     async def _chat_json(
-        self, messages: list, max_tokens: int, *, think: bool | None = None
+        self, messages: list, max_tokens: int, *, think: bool | None = False
     ) -> dict:
+        # Structured-JSON calls (seed, format, expand, synthesize) force thinking
+        # OFF by default: on a thinking model a rich prompt makes the chain-of-
+        # thought eat the whole num_predict budget before the JSON is emitted, so
+        # Ollama returns empty content and the round wrongly degrades to fallback.
+        # Free-form reasoning belongs in ask()'s separate `deliberate` phase.
         try:
             raw = await self.llm.chat(
                 messages, max_tokens=max_tokens, json_mode=True, think=think
@@ -182,6 +204,7 @@ class Reasoner:
         profile_context: str = "",
         topic_hint: str = "",
         emotional_state: dict | None = None,
+        anchored: bool = False,
         on_phase: Callable[[str], None] | None = None,
     ) -> ReasonerAction:
         """Propose the next discriminating yes/no question over ``candidates``.
@@ -196,6 +219,13 @@ class Reasoner:
         corrections: list[str] = []
         best: ReasonerAction | None = None
         two_phase = await self._thinking_model()
+        # Splits of recent questions — a new question that re-slices the same
+        # group is a near-repeat (the "circular questioning" failure mode).
+        recent_yes_sets = [
+            {str(x) for x in h.get("yes_ids", [])}
+            for h in history
+            if h.get("kind") == "query" and h.get("yes_ids")
+        ][-REDUNDANCY_WINDOW:]
         for attempt in range(MAX_AUDIT_RETRIES + 1):
             if on_phase is not None:
                 on_phase("re-asking" if attempt else "thinking")
@@ -212,6 +242,7 @@ class Reasoner:
                     topic_hint=topic_hint,
                     emotional_state=emotional_state,
                     corrections=corrections,
+                    anchored=anchored,
                 )
                 try:
                     draft = await self.llm.chat(
@@ -219,8 +250,24 @@ class Reasoner:
                         max_tokens=DELIBERATE_MAX_TOKENS,
                         json_mode=False,
                     )
-                except LLMUnavailable as exc:
-                    raise ReasonerError(f"llm unreachable: {exc}") from exc
+                except LLMUnavailable:
+                    # A thinking model can spend the whole budget thinking and
+                    # return EMPTY content (Ollama reports this as "empty
+                    # response"); a big model never even finishes the thought.
+                    # Don't kill the round — retry the draft with thinking OFF so
+                    # we still get a question. A genuinely down backend will fail
+                    # this retry too and surface as a ReasonerError.
+                    draft = ""
+                if not draft.strip():
+                    try:
+                        draft = await self.llm.chat(
+                            deliberate_msgs,
+                            max_tokens=DELIBERATE_MAX_TOKENS,
+                            json_mode=False,
+                            think=False,
+                        )
+                    except LLMUnavailable as exc:
+                        raise ReasonerError(f"llm unreachable: {exc}") from exc
                 if not draft.strip():
                     corrections.append(
                         "the reasoning produced no question; state one plainly"
@@ -241,6 +288,7 @@ class Reasoner:
                     topic_hint=topic_hint,
                     emotional_state=emotional_state,
                     corrections=corrections,
+                    anchored=anchored,
                 )
                 data = await self._chat_json(messages, max_tokens=ASK_MAX_TOKENS)
             question = data.get("question", "")
@@ -273,6 +321,13 @@ class Reasoner:
                 corrections.append(
                     "the split was too lopsided; ask something about half would "
                     "answer yes"
+                )
+                continue
+            if any(_jaccard(yes_set, prev) >= REDUNDANCY_JACCARD for prev in recent_yes_sets):
+                corrections.append(
+                    "that question splits the SAME group as a recent one — open a "
+                    "different dimension (a different feeling, or its cause), not a "
+                    "reworded repeat"
                 )
                 continue
             return action
@@ -379,6 +434,56 @@ class Reasoner:
             content=cleaned,
             rationale="Proposed from the leading candidate need.",
         )
+
+    async def clarify(
+        self,
+        *,
+        topic_label: str,
+        leading_need: str,
+        leader_id: str,
+        history: list[dict],
+        seed_context: str = "",
+        profile_context: str = "",
+        topic_hint: str = "",
+        emotional_state: dict | None = None,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> ReasonerAction:
+        """A confirming/sharpening yes/no question about the leading need.
+
+        The deepen phase: a frontrunner has emerged but not enough yes answers to
+        synthesize, so we gather positive confirmation (and refine the detail)
+        rather than guess early. The returned query carries ``yes_ids=[leader_id]``
+        so a "yes" both counts toward the synthesis gate and reinforces the leader;
+        a "no" is a soft down-weight that lets the round re-broaden.
+        """
+        corrections: list[str] = []
+        for attempt in range(MAX_AUDIT_RETRIES + 1):
+            if on_phase is not None:
+                on_phase("re-asking" if attempt else "thinking")
+            data = await self._chat_json(
+                prompts.clarify_messages(
+                    topic_label,
+                    leading_need,
+                    history,
+                    seed_context=seed_context,
+                    profile_context=profile_context,
+                    topic_hint=topic_hint,
+                    emotional_state=emotional_state,
+                    corrections=corrections,
+                ),
+                max_tokens=ASK_MAX_TOKENS,
+            )
+            question = data.get("question", "")
+            cleaned = sanitize_llm_text(question) if isinstance(question, str) else ""
+            if not cleaned:
+                corrections.append("question was unusable; ask one plainly")
+                continue
+            verdict = audit_query(cleaned)
+            if not verdict.ok:
+                corrections.append(verdict.reason)
+                continue
+            return self._ask_action(cleaned, [leader_id], data.get("preface", ""), data)
+        raise ReasonerError("clarify: could not produce a confirming question")
 
     def _ask_action(
         self, question: str, yes_ids: list[str], preface_raw: object, data: dict

@@ -4,11 +4,83 @@ from __future__ import annotations
 
 import json
 
-from my20q.agent.dialogue import MAX_CONSEC_REASON_FAILURES, Answer, Round, Session
+from my20q.agent.dialogue import (
+    MAX_CONSEC_REASON_FAILURES,
+    MIN_YES_FOR_SYNTHESIS,
+    STALL_QUERIES,
+    Answer,
+    Round,
+    Session,
+)
+from my20q.agent.hypotheses import Hypothesis
 from my20q.agent.prompts import seed_messages
 from my20q.llm import MockBackend
 from my20q.llm.base import LLMUnavailable
 from my20q.topics import Topic, find_topic
+
+
+def test_single_need_no_is_soft_not_elimination(topics: list[Topic]) -> None:
+    # "no" is a SOFT down-weight, never an elimination — hard elimination
+    # collapsed the field so fast that synthesis fired before real confirmation.
+    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
+    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 4)]
+    rnd._history = [{"kind": "query", "text": "q", "answer": "no", "yes_ids": ["h2"]}]
+    active, weights = rnd._replay_belief()
+    assert "h2" in weights  # still in play, just less likely
+    assert weights["h2"] < weights["h1"]
+
+
+def test_multi_need_no_does_not_eliminate(topics: list[Topic]) -> None:
+    # A "no" to a question spanning several needs is a soft down-weight, not an
+    # elimination — the question may simply have been fuzzy.
+    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
+    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 4)]
+    rnd._history = [{"kind": "query", "text": "q", "answer": "no", "yes_ids": ["h1", "h2"]}]
+    _, weights = rnd._replay_belief()
+    assert {"h1", "h2"} <= set(weights)
+
+
+def test_is_stalled_detects_no_progress(topics: list[Topic]) -> None:
+    # STALL_QUERIES uninformative queries (each touching every need => uniform
+    # update) leave the belief unmoved -> stalled.
+    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
+    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 4)]
+    rnd._history = [
+        {"kind": "query", "text": f"q{i}", "answer": "yes", "yes_ids": ["h1", "h2", "h3"]}
+        for i in range(STALL_QUERIES)
+    ]
+    _, weights = rnd._replay_belief()
+    assert rnd._is_stalled(weights) is True
+
+
+def test_is_stalled_false_while_converging(topics: list[Topic]) -> None:
+    # A leader emerging (confidence rising as a need is repeatedly affirmed) is
+    # progress, not a stall.
+    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
+    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 9)]
+    rnd._history = [
+        {"kind": "query", "text": f"q{i}", "answer": "yes", "yes_ids": ["h1"]}
+        for i in range(STALL_QUERIES)
+    ]
+    _, weights = rnd._replay_belief()
+    assert rnd._is_stalled(weights) is False
+
+
+def test_rejected_synthesis_eliminates_the_need(topics: list[Topic]) -> None:
+    # A rejected synthesis must remove that need from the belief for good — a
+    # soft down-weight let a later "yes" revive it and the round looped
+    # re-proposing the same utterance (the "circular" failure mode).
+    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
+    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 4)]
+    rnd._history = [
+        {"kind": "query", "text": "q", "answer": "yes", "yes_ids": ["h2"]},
+        {"kind": "synthesis", "text": "guess", "answer": "no", "hyp_id": "h2"},
+        # Even a later "yes" pointing back at h2 must not revive it.
+        {"kind": "query", "text": "q2", "answer": "yes", "yes_ids": ["h2"]},
+    ]
+    active, weights = rnd._replay_belief()
+    assert "h2" not in weights
+    assert all(h.id != "h2" for h in active)
 
 SEED_NEEDS = [
     "I am thirsty and want a glass of water",
@@ -51,6 +123,12 @@ def _controller_backend(
             question, yes_ids = asks[i]
             return json.dumps(
                 {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "split"}
+            )
+        if "sharpen" in system:  # clarify / deepen the leading need
+            state["clarify"] = state.get("clarify", 0) + 1
+            return json.dumps(
+                {"question": f"Is it about detail {state['clarify']}?",
+                 "preface": "", "rationale": "deepen"}
             )
         return json.dumps({"utterance": utterance})  # synthesize
 
@@ -152,7 +230,7 @@ async def test_reasoning_round_converges_via_belief(topics: list[Topic]) -> None
             ("Is it about a drink?", ["h1"]),
         ]
     )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=0)
     ev = await rnd.open()
     assert ev.kind == "query" and ev.engine == "reasoning"
     # The honest tile gets the full live belief.
@@ -160,12 +238,17 @@ async def test_reasoning_round_converges_via_belief(topics: list[Topic]) -> None
     assert ev.hypotheses[0]["need"] in SEED_NEEDS
 
     ev = await rnd.answer(Answer.YES)
-    assert ev.kind == "query"
-    # The split is persisted for belief replay / undo.
+    yeses = 1
+    assert ev.kind == "query"  # NOT synthesized yet — far short of the yes gate
     assert rnd.history[0]["yes_ids"] == ["h1", "h2"]
 
-    ev = await rnd.answer(Answer.YES)
+    # Keep confirming; an utterance must not appear before MIN_YES_FOR_SYNTHESIS.
+    while ev.kind == "query" and yeses < 12:
+        ev = await rnd.answer(Answer.YES)
+        yeses += 1
     assert ev.kind == "synthesis"
+    assert yeses >= MIN_YES_FOR_SYNTHESIS  # the positive-evidence gate held
+
     ev = await rnd.answer(Answer.YES)
     assert ev.kind == "synthesized"
     assert "water" in rnd.final_utterance
@@ -184,16 +267,33 @@ async def test_undo_recomputes_belief(topics: list[Topic]) -> None:
     assert ev.kind == "query" and len(ev.hypotheses) == len(SEED_NEEDS)
 
 
-async def test_budget_forces_synthesis_then_abandons(topics: list[Topic]) -> None:
+async def test_safety_ceiling_stops_without_forcing_synthesis(topics: list[Topic]) -> None:
+    # A positive max_queries is a hard SAFETY ceiling — it ends the round, it does
+    # NOT force a half-baked utterance. Synthesis is readiness-driven only.
     backend = _controller_backend(asks=[("Is it something you want?", ["h1", "h2"])])
     rnd = Round(_topic(topics, "general"), llm=backend, max_queries=1)
     ev = await rnd.open()
     assert ev.kind == "query"
-    ev = await rnd.answer(Answer.NO)  # budget hit -> forced synthesis
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # rejected -> abandoned
+    ev = await rnd.answer(Answer.NO)  # 1 query asked == ceiling -> stop, no synthesis
     assert ev.kind == "abandoned"
     assert rnd.outcome == "abandoned"
+
+
+async def test_unlimited_budget_keeps_questioning(topics: list[Topic]) -> None:
+    # The default (max_queries=0) is unlimited: a non-converging answer keeps the
+    # round collecting context rather than abandoning on a question count.
+    backend = _controller_backend(
+        asks=[
+            ("Is it something you want?", ["h1", "h2"]),
+            ("Are you thirsty?", ["h1"]),
+        ]
+    )
+    rnd = Round(_topic(topics, "physical_health"), llm=backend)  # default unlimited
+    assert rnd.max_queries == 0
+    await rnd.open()
+    ev = await rnd.answer(Answer.NO)
+    assert rnd.outcome is None  # not abandoned by count
+    assert ev.kind in ("query", "synthesis")
 
 
 async def test_rejected_synthesis_keeps_going(topics: list[Topic]) -> None:
@@ -204,10 +304,12 @@ async def test_rejected_synthesis_keeps_going(topics: list[Topic]) -> None:
             ("Is it about a person?", ["h4"]),
         ]
     )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
-    await rnd.open()
-    await rnd.answer(Answer.YES)
-    ev = await rnd.answer(Answer.YES)
+    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=0)
+    ev = await rnd.open()
+    yeses = 0
+    while ev.kind == "query" and yeses < 12:  # confirm past the yes gate
+        ev = await rnd.answer(Answer.YES)
+        yeses += 1
     assert ev.kind == "synthesis"
     ev = await rnd.answer(Answer.NO)  # rejects the proposal — round continues
     assert rnd.outcome is None

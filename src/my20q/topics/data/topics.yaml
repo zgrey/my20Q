@@ -39,10 +39,19 @@
   reasoning_hint: |
     Stay on FEELINGS and emotional states — loneliness, fear, worry about loved
     ones, frustration (especially at not being understood), sadness, boredom,
-    anger, restlessness, and positive feelings like wanting joy or company. Do
-    NOT seed physical needs (thirst, hunger, toilet, pain, temperature) — those
-    belong to the body topic. Lean on the patient profile for what they care
-    about and worry about.
+    anger, restlessness, grief for lost abilities, and positive feelings like
+    wanting joy or company. Do NOT seed or ask about physical needs (thirst,
+    hunger, toilet, pain, temperature) — those belong to the body topic. Lean on
+    the patient profile for what they care about and worry about.
+
+    DRILL INTO the feeling — never hover at "do you want to share how you feel"
+    (banned: everyone says yes). Narrow in this order:
+      1) NAME the emotion — fear, sadness/grief, anger, loneliness, worry,
+         frustration, shame, restlessness, or longing.
+      2) Then its CAUSE/OBJECT — who or what it is about (a specific person, the
+         news/world, her body or independence, the future, the home).
+      3) Then INTENSITY only if it helps confirm.
+    Identify the feeling itself, never merely whether she wishes to express it.
   fallback_questions:
     - id: mh_anxious
       label: Worried or scared

@@ -55,8 +55,9 @@ OUTPUT — STRICT JSON, nothing else:
 - "question": ONE plain yes/no question, ~8-16 everyday words. The caregiver can
   only answer yes, no, kinda, or not sure — so NEVER an either/or or
   multiple-choice question ("Is it A or B?"). Pick one idea and ask it plainly.
-  Prefer questions that separate WANTS from FEELINGS from BODY problems from
-  PEOPLE, rather than drilling deeper into one need.
+  Separate the candidates along a real dimension — a different feeling, a
+  different cause, or a different person — moving from general toward the
+  specific as they narrow. Once it is clear WHICH need, drill INTO it.
 - "yes_ids": exactly the candidate ids whose need would answer YES to your
   question. It MUST be a non-empty STRICT subset (some yes AND some no) — that
   split is what makes the question informative.
@@ -65,8 +66,14 @@ OUTPUT — STRICT JSON, nothing else:
   restates the question.
 - "rationale": one short sentence for the caregiver's panel; never spoken.
 
-Never repeat a question already in the history. Weight any [caregiver context]
-heavily. No medical advice, URLs, markup, or emoji.
+DRILL IN, DON'T CIRCLE. Each question must open a NEW dimension or narrow toward
+the specific need — never re-ask a prior question in different words, and never
+re-slice the same group of candidates.
+BANNED — vague meta-questions about whether the person WANTS to talk, share,
+express, tell someone, or "let people know" how they feel. Everyone answers yes,
+so they reveal nothing. Ask the SUBSTANCE instead: which feeling, how strong, and
+what or who it is about.
+Weight any [caregiver context] heavily. No medical advice, URLs, markup, or emoji.
 """
 
 # Thinking models take a two-phase ask: first DELIBERATE (free-form reasoning —
@@ -83,12 +90,18 @@ so far. Work out the SINGLE best yes/no question to ask next.
 A good question SPLITS the candidates — ideally about half would answer "yes" —
 and moves from the general toward the specific as the candidates narrow
 (topic → subject/action → the specific thing → its modifiers). Favour questions
-that separate WANTS from FEELINGS from BODY problems from PEOPLE.
+that separate the candidates along a real dimension — a different feeling, a
+different cause, or a different person. Once it is clear WHICH need, drill INTO it.
 
 Think it through, then state the ONE question you will ask. It must be a single
 plain yes/no question the caregiver can answer yes / no / kinda / not sure —
-NEVER an either/or or multiple-choice question. Do not repeat a question already
-asked. Weight any [caregiver context] heavily. No medical advice.
+NEVER an either/or or multiple-choice question.
+DRILL IN, DON'T CIRCLE: open a NEW dimension or narrow toward the specific need;
+never re-ask a prior question in different words or re-slice the same group.
+BANNED — vague meta-questions about whether they WANT to talk / share / express /
+tell someone how they feel (everyone says yes). Ask the SUBSTANCE: which feeling,
+how strong, what or who it is about.
+Weight any [caregiver context] heavily. No medical advice.
 """
 
 FORMAT_SYSTEM = """\
@@ -118,6 +131,23 @@ OUTPUT — STRICT JSON, nothing else:
   words ("I would like a glass of water.", "I feel lonely and would like someone
   to sit with me."). Build on the leading need and what the answers confirmed.
 - No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
+"""
+
+CLARIFY_SYSTEM = """\
+A person with aphasia has nearly settled on ONE need (given below). Before we put
+words to it we need to be SURE — confirm it and sharpen it. Ask the ONE yes/no
+question that pins down a specific, NEW detail of THIS need: its cause, the person
+it involves, the place/time, or how strong it is.
+
+OUTPUT — STRICT JSON, nothing else:
+{"question": "...", "preface": "...", "rationale": "..."}
+
+- "question": ONE plain yes/no question, ~8-16 everyday words, about THIS need —
+  NEVER an either/or, and NEVER a vague "do you want to talk about it" (that adds
+  nothing). It must add a detail not already asked in the history.
+- "preface": a SHORT spoken lead-in (<=12 words) — warm, never just a restatement.
+- "rationale": one short sentence for the caregiver's panel; never spoken.
+No medical advice, URLs, markup, or emoji.
 """
 
 
@@ -228,6 +258,17 @@ def seed_messages(
     ]
 
 
+#: Injected when the candidate set has been hard-restricted to already-affirmed
+#: needs (see hypotheses.anchor_focus) — tells the model these are confirmed and
+#: the job is to drill in, not re-open the field.
+_ANCHOR_NOTE = (
+    "ALREADY CONFIRMED — every candidate below is something the person has "
+    "answered YES to. Do NOT introduce anything new: your question must clarify "
+    "WHICH of these it is, or a specific aspect of it (its cause, the person "
+    "involved, or how strong it is).\n\n"
+)
+
+
 def ask_messages(
     topic_label: str,
     candidates: list[tuple[str, str, float]],
@@ -238,10 +279,12 @@ def ask_messages(
     topic_hint: str = "",
     emotional_state: dict | None = None,
     corrections: list[str] | None = None,
+    anchored: bool = False,
 ) -> list[LLMMessage]:
     """Ask for the next discriminating yes/no question over ``candidates``.
 
-    ``candidates`` is ``(id, need, weight)`` for the live hypotheses.
+    ``candidates`` is ``(id, need, weight)`` for the live hypotheses. ``anchored``
+    marks that the set is restricted to already-affirmed needs (drill-in mode).
     """
     listing = "\n".join(
         f"  {hid}: {need}  [confidence {weight:.2f}]" for hid, need, weight in candidates
@@ -253,6 +296,8 @@ def ask_messages(
         topic_hint=topic_hint,
         emotional_state=emotional_state,
     )
+    if anchored:
+        instruction += _ANCHOR_NOTE
     instruction += (
         "CANDIDATE needs still in play (id: need [confidence]):\n"
         f"{listing}\n\n"
@@ -284,12 +329,14 @@ def deliberate_messages(
     topic_hint: str = "",
     emotional_state: dict | None = None,
     corrections: list[str] | None = None,
+    anchored: bool = False,
 ) -> list[LLMMessage]:
     """Free-form reasoning to choose the next yes/no question (no JSON).
 
     Phase 1 of the two-phase ask used only for thinking models; the structured
     output comes from a separate :func:`format_question_messages` call.
-    ``candidates`` is ``(id, need, weight)`` for the live hypotheses.
+    ``candidates`` is ``(id, need, weight)`` for the live hypotheses. ``anchored``
+    marks that the set is restricted to already-affirmed needs (drill-in mode).
     """
     listing = "\n".join(
         f"  {hid}: {need}  [confidence {weight:.2f}]" for hid, need, weight in candidates
@@ -301,6 +348,8 @@ def deliberate_messages(
         topic_hint=topic_hint,
         emotional_state=emotional_state,
     )
+    if anchored:
+        instruction += _ANCHOR_NOTE
     instruction += (
         "CANDIDATE needs still in play (id: need [confidence]):\n"
         f"{listing}\n\n"
@@ -399,5 +448,49 @@ def synthesize_messages(
     )
     return [
         {"role": "system", "content": SYNTH_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def clarify_messages(
+    topic_label: str,
+    leading_need: str,
+    history: list[dict],
+    *,
+    seed_context: str = "",
+    profile_context: str = "",
+    topic_hint: str = "",
+    emotional_state: dict | None = None,
+    corrections: list[str] | None = None,
+) -> list[LLMMessage]:
+    """Ask one confirming/sharpening yes/no question about the leading need.
+
+    The deepen phase: a frontrunner has emerged but not enough yeses to synthesize,
+    so we gather positive confirmation and refine the detail before wording it.
+    """
+    instruction = f"Topic for this round: {topic_label}\n\n"
+    instruction += _context_block(
+        profile_context=profile_context,
+        seed_context=seed_context,
+        topic_hint=topic_hint,
+        emotional_state=emotional_state,
+    )
+    instruction += (
+        f"The person has nearly settled on this need:\n  \"{leading_need}\"\n\n"
+        f"History so far:\n{_format_history(history)}\n\n"
+    )
+    if corrections:
+        joined = "\n".join(f"  - {c}" for c in corrections)
+        instruction += (
+            "YOUR PREVIOUS ATTEMPT WAS REJECTED:\n"
+            f"{joined}\n"
+            "Ask a corrected yes/no question about this need.\n\n"
+        )
+    instruction += (
+        "Ask ONE yes/no question that confirms or sharpens a NEW detail of this "
+        "need, as strict JSON."
+    )
+    return [
+        {"role": "system", "content": CLARIFY_SYSTEM},
         {"role": "user", "content": instruction},
     ]

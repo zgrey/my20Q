@@ -58,10 +58,19 @@ class OllamaBackend:
         except (httpx.HTTPError, ValueError) as exc:
             raise LLMUnavailable(f"Ollama call failed: {exc}") from exc
 
-        content = data.get("message", {}).get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise LLMUnavailable("Ollama returned empty response")
-        return content.strip()
+        message = data.get("message", {})
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        # A thinking model can put its whole answer in `thinking` and leave
+        # `content` empty (especially when reasoning is long). For free-form
+        # calls, salvage the reasoning rather than reporting an empty response —
+        # the caller's format pass turns it into the final question. We never do
+        # this for json_mode, where thinking is not valid JSON.
+        thinking = message.get("thinking")
+        if not json_mode and isinstance(thinking, str) and thinking.strip():
+            return thinking.strip()
+        raise LLMUnavailable("Ollama returned empty response")
 
     async def preload(self, timeout_s: float = 300.0) -> bool:
         """Load the current model into memory now (best-effort).

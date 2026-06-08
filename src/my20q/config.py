@@ -66,7 +66,10 @@ class Config:
             topics_path=Path(os.environ.get("MY20Q_TOPICS", str(default_topics))),
             profile_path=Path(profile_env) if profile_env else None,
             llm_enabled=os.environ.get("MY20Q_LLM", "1") != "0",
-            max_queries=int(os.environ.get("MY20Q_MAX_QUERIES", "20")),
+            # 0 = unlimited (the default): synthesis is readiness-driven, not
+            # capped by a question count. Set a positive value only as a hard
+            # safety ceiling that ends the round without forcing an utterance.
+            max_queries=int(os.environ.get("MY20Q_MAX_QUERIES", "0")),
             mode=mode,  # type: ignore[arg-type]
             recording_dir=Path(os.environ.get("MY20Q_DATA_DIR", "patient_data")),
             recording_threshold_bytes=(

@@ -27,6 +27,8 @@ def _controller_backend(
 ) -> MockBackend:
     """A MockBackend that plays the seed/ask/synthesize protocol."""
 
+    state = {"n": 0}
+
     def responder(messages: list) -> str:
         system = messages[0]["content"]
         if "candidate NEEDS to test" in system:
@@ -34,6 +36,11 @@ def _controller_backend(
         if "best SPLITS" in system:
             return json.dumps(
                 {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "r"}
+            )
+        if "sharpen" in system:  # clarify / deepen the leading need
+            state["n"] += 1
+            return json.dumps(
+                {"question": f"Is it about detail {state['n']}?", "preface": "", "rationale": "d"}
             )
         return json.dumps({"utterance": utterance})
 
@@ -118,8 +125,9 @@ def test_unknown_topic_returns_400() -> None:
 
 
 def test_reasoning_round_via_injected_backend() -> None:
-    # A "yes" to a question pointing at just h1 concentrates the belief past the
-    # synthesis threshold, so the next event is the proposed utterance.
+    # Repeated "yes" answers concentrate the belief AND clear the positive-evidence
+    # gate (>= MIN_YES_FOR_SYNTHESIS), so the round eventually proposes an utterance
+    # — never on the first yes.
     backend = _controller_backend(
         seed=[
             "I would like to call my son this afternoon",
@@ -142,9 +150,18 @@ def test_reasoning_round_via_injected_backend() -> None:
     assert state["event"]["kind"] == "query"
     assert len(state["event"]["hypotheses"]) == 4  # the honest tile is populated
 
+    # First yes must NOT synthesize — far short of the gate.
     state = client.post(
         f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"}
     ).json()
+    assert state["event"]["kind"] == "query"
+
+    for _ in range(11):
+        if state["event"]["kind"] == "synthesis":
+            break
+        state = client.post(
+            f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"}
+        ).json()
     assert state["event"]["kind"] == "synthesis"
     assert "son" in state["event"]["text"]
 

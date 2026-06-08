@@ -100,3 +100,71 @@ two calls). Tests in `tests/test_reasoner_decouple.py`.
 **Not yet re-integrated** (still only on `augmented-reasoning`): the augmented
 hierarchical zoom + critique passes (`7318e4e`), the reasoning-trace UI, and the
 thinking-summary call. Each must still prove a quality win before it lands.
+
+### 2. Seed + ask/synthesis-policy overhaul (2026-06-07)
+
+A second live trial (recorded as `patient_data/.../ed3da...jsonl`) was "circular,
+less on the issue, unwilling to go deep on emotion." Reading the transcript: the
+seeds were good (the fix below worked), but the **question/synthesis policy**
+squandered them. Fixes, in order of impact:
+
+- **Topic-aware seeding** (`f7d30f5`): the seed prompt hard-mandated the universal
+  physical wants under *every* topic, so "My feelings" seeded 6/10 physical needs.
+  Now `Topic.seed_universal_wants` (False for feelings/people); the mandate moved
+  out of the static prompt into `seed_messages`; cross-topic drift forbidden.
+- **Hard-elimination of rejected syntheses** (B): a rejected synthesis only
+  soft-down-weighted the need, so a later generic "yes" revived it and the round
+  re-proposed the *same* utterance ~7× until the budget killed it. Now
+  `_replay_belief` drops a rejected need entirely (can't lead or be targeted).
+- **Anti-redundancy** (A): `Reasoner.ask` re-prompts when a question's `yes_ids`
+  re-slice a recent one (Jaccard ≥ 0.8) — stops re-asking the same axis.
+- **Depth / no meta-questions** (C): banned "do you want to share how you feel?"
+  (everyone says yes → zero signal); the feelings hint drives name → cause →
+  intensity.
+- **Anchoring on "yes" content** (hardcoded, owner's hypothesis):
+  `hypotheses.anchor_focus` restricts the candidate set to already-affirmed needs
+  once any are confirmed, so questions *structurally* drill into the confirmed
+  cluster instead of drifting. Not prompt steering — the dropped needs are not
+  candidates.
+- **No question budget** (owner's call): the "20" was a name, not a method.
+  `max_queries` default is now **0 = unlimited**; it is a pure safety ceiling that
+  *stops* a round, never forces a synthesis. Synthesis is readiness-driven
+  (`should_synthesize`) only. A round may ask many questions and never synthesize
+  — the questioning is the point.
+
+Verified on a clean simulated round against the real profile: general → specific
+feeling → specific person → utterance in **6 queries** (vs the 20-query abandoned
+loop), with the anchor visibly drilling within the affirmed cluster. The real
+trial with noisy caregiver input is the true test.
+
+### 3. Anchoring trap, no-progress terminator, fair thinking-model eval (2026-06-07)
+
+A max-effort audit across all topics exposed three things:
+
+- **The anchoring trap.** Anchoring + a *soft* "no" let a confirmed cluster the
+  patient kept rejecting trap a round forever (physical_health: 9 queries, 196s,
+  no result). Fix: a definitive "no" to a **single-need** question now ELIMINATES
+  it (`_replay_belief`), like a rejected synthesis; the anchor auto-releases when
+  the cluster empties. Multi-need "no" stays soft.
+- **No-progress terminator** (replaces the removed budget): a round ends —
+  gracefully, no forced utterance — when, over `STALL_QUERIES` (6), the leader
+  gains no confidence AND the live set does not shrink. Catches an oscillating
+  stall, not just a stuck leader. This is the principled "ask only while making
+  progress" rule the budget removal needed.
+- **Thinking models were judged unfairly.** The earlier "gemma4 is bad" rested on
+  a token cap: the deliberate phase's `num_predict` capped thinking+content
+  together, so a verbose thinker was truncated mid-thought and emitted nothing,
+  and we discarded the thinking. Not a quality finding — a crippling. Fixes:
+  `_chat_json` forces `think=False` for structured calls (seed/format/synth);
+  the deliberate phase is **uncapped** (`num_predict=-1`, latency bounded by the
+  timeout); `OllamaBackend.chat` salvages `message.thinking` when content is
+  empty. Now thinking models run to completion.
+
+**Fair re-audit result.** gemma3:12b: **4/4 topics converged in 3–5 queries,
+12–16s each**, trap gone, profile-grounded utterances (singing, Rob's heart, the
+martini). gemma4:26b with thinking fully uncapped: converged well, comparable
+utterance quality, but **~3–8× slower** with **no demonstrable questioning
+advantage**. Conclusion (now fair): thinking models *work*, but do not beat the
+gemma3:12b workhorse here — default stays gemma3:12b, thinking models available
+and no longer crippled, so the choice is informed. A cockpit thinking-trace (from
+`augmented-reasoning`) would be the right tool to evaluate them further.

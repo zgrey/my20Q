@@ -157,3 +157,27 @@ def ranked(
         if hid in by_id and (not live_only or w >= PRUNE_EPS)
     ]
     return sorted(items, key=lambda t: t[1], reverse=True)
+
+
+def anchor_focus(
+    ranked_live: list[tuple[Hypothesis, float]], affirmed: set[str]
+) -> tuple[list[tuple[Hypothesis, float]], bool]:
+    """Restrict questioning to needs the person has already AFFIRMED.
+
+    Anchoring on "yes" content: once any candidate has been confirmed with a
+    yes/kinda, drop the needs that have *never* been affirmed so the next
+    questions DRILL INTO the confirmed cluster instead of drifting to fresh,
+    unconfirmed needs (the "circular / off-the-issue" failure mode). This is a
+    hardcoded narrowing — the question literally cannot target a dropped need
+    because it is no longer a candidate.
+
+    Falls back to the full live set until at least two affirmed needs remain (a
+    split needs a pair). Returns ``(focused, anchored)`` where ``anchored`` says
+    the restriction actually applied.
+    """
+    if not affirmed:
+        return ranked_live, False
+    focus = [(h, w) for h, w in ranked_live if h.id in affirmed]
+    if len(focus) >= 2:
+        return focus, True
+    return ranked_live, False

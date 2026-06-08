@@ -6,6 +6,7 @@ from my20q.agent.hypotheses import (
     PRUNE_EPS,
     SYNTH_THRESHOLD,
     Hypothesis,
+    anchor_focus,
     apply_context,
     is_balanced,
     leader,
@@ -19,6 +20,29 @@ from my20q.agent.hypotheses import (
 )
 
 H = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 5)]  # h1..h4
+
+
+def test_anchor_focus_no_affirmations_keeps_full_set() -> None:
+    rl = ranked(H, seed_weights(H))
+    focused, anchored = anchor_focus(rl, affirmed=set())
+    assert anchored is False
+    assert [h.id for h, _ in focused] == [h.id for h, _ in rl]
+
+
+def test_anchor_focus_restricts_to_affirmed_cluster() -> None:
+    rl = ranked(H, seed_weights(H))
+    focused, anchored = anchor_focus(rl, affirmed={"h2", "h3"})
+    assert anchored is True
+    assert {h.id for h, _ in focused} == {"h2", "h3"}  # never-affirmed h1/h4 dropped
+
+
+def test_anchor_focus_needs_a_pair_to_restrict() -> None:
+    # A single affirmed need can't be split — keep the full set (synthesis will
+    # fire on its own once the belief concentrates).
+    rl = ranked(H, seed_weights(H))
+    focused, anchored = anchor_focus(rl, affirmed={"h2"})
+    assert anchored is False
+    assert len(focused) == len(rl)
 
 
 def test_seed_weights_uniform() -> None:

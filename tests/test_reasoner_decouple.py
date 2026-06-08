@@ -34,6 +34,16 @@ async def test_non_thinking_model_uses_a_single_call() -> None:
     assert len(mock.calls) == 1  # one fast JSON call — no deliberate phase
 
 
+async def test_structured_json_calls_force_thinking_off() -> None:
+    # Regression: on a thinking model, leaving thinking ON for a json_mode call
+    # lets the chain-of-thought eat the token budget and Ollama returns empty
+    # content (seed/synthesize/expand all degraded). They must force think=False.
+    seeds = json.dumps({"hypotheses": ["I am tired", "I am thirsty", "I hurt", "I am sad"]})
+    mock = MockBackend(responder=lambda _m: seeds, thinking=True)
+    await Reasoner(mock).seed_hypotheses(topic_label="My feelings")
+    assert mock.think_args == [False]  # the single seed call forced thinking off
+
+
 async def test_thinking_model_uses_two_phase_deliberate_then_format() -> None:
     seen_systems: list[str] = []
 
