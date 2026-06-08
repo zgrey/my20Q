@@ -27,19 +27,26 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
   input), persistent topic bar, recording light, session **Review** dashboard,
   SSE progress channel, JSONL recording/export, and **local piper TTS**
   (voice readouts of queries/utterances; review auto-play reads each step).
-- **Reasoning controller** ✓ The engine maintains an explicit belief over
-  candidate needs and asks the most-discriminating yes/no question each turn
-  (seed → ask → synthesize); the cockpit's reasoning tile renders the live
-  belief. See `src/my20q/agent/hypotheses.py`.
+- **Reasoning controller** ✓ A **confirmation-driven** hypothesis controller
+  (LLM does language, `agent/hypotheses.py` does control). Each turn it either
+  **discriminates** (most-splitting yes/no over the belief, anchored to the
+  affirmed cluster), **deepens** (confirms/sharpens the frontrunner once one
+  emerges), or **synthesizes** — but **only after ≥5 "yes" confirmations** on a
+  concentrated leader, so it never guesses on thin evidence. There's no question
+  budget; a stuck round ends gracefully via a no-progress check. The cockpit's
+  reasoning tile renders the live belief. Mechanism + known risks:
+  `tool-summary.html` (local) and `docs/design/reasoning-retro.md`.
 - **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
   graph write path).
 
 ## Terminology
 
 Three-tier scale: **Session** (one open→close) ⊃ **Round** (one convergence
-attempt under a single topic, ending on synthesis / topic change / budget /
-session end) ⊃ **Query** (one generated question). The query budget is a soft
-safety cap, not the primary terminator.
+attempt under a single topic, ending on synthesis / topic change / no-progress /
+session end) ⊃ **Query** (one generated question). **Synthesis is readiness-driven**
+(a concentrated leader confirmed by ≥5 yeses), never count-driven; there is no
+question budget by default — `MY20Q_MAX_QUERIES` is only an optional hard safety
+ceiling that stops a round without forcing an utterance.
 
 ## Privacy invariant
 
@@ -100,7 +107,7 @@ prompts, topics, and dialogue behavior):
 ```bash
 python -m my20q                          # reasoning mode (needs Ollama)
 python -m my20q --no-llm                 # deterministic fallback mode
-python -m my20q --max-queries 12         # override the per-round query budget
+python -m my20q --max-queries 30         # optional safety ceiling (0 = unlimited)
 ```
 
 ## Answers
@@ -118,12 +125,12 @@ and CLI):
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `MY20Q_LLM` | `1` | Set `0` to disable the LLM (same as `--no-llm`) |
-| `MY20Q_BACKEND` | auto | `ollama` / `anthropic` / `mock` (gated by the privacy flag) |
+| `MY20Q_BACKEND` | `ollama` | `ollama` / `anthropic` (anthropic gated off for real patients) |
 | `MY20Q_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
-| `MY20Q_OLLAMA_MODEL` | `gemma3:12b` | Ollama model tag |
-| `MY20Q_OLLAMA_TIMEOUT` | `30` | Per-request timeout (s) |
+| `MY20Q_OLLAMA_MODEL` | `gemma3:12b` | Ollama model tag (thinking models supported) |
+| `MY20Q_OLLAMA_TIMEOUT` | `120` | Per-call timeout (s); the runaway guard for uncapped reasoning |
 | `MY20Q_ANTHROPIC_MODEL` | — | Anthropic model (synthetic personas only) |
-| `MY20Q_MAX_QUERIES` | `20` | Per-round query budget (same as `--max-queries`) |
+| `MY20Q_MAX_QUERIES` | `0` | `0` = unlimited; positive = hard safety ceiling (same as `--max-queries`) |
 | `MY20Q_MODE` | training | Dialogue mode |
 | `MY20Q_PROFILE` | — | Patient/persona profile to load |
 | `MY20Q_TOPICS` | bundled | Override the topics data path |
