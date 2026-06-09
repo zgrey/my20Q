@@ -27,14 +27,14 @@ OUTPUT — STRICT JSON, nothing else:
 - Stay ANCHORED to this topic. Cover several DISTINCT facets OF THIS TOPIC — do
   not pile into one near-duplicate cluster; do NOT drift into other topics'
   territory (e.g. no body complaints under a feelings or people topic).
-- MIX generic and specific. Include BROAD, common needs anyone could have in this
-  topic (these are starting points to narrow from) AND a few SPECIFIC ones — but
-  do NOT over-fit to the patient profile. The real need is often a plain, specific
-  thing the profile never mentions (a particular body part, a specific object);
-  the questioning will narrow to it, so the seeds only need to be good
-  starting points, not the exact answer.
-- GROUND some in the PATIENT PROFILE when given (named people, routines,
-  concerns); keep others generic so an un-profiled need is still reachable.
+- AT LEAST HALF of the items must be GENERIC common needs for this topic — NOT
+  drawn from the patient profile (e.g. for feelings: scared, sad, confused,
+  lonely, bored, in pain emotionally; for body: the universal wants). These are
+  broad starting points to narrow from. The real need is often a plain, specific
+  thing the profile never mentions; questioning narrows to it, so seeds need only
+  be good starting points, not the exact answer.
+- The REMAINING items may be GROUNDED in the patient profile (named people,
+  routines, concerns). Never let profile items crowd out the generic ones.
 - Concrete, everyday words. Make them mutually DISTINCT, and broad enough that the
   real need is reachable by narrowing from one of them.
 - No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
@@ -68,14 +68,18 @@ context-specific MODIFIERS of the subject and action (e.g. feelings: emotion →
 what it is about → how strong / when; body: region → part → exact spot).
 
 OUTPUT — STRICT JSON, nothing else:
-{"question": "...", "yes_ids": ["h2"], "preface": "...", "rationale": "..."}
+{"question": "...", "yes_ids": ["h2"], "new_need": "", "preface": "...", "rationale": "..."}
 
 - "question": ONE plain yes/no question, ~8-16 everyday words. The caregiver can
   only answer yes / no / kinda / not sure — so NEVER an either/or. Narrow and
   specific is GOOD; you do NOT need to split the candidates in half. It must be a
   GENUINELY NEW question — not a reworded version of any already in the history.
-- "yes_ids": the candidate id(s) a "yes" would confirm or relate to (>=1). If the
-  question drills into a more specific version of a candidate, tag that candidate.
+- "yes_ids": the candidate id(s) a "yes" would confirm (>=1). If the question
+  drills into a more specific version of a candidate, tag that candidate.
+- "new_need": you are NOT limited to the listed candidates. If your question
+  explores a need NOT in the list (a fresh avenue), leave "yes_ids" empty and put
+  the first-person need here (e.g. "I feel scared and confused about where I am").
+  On a "yes"/"kinda" it becomes a new candidate to drill. Otherwise leave it "".
 - "preface": a SHORT spoken lead-in (<=12 words) — warm, varies each turn.
 - "rationale": one short sentence for the caregiver's panel; never spoken.
 
@@ -105,21 +109,25 @@ need to split the candidates in half.
 
 Think it through, then state the ONE question: a single plain yes/no (yes / no /
 kinda / not sure), never an either/or, GENUINELY NEW (not a reworded repeat of any
-prior question). STAY ON TOPIC (feelings = emotion/mental state; body = physical;
-people = a specific person). BANNED — vague "do you want to talk/share" meta-Qs.
-Weight any [caregiver context] heavily. No medical advice.
+prior question). You are NOT limited to the listed candidates — it is good to
+explore a brand-new need the list does not cover. STAY ON TOPIC (feelings =
+emotion/mental state; body = physical; people = a specific person). BANNED — vague
+"do you want to talk/share" meta-Qs. Weight any [caregiver context] heavily. No
+medical advice.
 """
 
 FORMAT_SYSTEM = """\
 Convert a drafted question into the strict format the cockpit needs.
 
 OUTPUT — STRICT JSON, nothing else:
-{"question": "...", "yes_ids": ["h2","h5"], "preface": "...", "rationale": "..."}
+{"question": "...", "yes_ids": ["h2"], "new_need": "", "preface": "...", "rationale": "..."}
 
 - "question": the single yes/no question from the draft, cleaned to one plain
   everyday sentence (no either/or).
-- "yes_ids": the candidate id(s) a "yes" would confirm or relate to (>=1); if the
-  draft drills into a more specific version of a candidate, tag that candidate.
+- "yes_ids": the candidate id(s) a "yes" would confirm (>=1); if the draft drills
+  into a more specific version of a candidate, tag that candidate.
+- "new_need": if the draft explores a need NOT in the candidate list, leave
+  "yes_ids" empty and put that first-person need here; otherwise "".
 - "preface": a SHORT spoken lead-in (<=12 words) read just before the question —
   warm, plain, never just restating the question.
 - "rationale": one short sentence for the caregiver's panel; never spoken.
@@ -261,7 +269,9 @@ _ANCHOR_NOTE = (
 
 _EXPLORE_NOTE = (
     "EXPLORE MODE — do NOT lean on the patient profile this turn. Try a NEW "
-    "avenue: a different possible subject the answers have not ruled out yet.\n\n"
+    "avenue: a different possible subject the answers have not ruled out yet. You "
+    "are encouraged to go BEYOND the listed candidates — propose a brand-new need "
+    'via "new_need" (leave "yes_ids" empty) when nothing listed fits.\n\n'
 )
 
 

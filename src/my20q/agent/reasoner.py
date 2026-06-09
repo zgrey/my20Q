@@ -70,6 +70,10 @@ class ReasonerAction:
     preface: str = ""
     #: For a query: the candidate ids this question would answer "yes" for.
     yes_ids: list[str] = field(default_factory=list)
+    #: For a query that explores a NEED NOT in the candidate list: its first-person
+    #: text. On a yes/kinda the engine spawns it as a new candidate (its id is in
+    #: yes_ids). Lets exploration escape the seed set.
+    new_need: str = ""
     #: For a synthesis: the hypothesis id it was built from (so a rejection can
     #: eliminate it on belief replay).
     hyp_id: str = ""
@@ -305,8 +309,20 @@ class Reasoner:
                 if isinstance(raw_ids, list)
                 else []
             )
+            raw_new = data.get("new_need")
+            new_need = sanitize_llm_text(raw_new) if isinstance(raw_new, str) else ""
+            # If the question maps to no existing candidate but proposes a NEW need,
+            # mint a fresh candidate id — exploration escapes the seed set. On a
+            # yes/kinda the engine spawns it (see dialogue._replay_belief).
+            if not yes_ids and new_need:
+                n_new = sum(1 for h in history if h.get("new_need"))
+                yes_ids = [f"n{n_new + 1}"]
+            else:
+                new_need = ""  # mapped to an existing candidate — ignore any new_need
             yes_set = set(yes_ids)
-            action = self._ask_action(cleaned, yes_ids, data.get("preface", ""), data)
+            action = self._ask_action(
+                cleaned, yes_ids, data.get("preface", ""), data, new_need=new_need
+            )
             best = action
 
             verdict = audit_query(cleaned)
@@ -325,12 +341,12 @@ class Reasoner:
                     "DIFFERENT subject, action, or modifier"
                 )
                 continue
-            # The question must relate to at least one live candidate (a "yes"
-            # has to credit some need). No balance/split requirement — a narrow,
-            # specific drill question is exactly what we want.
+            # Must credit a candidate OR propose a new need (a "yes" has to land
+            # on something). No balance/split requirement.
             if not yes_set:
                 corrections.append(
-                    "tag yes_ids with the candidate(s) a 'yes' would confirm"
+                    "tag yes_ids with the candidate(s) a 'yes' confirms, or set "
+                    "new_need to explore a brand-new need"
                 )
                 continue
             return action
@@ -444,7 +460,12 @@ class Reasoner:
         )
 
     def _ask_action(
-        self, question: str, yes_ids: list[str], preface_raw: object, data: dict
+        self,
+        question: str,
+        yes_ids: list[str],
+        preface_raw: object,
+        data: dict,
+        new_need: str = "",
     ) -> ReasonerAction:
         rationale = str(data.get("rationale", "") or "")[:240]
         preface = sanitize_llm_text(str(preface_raw or ""))[:100]
@@ -456,4 +477,5 @@ class Reasoner:
             rationale=rationale,
             preface=preface,
             yes_ids=list(yes_ids),
+            new_need=new_need,
         )

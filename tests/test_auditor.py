@@ -48,3 +48,22 @@ async def test_ask_reprompts_until_query_passes() -> None:
     assert action.kind == "query"
     assert action.content == "Is it inside the house?"  # the re-prompted, clean query
     assert action.yes_ids == ["h1"]
+
+
+async def test_ask_can_propose_a_new_need() -> None:
+    # A question that explores beyond the candidate list returns new_need and gets
+    # a freshly minted candidate id — exploration escapes the seed set.
+    out = json.dumps(
+        {"question": "Are you scared?", "yes_ids": [], "new_need": "I feel scared",
+         "preface": "", "rationale": "x"}
+    )
+    reasoner = Reasoner(MockBackend(responder=lambda _m: out))
+    action = await reasoner.ask(
+        topic_label="My feelings",
+        topic_id="mental_health",
+        candidates=[("h1", "I am lonely", 0.0)],
+        history=[],
+    )
+    assert action.content == "Are you scared?"
+    assert action.new_need == "I feel scared"
+    assert action.yes_ids == ["n1"]  # minted, not an existing candidate

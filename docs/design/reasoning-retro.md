@@ -217,9 +217,20 @@ wasted "kinda"s. Four hardcoded guards (owner's directives):
 - Prompt now drives SUBJECT → ACTION → context-specific MODIFIERS.
 
 **Validated mechanically** (gemma4:e4b): questions came out varied, on-topic, and
-non-reworded. **But a NEXT gap surfaced:** a question must map to an EXISTING
-(profile-seeded) candidate (`yes_ids` required), so exploration cannot introduce a
-brand-new emotion that was never seeded — it stayed in the family/future/burden
-neighborhood and never reached "scared/confused." **Next:** let exploratory
-questions CREATE new candidates (context aggregation) so unseeded needs are
-reachable. Until then, free exploration is still bounded by the seed set.
+non-reworded. **But a gap surfaced:** a question had to map to an EXISTING
+(profile-seeded) candidate, so exploration couldn't introduce an unseeded need.
+
+### 6. Seed ceiling removed — exploratory questions spawn candidates (2026-06-08)
+
+Fix for §5's gap. A question may now carry a `new_need` (first-person text) when it
+explores a need NOT in the candidate list (leave `yes_ids` empty). `ask` mints a
+fresh id (`n1`, `n2`, …); on a **yes/kinda** `_replay_belief` spawns it as a real
+candidate (a **no** discards it). Exploratory turns are encouraged to use it. Plus
+`SEED_SYSTEM` now mandates **≥ half the seeds be GENERIC** (not profile-derived).
+
+**Validated:** live, the model spawned `n1`/`n2` for needs that were never seeded —
+exploration escapes the seed set (confirmed) — and the new-need spawn/discard is
+unit-tested. **Remaining risk:** once it spawns a warm-but-WRONG avenue, anchoring
+can lock onto it (same lock risk, now for self-spawned needs). Whether the model
+picks the *right* new avenue is an LLM-quality question best judged in a real
+caregiver trial — a keyword oracle can't fairly score emotional nuance.

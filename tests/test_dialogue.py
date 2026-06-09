@@ -76,6 +76,32 @@ def _topic(topics: list[Topic], topic_id: str) -> Topic:
     return t
 
 
+def test_exploratory_new_need_spawns_candidate_on_yes(topics: list[Topic]) -> None:
+    # A question that explored a brand-new need (not in the seeds) becomes a real
+    # candidate once the person says yes/kinda — exploration escapes the seed set.
+    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
+    rnd._seed_hypotheses = [Hypothesis("h1", "need 1"), Hypothesis("h2", "need 2")]
+    rnd._history = [
+        {"kind": "query", "text": "Are you scared?", "answer": "yes",
+         "yes_ids": ["n1"], "new_need": "I feel scared and confused"},
+    ]
+    active, scores = rnd._replay_belief()
+    assert any(h.id == "n1" and h.need == "I feel scared and confused" for h in active)
+    assert scores["n1"] > 0
+
+
+def test_exploratory_new_need_dropped_on_no(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
+    rnd._seed_hypotheses = [Hypothesis("h1", "need 1"), Hypothesis("h2", "need 2")]
+    rnd._history = [
+        {"kind": "query", "text": "Are you scared?", "answer": "no",
+         "yes_ids": ["n1"], "new_need": "I feel scared"},
+    ]
+    active, scores = rnd._replay_belief()
+    assert all(h.id != "n1" for h in active)  # a "no" never spawns the new need
+    assert "n1" not in scores
+
+
 def _controller_backend(
     *,
     seed: list[str] = SEED_NEEDS,

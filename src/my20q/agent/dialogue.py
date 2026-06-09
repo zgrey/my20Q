@@ -197,6 +197,10 @@ class Round:
         # built from (so a rejection eliminates that need).
         if pending.yes_ids:
             entry["yes_ids"] = list(pending.yes_ids)
+        # A query that explored a brand-new need carries its text, so belief
+        # replay can spawn it as a candidate on a yes/kinda (escapes the seeds).
+        if pending.new_need:
+            entry["new_need"] = pending.new_need
         if pending.hyp_id:
             entry["hyp_id"] = pending.hyp_id
         self._history.append(entry)
@@ -424,7 +428,16 @@ class Round:
             elif kind == "query":
                 answer = h.get("answer")
                 if answer:
-                    scores = hyp.update_score(scores, set(h.get("yes_ids", [])), answer)
+                    yes = set(h.get("yes_ids", []))
+                    # An exploratory question that proposed a NEW need becomes a
+                    # real candidate when the person says yes/kinda to it.
+                    new_need = h.get("new_need")
+                    if new_need and answer in _AFFIRMED:
+                        nid = next(iter(yes), None)
+                        if nid and all(hh.id != nid for hh in active):
+                            active = active + [Hypothesis(nid, new_need)]
+                            scores[nid] = 0.0
+                    scores = hyp.update_score(scores, yes, answer)
             elif kind == "synthesis":
                 answer = h.get("answer")
                 if answer and answer != Answer.YES.value and h.get("hyp_id"):
