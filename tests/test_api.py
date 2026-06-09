@@ -27,6 +27,18 @@ def _controller_backend(
 ) -> MockBackend:
     """A MockBackend that plays the seed/ask/synthesize protocol."""
 
+    # Distinct, person-referencing drill questions so neither the redundancy nor
+    # the my_people on-topic audit rejects them (the test round is "my_people").
+    people_qs = [
+        "Do you want to call your son?",
+        "Is it about your daughter visiting?",
+        "Do you want to tell your husband something?",
+        "Is it about seeing your family?",
+        "Do you miss a friend?",
+        "Is it about someone phoning you?",
+        "Do you want a visit from them?",
+        "Is it about helping a loved one?",
+    ]
     state = {"n": 0}
 
     def responder(messages: list) -> str:
@@ -34,9 +46,10 @@ def _controller_backend(
         if "candidate NEEDS to test" in system:
             return json.dumps({"hypotheses": seed})
         if "pin down the ONE specific" in system:  # ask / drill
+            q = people_qs[state["n"] % len(people_qs)]
             state["n"] += 1
             return json.dumps(
-                {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "r"}
+                {"question": q, "yes_ids": yes_ids, "preface": "", "rationale": "r"}
             )
         return json.dumps({"utterance": utterance})
 

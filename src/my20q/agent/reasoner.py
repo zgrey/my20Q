@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from my20q.agent import prompts
-from my20q.agent.auditor import audit_query
+from my20q.agent.auditor import audit_query, is_repeat, topic_violation
 from my20q.agent.hypotheses import Hypothesis
 from my20q.agent.safety import sanitize_llm_text, sanitize_utterance
 from my20q.llm.base import LLMBackend, LLMUnavailable
@@ -184,6 +184,7 @@ class Reasoner:
         self,
         *,
         topic_label: str,
+        topic_id: str = "",
         candidates: list[tuple[str, str, float]],
         history: list[dict],
         seed_context: str = "",
@@ -191,21 +192,37 @@ class Reasoner:
         topic_hint: str = "",
         emotional_state: dict | None = None,
         anchored: bool = False,
+        exploratory: bool = False,
         on_phase: Callable[[str], None] | None = None,
     ) -> ReasonerAction:
         """Propose the next yes/no question, drilling toward the exact need.
 
         Builds on the warm trail: a recent "yes" means that question was correct
-        (get MORE specific about it); "kinda" means nearly correct (drill into it);
-        "no" means wrong (move away). ``yes_ids`` marks the candidate(s) the
-        question relates to (a "yes" adds points to them). A thinking model takes
-        the two-phase deliberate→format path; every other model takes one fast
-        JSON call. Re-prompts (bounded) on a format-audit failure.
+        (get MORE specific about it); "kinda" means nearly correct (explore a
+        VARIATION of it); "no" means wrong (move away). Each proposed question is
+        audited for format, **redundancy** (not a reworded repeat), and
+        **on-topic** fit before it is accepted. ``exploratory`` turns drop the
+        patient profile so the model explores freely (2 of every 3 turns); the
+        rest may use the profile. Thinking models take the two-phase path.
         """
         live_ids = {hid for hid, _, _ in candidates}
         corrections: list[str] = []
         best: ReasonerAction | None = None
         two_phase = await self._thinking_model()
+        # Redundancy + warm-trail material from the answered history.
+        prior_questions = [
+            h["text"] for h in history if h.get("kind") == "query" and h.get("text")
+        ]
+        kinda_texts = [
+            h["text"]
+            for h in history
+            if h.get("kind") == "query"
+            and h.get("answer") == "kinda"
+            and h.get("text")
+        ]
+        # Exploratory turns ignore the profile so the model is free to explore new
+        # avenues (2 of every 3 turns); only context turns may lean on it.
+        eff_profile = "" if exploratory else profile_context
         for attempt in range(MAX_AUDIT_RETRIES + 1):
             if on_phase is not None:
                 on_phase("re-asking" if attempt else "thinking")
@@ -218,11 +235,13 @@ class Reasoner:
                     candidates,
                     history,
                     seed_context=seed_context,
-                    profile_context=profile_context,
+                    profile_context=eff_profile,
                     topic_hint=topic_hint,
                     emotional_state=emotional_state,
                     corrections=corrections,
                     anchored=anchored,
+                    exploratory=exploratory,
+                    kinda_texts=kinda_texts,
                 )
                 try:
                     draft = await self.llm.chat(
@@ -264,11 +283,13 @@ class Reasoner:
                     candidates,
                     history,
                     seed_context=seed_context,
-                    profile_context=profile_context,
+                    profile_context=eff_profile,
                     topic_hint=topic_hint,
                     emotional_state=emotional_state,
                     corrections=corrections,
                     anchored=anchored,
+                    exploratory=exploratory,
+                    kinda_texts=kinda_texts,
                 )
                 data = await self._chat_json(messages, max_tokens=ASK_MAX_TOKENS)
             question = data.get("question", "")
@@ -292,6 +313,18 @@ class Reasoner:
             if not verdict.ok:
                 corrections.append(verdict.reason)
                 continue
+            # On-topic: the question must fit the round's high-level topic.
+            violation = topic_violation(topic_id, cleaned)
+            if violation:
+                corrections.append(violation)
+                continue
+            # Redundancy: not a reworded repeat of an already-answered question.
+            if is_repeat(cleaned, prior_questions):
+                corrections.append(
+                    "that repeats a question already asked — ask about a genuinely "
+                    "DIFFERENT subject, action, or modifier"
+                )
+                continue
             # The question must relate to at least one live candidate (a "yes"
             # has to credit some need). No balance/split requirement — a narrow,
             # specific drill question is exactly what we want.
@@ -302,11 +335,17 @@ class Reasoner:
                 continue
             return action
 
-        # Retries exhausted — accept the best effort rather than dead-end.
-        if best is not None and best.yes_ids:
+        # Retries exhausted — accept the best effort, but NEVER a known repeat or
+        # an off-topic question (raise instead → a recoverable fallback turn).
+        if (
+            best is not None
+            and best.yes_ids
+            and not is_repeat(best.content, prior_questions)
+            and not topic_violation(topic_id, best.content)
+        ):
             best.rationale = f"(imperfect question accepted) {best.rationale}".strip()
             return best
-        raise ReasonerError("ask: could not produce a usable question")
+        raise ReasonerError("ask: could not produce a usable, novel, on-topic question")
 
     async def expand_hypotheses(
         self,

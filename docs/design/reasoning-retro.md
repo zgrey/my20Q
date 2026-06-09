@@ -198,3 +198,28 @@ which was never seeded. gemma3:12b wandered laterally and never converged.
 still available. Open risks (rounds can run forever; kinda never reaches the gate;
 anchoring can lock a wrong warm area; model-dependent drilling) are tracked in
 `tool-summary.html`.
+
+### 5. Question audits: redundancy, on-topic, exploratory ratio, kinda-variation (2026-06-08)
+
+A trial (target "scared and sad because confused about my environment") showed
+reworded repeats, profile fixation, an off-topic body question under feelings, and
+wasted "kinda"s. Four hardcoded guards (owner's directives):
+
+- **Redundancy** (`auditor.is_repeat` + content-word Jaccard) PLUS an explicit
+  "ALREADY ASKED — do not reword these" list in the prompt (the LLM dedups
+  semantics better than keyword overlap). The reworded-repeat pattern is gone.
+- **On-topic** (`auditor.topic_violation`): feelings reject body words; people
+  require a person reference. Off-topic questions are re-prompted.
+- **2:1 exploratory:context** (`dialogue`: `query_count % 3 != 2`): 2 of every 3
+  turns drop the profile and push a new avenue; the 3rd may use it.
+- **kinda → variation**: warm questions are fed back as "ask a fresh variation,
+  never a reword."
+- Prompt now drives SUBJECT → ACTION → context-specific MODIFIERS.
+
+**Validated mechanically** (gemma4:e4b): questions came out varied, on-topic, and
+non-reworded. **But a NEXT gap surfaced:** a question must map to an EXISTING
+(profile-seeded) candidate (`yes_ids` required), so exploration cannot introduce a
+brand-new emotion that was never seeded — it stayed in the family/future/burden
+neighborhood and never reached "scared/confused." **Next:** let exploratory
+questions CREATE new candidates (context aggregation) so unseeded needs are
+reachable. Until then, free exploration is still bounded by the seed set.

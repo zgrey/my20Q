@@ -56,30 +56,33 @@ more confirmed) and the dialogue so far. Ask the next yes/no question that gets
 CLOSER to the exact need.
 
 Read the answers so far as a trail:
-- a recent "yes" means that question was CORRECT — now get MORE SPECIFIC within it
-  (e.g. body → leg → foot → big toe; a want → which object → which detail);
-- "kinda" means NEARLY correct — drill into that same area to pin it down;
+- a recent "yes" means that question was CORRECT — now get MORE SPECIFIC within it;
+- "kinda" means NEARLY correct — ask a fresh VARIATION (a different angle on the
+  same area), never a reworded repeat;
 - "no" means wrong — move away from it;
 - "not sure" — try a different angle.
+
+Move through three stages as you narrow: (1) identify the SUBJECT (the general
+thing), then (2) the specific ACTION/aspect of that subject, then (3) the
+context-specific MODIFIERS of the subject and action (e.g. feelings: emotion →
+what it is about → how strong / when; body: region → part → exact spot).
 
 OUTPUT — STRICT JSON, nothing else:
 {"question": "...", "yes_ids": ["h2"], "preface": "...", "rationale": "..."}
 
 - "question": ONE plain yes/no question, ~8-16 everyday words. The caregiver can
-  only answer yes / no / kinda / not sure — so NEVER an either/or or
-  multiple-choice question ("Is it A or B?"). It is GOOD to be narrow and
-  specific (e.g. "Is the pain in your foot?"); you do NOT need to split the
-  candidates in half. Build directly on the most recent yes/kinda — go one step
-  more specific. Never re-ask a question already in the history.
+  only answer yes / no / kinda / not sure — so NEVER an either/or. Narrow and
+  specific is GOOD; you do NOT need to split the candidates in half. It must be a
+  GENUINELY NEW question — not a reworded version of any already in the history.
 - "yes_ids": the candidate id(s) a "yes" would confirm or relate to (>=1). If the
   question drills into a more specific version of a candidate, tag that candidate.
-- "preface": a SHORT spoken lead-in (<=12 words) — warm, varies each turn, never
-  just restates the question.
+- "preface": a SHORT spoken lead-in (<=12 words) — warm, varies each turn.
 - "rationale": one short sentence for the caregiver's panel; never spoken.
 
-BANNED — vague meta-questions about whether the person WANTS to talk / share /
-express how they feel (everyone says yes — no information). Ask the SUBSTANCE.
-Weight any [caregiver context] heavily. No medical advice, URLs, markup, or emoji.
+STAY ON TOPIC — every question must fit the round's topic (feelings = an emotion
+or mental state; body = physical health; people = a specific person). BANNED —
+vague meta-questions about whether the person WANTS to talk / share how they feel.
+No medical advice, URLs, markup, or emoji.
 """
 
 # Thinking models take a two-phase ask: first DELIBERATE (free-form reasoning —
@@ -94,16 +97,16 @@ You are given CANDIDATE needs (each with an id and accumulated POINTS — higher
 more confirmed) and the dialogue so far. Work out the SINGLE best yes/no question
 to ask next.
 
-Read the answers as a trail: a recent "yes" = that was correct, get MORE SPECIFIC
-within it (body → leg → foot → big toe); "kinda" = nearly correct, drill into that
-area; "no" = wrong, move away; "not sure" = try another angle. It is GOOD to be
-narrow and specific — you do NOT need to split the candidates in half.
+Read the answers as a trail: "yes" = correct, get MORE SPECIFIC; "kinda" = nearly
+correct, ask a fresh VARIATION (different angle, not a reword); "no" = wrong, move
+away; "not sure" = another angle. Narrow down in three stages — SUBJECT (general
+thing) → ACTION/aspect → context-specific MODIFIERS. Narrow/specific is GOOD; no
+need to split the candidates in half.
 
-Think it through, then state the ONE question. It must be a single plain yes/no
-question (yes / no / kinda / not sure) — never an either/or. Build on the most
-recent yes/kinda, one step more specific. Never re-ask a prior question.
-BANNED — vague meta-questions about whether they WANT to talk / share how they
-feel (everyone says yes). Ask the SUBSTANCE.
+Think it through, then state the ONE question: a single plain yes/no (yes / no /
+kinda / not sure), never an either/or, GENUINELY NEW (not a reworded repeat of any
+prior question). STAY ON TOPIC (feelings = emotion/mental state; body = physical;
+people = a specific person). BANNED — vague "do you want to talk/share" meta-Qs.
 Weight any [caregiver context] heavily. No medical advice.
 """
 
@@ -256,6 +259,37 @@ _ANCHOR_NOTE = (
 )
 
 
+_EXPLORE_NOTE = (
+    "EXPLORE MODE — do NOT lean on the patient profile this turn. Try a NEW "
+    "avenue: a different possible subject the answers have not ruled out yet.\n\n"
+)
+
+
+def _kinda_block(kinda_texts: list[str] | None) -> str:
+    if not kinda_texts:
+        return ""
+    lines = "\n".join(f'  - "{t}"' for t in kinda_texts[-5:])
+    return (
+        "NEARLY RIGHT — the person said 'kinda' to these (they are WARM). Ask a "
+        "fresh VARIATION that explores the same area from a DIFFERENT angle; never "
+        "a reworded repeat:\n"
+        f"{lines}\n\n"
+    )
+
+
+def _asked_block(history: list[dict]) -> str:
+    asked = [h["text"] for h in history if h.get("kind") == "query" and h.get("text")]
+    if not asked:
+        return ""
+    lines = "\n".join(f'  - "{a}"' for a in asked[-14:])
+    return (
+        "ALREADY ASKED — do NOT repeat or REWORD any of these (a different wording "
+        "of the same idea still counts as a repeat); ask about something genuinely "
+        "new:\n"
+        f"{lines}\n\n"
+    )
+
+
 def ask_messages(
     topic_label: str,
     candidates: list[tuple[str, str, float]],
@@ -267,12 +301,15 @@ def ask_messages(
     emotional_state: dict | None = None,
     corrections: list[str] | None = None,
     anchored: bool = False,
+    exploratory: bool = False,
+    kinda_texts: list[str] | None = None,
 ) -> list[LLMMessage]:
     """Ask for the next drilling yes/no question over ``candidates``.
 
     ``candidates`` is ``(id, need, score)`` for the live hypotheses (score =
-    accumulated points). ``anchored`` marks the set is restricted to the warm
-    cluster (drill-in mode).
+    accumulated points). ``anchored`` restricts to the warm cluster; ``exploratory``
+    drops the profile and pushes a new avenue; ``kinda_texts`` are warm questions
+    to vary (not repeat).
     """
     listing = "\n".join(
         f"  {hid}: {need}  [points {score:+.1f}]" for hid, need, score in candidates
@@ -284,8 +321,12 @@ def ask_messages(
         topic_hint=topic_hint,
         emotional_state=emotional_state,
     )
+    if exploratory:
+        instruction += _EXPLORE_NOTE
     if anchored:
         instruction += _ANCHOR_NOTE
+    instruction += _kinda_block(kinda_texts)
+    instruction += _asked_block(history)
     instruction += (
         "CANDIDATE needs in play (id: need [points]):\n"
         f"{listing}\n\n"
@@ -318,13 +359,15 @@ def deliberate_messages(
     emotional_state: dict | None = None,
     corrections: list[str] | None = None,
     anchored: bool = False,
+    exploratory: bool = False,
+    kinda_texts: list[str] | None = None,
 ) -> list[LLMMessage]:
     """Free-form reasoning to choose the next yes/no question (no JSON).
 
     Phase 1 of the two-phase ask used only for thinking models; the structured
     output comes from a separate :func:`format_question_messages` call.
-    ``candidates`` is ``(id, need, score)`` for the live hypotheses. ``anchored``
-    marks the set is restricted to the warm cluster (drill-in mode).
+    ``candidates`` is ``(id, need, score)``. ``exploratory`` drops the profile and
+    pushes a new avenue; ``kinda_texts`` are warm questions to vary (not repeat).
     """
     listing = "\n".join(
         f"  {hid}: {need}  [points {score:+.1f}]" for hid, need, score in candidates
@@ -336,8 +379,12 @@ def deliberate_messages(
         topic_hint=topic_hint,
         emotional_state=emotional_state,
     )
+    if exploratory:
+        instruction += _EXPLORE_NOTE
     if anchored:
         instruction += _ANCHOR_NOTE
+    instruction += _kinda_block(kinda_texts)
+    instruction += _asked_block(history)
     instruction += (
         "CANDIDATE needs in play (id: need [points]):\n"
         f"{listing}\n\n"

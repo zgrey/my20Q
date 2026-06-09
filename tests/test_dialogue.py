@@ -62,6 +62,13 @@ SEED_NEEDS = [
     "I want to call my daughter",
 ]
 
+# Distinct subjects so the mock's drill questions never trip the redundancy audit
+# (used by physical_health / general rounds, so body words are on-topic).
+_DISTINCT_SUBJECTS = [
+    "water", "food", "resting", "the blanket", "your chair", "a snack",
+    "moving around", "the lights", "the noise", "sleep", "sitting up", "warmth",
+]
+
 
 def _topic(topics: list[Topic], topic_id: str) -> Topic:
     t = find_topic(topics, topic_id)
@@ -92,10 +99,14 @@ def _controller_backend(
             return json.dumps({"hypotheses": expand or [], "boost_ids": boost or []})
         if "pin down the ONE specific" in system:  # ask / drill
             i = min(state["ask"], len(asks) - 1)
+            _, yes_ids = asks[i]
+            # Distinct content words each turn so the redundancy audit passes even
+            # past the end of the fixed `asks` list.
+            word = _DISTINCT_SUBJECTS[state["ask"] % len(_DISTINCT_SUBJECTS)]
             state["ask"] += 1
-            question, yes_ids = asks[i]
             return json.dumps(
-                {"question": question, "yes_ids": yes_ids, "preface": "", "rationale": "drill"}
+                {"question": f"Is it about {word}?", "yes_ids": yes_ids,
+                 "preface": "", "rationale": "drill"}
             )
         return json.dumps({"utterance": utterance})  # synthesize
 

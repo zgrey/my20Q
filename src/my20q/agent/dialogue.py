@@ -362,10 +362,16 @@ class Round:
                 }
                 focused, anchored = hyp.anchor_focus(hyp.ranked(active, scores), warm)
                 candidates = [(h.id, h.need, s) for h, s in focused]
+                # 2 of every 3 questions are EXPLORATORY (profile dropped, free to
+                # try a new avenue); every 3rd is context/profile-driven. Keeps the
+                # questioning from collapsing onto profile themes.
+                exploratory = self.query_count % 3 != 2
                 action = await self._reasoner.ask(
                     candidates=candidates,
-                    history=self._history,
+                    topic_id=self.topic.id,
                     anchored=anchored,
+                    exploratory=exploratory,
+                    history=self._history,
                     **self._reasoner_ctx(),
                 )
         except ReasonerError as exc:
