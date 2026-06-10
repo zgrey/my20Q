@@ -209,6 +209,11 @@ export function App() {
       run(() => api.undo(sessionId, round.round_id));
     }
   };
+  const retry = () => {
+    if (sessionId && round && !busy && !terminal) {
+      run(() => api.retry(sessionId, round.round_id));
+    }
+  };
   const newRound = () => {
     if (sessionId && topicId && !busy) {
       run(() => api.startRound(sessionId, topicId));
@@ -358,7 +363,7 @@ export function App() {
         </main>
       ) : (
         <main class="grid">
-          <ConversationTile round={round} busy={busy} phase={phase} />
+          <ConversationTile round={round} busy={busy} phase={phase} onRetry={retry} />
           {/* Pictogram tile shelved — the curated retrieval mostly fell back
               to "?" in real sessions. Component + backend retrieval are kept;
               re-mount once the image slot is driven by a generator (task). */}

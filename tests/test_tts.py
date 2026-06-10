@@ -97,15 +97,19 @@ from fastapi.testclient import TestClient  # noqa: E402
 from my20q.api.app import create_app  # noqa: E402
 
 
+# `tts_enabled=False` makes the unavailability deterministic — on a dev box
+# with piper/kokoro actually installed, Config.from_env() would report ready.
 def test_tts_status_endpoint_reports_unavailable() -> None:
-    client = TestClient(create_app(replace(Config.from_env(), llm_enabled=False), backend=None))
+    cfg = replace(Config.from_env(), llm_enabled=False, tts_enabled=False)
+    client = TestClient(create_app(cfg, backend=None))
     status = client.get("/api/tts/status").json()
     assert status["available"] is False
     assert "reason" in status
 
 
 def test_tts_synthesize_503_when_unavailable() -> None:
-    client = TestClient(create_app(replace(Config.from_env(), llm_enabled=False), backend=None))
+    cfg = replace(Config.from_env(), llm_enabled=False, tts_enabled=False)
+    client = TestClient(create_app(cfg, backend=None))
     resp = client.post("/api/tts", json={"text": "hello"})
     assert resp.status_code == 503
 

@@ -201,6 +201,14 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
       </div>
     );
   }
+  if (entry.kind === "diagnostic") {
+    return (
+      <div class="turn diagnostic">
+        <span class="tag">reasoning failure</span>
+        <span class="ctx-text">{entry.text}</span>
+      </div>
+    );
+  }
   const isSynthesis = entry.kind === "synthesis";
   return (
     <div class={`turn question${isSynthesis ? " was-synthesis" : ""}`}>
@@ -217,10 +225,12 @@ export function ConversationTile({
   round,
   busy,
   phase,
+  onRetry,
 }: {
   round: RoundState | null;
   busy: boolean;
   phase: string | null;
+  onRetry: () => void;
 }) {
   const streamRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -254,6 +264,20 @@ export function ConversationTile({
             <div class="label">Proposed message — confirm with the patient</div>
             <div class="utterance">“{ev.text}”</div>
             <div class="confirm-note">Yes confirms it · any other answer keeps going.</div>
+          </div>
+        )}
+        {!terminal && !busy && ev.kind === "diagnostic" && (
+          <div class="diagnostic-card">
+            <div class="label">⚠ Reasoning failed — no question this turn</div>
+            <p class="diag-text">{ev.text}</p>
+            {ev.diagnostic?.reason && (
+              <p class="diag-reason">
+                <span class="tag">detail</span> {ev.diagnostic.reason}
+              </p>
+            )}
+            <button class="retry-btn" onClick={onRetry}>
+              ↻ Retry
+            </button>
           </div>
         )}
         {busy && !terminal && (
@@ -466,6 +490,8 @@ export function ReasoningTile({
     text = "Round ended without a confirmed message.";
   } else if (event.kind === "emergency") {
     text = "Emergency topic — questioning is bypassed.";
+  } else if (event.kind === "diagnostic") {
+    text = "Reasoning failed — see the failure card in the conversation.";
   } else {
     text = event.rationale || "—";
     live = true;
@@ -479,7 +505,8 @@ export function ReasoningTile({
       : sse === "connecting"
         ? "Connecting to the live progress channel…"
         : "Live progress channel disconnected — events may be delayed";
-  const hypotheses = event?.hypotheses ?? [];
+  const facets = event?.facets ?? [];
+  const hasBoard = facets.some((f) => f.contenders.length > 0);
   return (
     <section class="tile reasoning">
       <h2>
@@ -488,22 +515,36 @@ export function ReasoningTile({
         {live && phaseLabel && <span class="phase-tag">{phaseLabel}</span>}
       </h2>
       <p class="reason-text">{text}</p>
-      {hypotheses.length > 0 && (
+      {hasBoard && (
         <div class="belief">
-          <div class="belief-head">What the need might be</div>
-          <ul class="belief-list">
-            {hypotheses.map((h, i) => {
-              const pct = Math.round(h.weight * 100);
-              return (
-                <li class={`belief-row${i === 0 ? " lead" : ""}`} key={h.need}>
-                  <span class="belief-need">{h.need}</span>
-                  <span class="belief-bar">
-                    <span class="belief-fill" style={`width:${pct}%`} />
-                  </span>
-                  <span class="belief-pct">{pct}%</span>
-                </li>
-              );
-            })}
+          <div class="belief-head">
+            Consensus board — points per contender
+          </div>
+          <ul class="facet-list">
+            {facets.map((f) => (
+              <li class={`facet-row${f.focus ? " focus" : ""}`} key={f.category}>
+                <span class="facet-cat" title={f.focus ? "Current question targets this slot" : ""}>
+                  {f.label}
+                  {f.focus && <span class="facet-focus-dot" />}
+                </span>
+                <span class="facet-contenders">
+                  {f.contenders.length === 0 ? (
+                    <span class="facet-empty">—</span>
+                  ) : (
+                    f.contenders.map((c, i) => (
+                      <span
+                        class={`facet-chip${i === 0 ? " lead" : ""}${
+                          c.score < 0 ? " neg" : ""
+                        }`}
+                        key={c.value}
+                      >
+                        {c.value} <b>{c.score}</b>
+                      </span>
+                    ))
+                  )}
+                </span>
+              </li>
+            ))}
           </ul>
         </div>
       )}

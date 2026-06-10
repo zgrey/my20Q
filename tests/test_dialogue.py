@@ -1,4 +1,4 @@
-"""Tests for the round engine — fallback and the hypothesis controller."""
+"""Tests for the round engine — the 5W1H facet controller and its recovery."""
 
 from __future__ import annotations
 
@@ -6,20 +6,35 @@ import json
 import random
 
 from my20q.agent.dialogue import (
-    MAX_CONSEC_REASON_FAILURES,
     MIN_YES_FOR_SYNTHESIS,
     SOFT_RESET_NO_STREAK,
     Answer,
     Round,
     Session,
 )
-from my20q.agent.hypotheses import Hypothesis
 from my20q.agent.prompts import deliberate_messages, seed_messages
 from my20q.config import ReasoningTuning
 from my20q.llm import MockBackend
 from my20q.llm.base import LLMUnavailable
 from my20q.recording.yes_memory import YesMemory
 from my20q.topics import Topic, find_topic
+
+#: Standard seed payload for the mock protocol (physical_health-ish).
+SEED_SLOTS = {
+    "who": ["my son"],
+    "what": ["a drink", "a snack", "the blanket"],
+    "when": [],
+    "where": [],
+    "why": ["thirsty"],
+    "how": ["bring it", "move it"],
+}
+
+#: Distinct question subjects so the repeat gate never trips in long mock runs.
+_SUBJECTS = [
+    "a drink", "a snack", "the blanket", "your chair", "the lights", "the noise",
+    "sleep", "sitting up", "warmth", "the window", "your glasses", "the radio",
+    "music", "a walk", "the garden", "your book", "a phone call", "the photo",
+]
 
 
 class _FixedRandom(random.Random):
@@ -34,241 +49,367 @@ class _FixedRandom(random.Random):
         return self._value
 
 
-def test_single_need_no_is_soft_not_elimination(topics: list[Topic]) -> None:
-    # "no" is a SOFT down-weight, never an elimination — hard elimination
-    # collapsed the field so fast that synthesis fired before real confirmation.
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 4)]
-    rnd._history = [{"kind": "query", "text": "q", "answer": "no", "yes_ids": ["h2"]}]
-    active, weights = rnd._replay_belief()
-    assert "h2" in weights  # still in play, just less likely
-    assert weights["h2"] < weights["h1"]
-
-
-def test_multi_need_no_does_not_eliminate(topics: list[Topic]) -> None:
-    # A "no" to a question spanning several needs is a soft down-weight, not an
-    # elimination — the question may simply have been fuzzy.
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 4)]
-    rnd._history = [{"kind": "query", "text": "q", "answer": "no", "yes_ids": ["h1", "h2"]}]
-    _, weights = rnd._replay_belief()
-    assert {"h1", "h2"} <= set(weights)
-
-
-def test_rejected_synthesis_keeps_need_for_rephrase(topics: list[Topic]) -> None:
-    # A rejected synthesis NO LONGER eliminates its need — the round rephrases the
-    # SAME need instead, so it must survive in the belief (a "no" to an utterance
-    # does not subtract from the need it was built from).
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._seed_hypotheses = [Hypothesis(f"h{i}", f"need {i}") for i in range(1, 4)]
-    rnd._history = [
-        {"kind": "query", "text": "q", "answer": "yes", "yes_ids": ["h2"]},
-        {"kind": "synthesis", "text": "guess", "answer": "no", "hyp_id": "h2"},
-    ]
-    active, weights = rnd._replay_belief()
-    assert "h2" in weights and any(h.id == "h2" for h in active)  # survives
-    assert weights["h2"] == 1.0  # the synthesis "no" did not touch the belief
-
-SEED_NEEDS = [
-    "I am thirsty and want a glass of water",
-    "My foot hurts",
-    "I feel lonely",
-    "I want to call my daughter",
-]
-
-# Distinct subjects so the mock's drill questions never trip the redundancy audit
-# (used by physical_health / general rounds, so body words are on-topic).
-_DISTINCT_SUBJECTS = [
-    "water", "food", "resting", "the blanket", "your chair", "a snack",
-    "moving around", "the lights", "the noise", "sleep", "sitting up", "warmth",
-]
-
-
 def _topic(topics: list[Topic], topic_id: str) -> Topic:
     t = find_topic(topics, topic_id)
     assert t is not None
     return t
 
 
-def test_exploratory_new_need_spawns_candidate_on_yes(topics: list[Topic]) -> None:
-    # A question that explored a brand-new need (not in the seeds) becomes a real
-    # candidate once the person says yes/kinda — exploration escapes the seed set.
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._seed_hypotheses = [Hypothesis("h1", "need 1"), Hypothesis("h2", "need 2")]
-    rnd._history = [
-        {"kind": "query", "text": "Are you scared?", "answer": "yes",
-         "yes_ids": ["n1"], "new_need": "I feel scared and confused"},
-    ]
-    active, scores = rnd._replay_belief()
-    assert any(h.id == "n1" and h.need == "I feel scared and confused" for h in active)
-    assert scores["n1"] > 0
-
-
-def test_exploratory_new_need_dropped_on_no(topics: list[Topic]) -> None:
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._seed_hypotheses = [Hypothesis("h1", "need 1"), Hypothesis("h2", "need 2")]
-    rnd._history = [
-        {"kind": "query", "text": "Are you scared?", "answer": "no",
-         "yes_ids": ["n1"], "new_need": "I feel scared"},
-    ]
-    active, scores = rnd._replay_belief()
-    assert all(h.id != "n1" for h in active)  # a "no" never spawns the new need
-    assert "n1" not in scores
-
-
-def test_consec_no_streak_counts_tail(topics: list[Topic]) -> None:
-    # The soft-reset trigger counts consecutive "no" answers from the tail: a
-    # "yes"/"kinda" ends the run; "not sure" and caregiver context are transparent.
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._history = [
-        {"kind": "query", "text": "q1", "answer": "yes", "yes_ids": ["h1"]},
-        {"kind": "query", "text": "q2", "answer": "no", "yes_ids": ["h1"]},
-        {"kind": "context", "text": "note", "answer": None},
-        {"kind": "query", "text": "q3", "answer": "not_sure", "yes_ids": ["h1"]},
-        {"kind": "query", "text": "q4", "answer": "no", "yes_ids": ["h1"]},
-    ]
-    # q4 (no) + q2 (no); the not_sure and context between them don't break the run,
-    # but the earlier "yes" does.
-    assert rnd._consec_no_streak() == 2
-
-
-def test_soft_reset_dumps_kinda_rewards(topics: list[Topic]) -> None:
-    # Under a soft reset the "kinda" rewards are withheld so a lukewarm-but-wrong
-    # guess no longer holds the lead — the candidate stays in play at 0.
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._seed_hypotheses = [Hypothesis("h1", "need 1"), Hypothesis("h2", "need 2")]
-    rnd._history = [{"kind": "query", "text": "q", "answer": "kinda", "yes_ids": ["h1"]}]
-    _, normal = rnd._replay_belief()
-    assert normal["h1"] == 0.5  # warmed by the kinda
-    _, dumped = rnd._replay_belief(drop_kinda=True)
-    assert dumped["h1"] == 0.0  # warm reward dumped; still present (in play)
-
-
 def _controller_backend(
     *,
-    seed: list[str] = SEED_NEEDS,
-    asks: list[tuple[str, list[str]]],
+    seed: dict[str, list[str]] | None = None,
     utterance: str = "I would like a glass of water.",
-    expand: list[str] | None = None,
-    boost: list[str] | None = None,
+    expand: dict[str, list[str]] | None = None,
+    slot_cat: str = "what",
 ) -> MockBackend:
-    """A MockBackend that plays the seed/ask/expand/synthesize protocol.
+    """A MockBackend that plays the seed/deliberate/format/expand/synth protocol.
 
-    Branches on the system prompt: returns the seed set, the `expand` needs +
-    `boost` ids for a context note, the next `asks`, or the utterance.
+    Each formatted question uses a fresh subject (tagged into ``slot_cat``), so
+    the repeat gate and the slot-anchoring gate both pass indefinitely.
     """
-    state = {"ask": 0}
+    state = {"q": 0}
 
     def responder(messages: list) -> str:
         system = messages[0]["content"]
-        if "candidate NEEDS to test" in system:
-            return json.dumps({"hypotheses": seed})
-        if "HIGH-TRUST context" in system:
-            return json.dumps({"hypotheses": expand or [], "boost_ids": boost or []})
-        if "pin down the ONE specific" in system:  # ask / drill
-            i = min(state["ask"], len(asks) - 1)
-            _, yes_ids = asks[i]
-            # Distinct content words each turn so the redundancy audit passes even
-            # past the end of the fixed `asks` list.
-            word = _DISTINCT_SUBJECTS[state["ask"] % len(_DISTINCT_SUBJECTS)]
-            state["ask"] += 1
+        if "starting GUESSES" in system:  # seed
+            return json.dumps(seed or SEED_SLOTS)
+        if "HIGH-TRUST" in system:  # expand (caregiver note)
+            return json.dumps({"slots": expand or {}})
+        if "Convert a drafted question" in system:  # format
+            word = _SUBJECTS[state["q"] % len(_SUBJECTS)]
+            state["q"] += 1
             return json.dumps(
-                {"question": f"Is it about {word}?", "yes_ids": yes_ids,
+                {"question": f"Is it about {word}?", "slots": {slot_cat: word},
                  "preface": "", "rationale": "drill"}
             )
+        if "pin down the ONE specific" in system:  # deliberate
+            return "thinking it through..."
         return json.dumps({"utterance": utterance})  # synthesize
 
     return MockBackend(responder=responder)
 
 
-# ----------------------------------------------------------- fallback mode
+# ----------------------------------------------------------- board replay
 
 
-async def test_fallback_walks_question_bank(topics: list[Topic]) -> None:
-    rnd = Round(_topic(topics, "physical_health"), llm=None)
+def test_no_is_soft_never_an_elimination(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink", "a snack"]}
+    rnd._history = [
+        {"kind": "query", "text": "Is it a drink?", "answer": "no",
+         "slots": {"what": "a drink"}}
+    ]
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] == -1.0  # down-weighted, still known
+    assert board["what"]["a snack"] == 0.0  # untouched — never promoted
+
+
+def test_rejected_synthesis_does_not_touch_the_board(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink"]}
+    rnd._history = [
+        {"kind": "query", "text": "Is it a drink?", "answer": "yes",
+         "slots": {"what": "a drink"}},
+        {"kind": "synthesis", "text": "guess", "answer": "no",
+         "slots": {"what": "a drink"}},
+    ]
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] == 1.0  # the rejection subtracted nothing
+
+
+def test_context_entry_boosts_the_board(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink"]}
+    rnd._history = [
+        {"kind": "context", "text": "pointing at the cup", "answer": None,
+         "slots": {"what": ["a drink"], "where": ["the kitchen"]}}
+    ]
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] == 2.0  # high-trust boost
+    assert board["where"]["the kitchen"] == 2.0  # minted + boosted
+
+
+def test_restart_marker_replaces_the_board(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["old thing"]}
+    rnd._history = [
+        {"kind": "query", "text": "Is it the old thing?", "answer": "kinda",
+         "slots": {"what": "old thing"}},
+        {"kind": "restart", "reason": "no-streak",
+         "board": {"what": [["a drink", 1.0], ["fresh idea", 0.0]]}},
+    ]
+    board = rnd._replay_board()
+    assert "old thing" not in board["what"]  # dumped
+    assert board["what"]["a drink"] == 1.0  # kept yes-signal carried over
+    assert board["what"]["fresh idea"] == 0.0
+
+
+def test_consec_no_streak_counts_tail(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._history = [
+        {"kind": "query", "text": "q1", "answer": "yes", "slots": {"what": "x"}},
+        {"kind": "query", "text": "q2", "answer": "no", "slots": {"what": "x"}},
+        {"kind": "context", "text": "note", "answer": None},
+        {"kind": "query", "text": "q3", "answer": "not_sure", "slots": {"what": "x"}},
+        {"kind": "query", "text": "q4", "answer": "no", "slots": {"what": "x"}},
+    ]
+    # q4 (no) + q2 (no); the not_sure and context between them don't break the
+    # run, but the earlier "yes" does.
+    assert rnd._consec_no_streak() == 2
+
+
+# ------------------------------------------------------------ focus policy
+
+
+def _policy_round(topics: list[Topic]) -> Round:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())  # core: what+how
+    rnd._seed_values = {"what": ["a drink", "a snack"], "how": ["bring it"],
+                        "why": ["thirsty"]}
+    return rnd
+
+
+def test_focus_probes_unestablished_core_first(topics: list[Topic]) -> None:
+    rnd = _policy_round(topics)
+    focus, directive, pair = rnd._pick_focus(rnd._replay_board(), [])
+    assert focus == "what" and directive == "probe" and pair is None
+
+
+def test_focus_splits_tied_contenders(topics: list[Topic]) -> None:
+    rnd = _policy_round(topics)
+    rnd._history = [
+        {"kind": "query", "text": "drink?", "answer": "yes", "slots": {"what": "a drink"}},
+        {"kind": "query", "text": "snack?", "answer": "yes", "slots": {"what": "a snack"}},
+        {"kind": "query", "text": "bring?", "answer": "yes", "slots": {"how": "bring it"}},
+    ]
+    focus, directive, pair = rnd._pick_focus(rnd._replay_board(), rnd._history)
+    assert focus == "what" and directive == "split"
+    assert set(pair) == {"a drink", "a snack"}
+
+
+def test_focus_never_hammers_one_category(topics: list[Topic]) -> None:
+    # The "why"-hammering guard: after MAX_CATEGORY_RUN consecutive focuses on
+    # the same slot, the policy moves to an alternative even if that slot is
+    # still the weakest.
+    rnd = _policy_round(topics)
+    seg = [
+        {"kind": "query", "text": "q1", "answer": "no",
+         "slots": {"what": "a drink"}, "focus": "what"},
+        {"kind": "query", "text": "q2", "answer": "no",
+         "slots": {"what": "a snack"}, "focus": "what"},
+    ]
+    rnd._history = list(seg)
+    focus, directive, _ = rnd._pick_focus(rnd._replay_board(), seg)
+    assert focus == "how"  # rotated away from the hammered "what"
+
+
+def test_focus_enriches_modifiers_once_core_is_confident(topics: list[Topic]) -> None:
+    rnd = _policy_round(topics)
+    rnd._history = [
+        {"kind": "query", "text": f"q{i}", "answer": "yes", "slots": slots}
+        for i, slots in enumerate(
+            [{"what": "a drink"}] * 3 + [{"how": "bring it"}] * 3
+        )
+    ]
+    focus, directive, _ = rnd._pick_focus(rnd._replay_board(), [])
+    assert focus in ("who", "when", "where", "why")
+    assert directive == "probe"
+
+
+# --------------------------------------------------- reasoning round flow
+
+
+async def test_reasoning_round_converges_via_the_board(topics: list[Topic]) -> None:
+    backend = _controller_backend()
+    rnd = Round(_topic(topics, "physical_health"), llm=backend,
+                rng=_FixedRandom(0.99))
     ev = await rnd.open()
-    assert ev.kind == "query" and ev.engine == "fallback"
-    first = ev.text
+    assert ev.kind == "query" and ev.engine == "reasoning"
+    # The honest tile gets the full six-category board.
+    assert [f["category"] for f in ev.facets] == [
+        "who", "what", "when", "where", "why", "how"
+    ]
+    assert any(f["focus"] for f in ev.facets)
+
+    yeses = 0
+    while ev.kind == "query" and yeses < 12:
+        ev = await rnd.answer(Answer.YES)
+        yeses += 1
+    assert ev.kind == "synthesis"
+    # Converged via consensus-readiness or the yes-gate — never on the 1st yes.
+    assert 2 <= yeses <= MIN_YES_FOR_SYNTHESIS
+
+    ev = await rnd.answer(Answer.YES)
+    assert ev.kind == "synthesized"
+    assert "water" in rnd.final_utterance
+    # The query entries carry their slots/focus for replay and the dataset.
+    q1 = rnd.history[0]
+    assert q1["slots"] and q1["focus"]
+
+
+async def test_undo_recomputes_the_board(topics: list[Topic]) -> None:
+    backend = _controller_backend()
+    rnd = Round(_topic(topics, "physical_health"), llm=backend,
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    assert len(rnd.history) == 1
+    ev = await rnd.undo()
+    assert len(rnd.history) == 0
+    assert ev.kind == "query"
+    # All scores back to zero after the undo.
+    assert all(c["score"] == 0 for f in ev.facets for c in f["contenders"])
+
+
+async def test_safety_ceiling_stops_without_forcing_synthesis(topics: list[Topic]) -> None:
+    backend = _controller_backend()
+    rnd = Round(_topic(topics, "general"), llm=backend, max_queries=1,
+                rng=_FixedRandom(0.99))
+    ev = await rnd.open()
+    assert ev.kind == "query"
+    ev = await rnd.answer(Answer.NO)  # 1 query asked == ceiling -> stop
+    assert ev.kind == "abandoned"
+    assert rnd.outcome == "abandoned"
+
+
+async def test_unlimited_budget_keeps_questioning(topics: list[Topic]) -> None:
+    backend = _controller_backend()
+    rnd = Round(_topic(topics, "physical_health"), llm=backend,
+                rng=_FixedRandom(0.99))
+    assert rnd.max_queries == 0
+    await rnd.open()
     ev = await rnd.answer(Answer.NO)
-    assert ev.kind == "query" and ev.text != first
+    assert rnd.outcome is None  # not abandoned by count
+    assert ev.kind in ("query", "synthesis")
 
 
-async def test_fallback_only_questions_never_ends(topics: list[Topic]) -> None:
-    # Fallback mode (no LLM) now ONLY asks questions — it never synthesizes and
-    # never ends the round. Only a "yes" to an utterance ends a round, and only the
-    # reasoner produces utterances, so a fallback round just keeps questioning.
-    rnd = Round(_topic(topics, "physical_health"), llm=None)
+async def test_rejected_synthesis_keeps_going(topics: list[Topic]) -> None:
+    backend = _controller_backend()
+    rnd = Round(_topic(topics, "physical_health"), llm=backend,
+                rng=_FixedRandom(0.99))
     ev = await rnd.open()
-    assert ev.kind == "query" and ev.engine == "fallback"
-    for _ in range(3):
-        ev = await rnd.answer(Answer.YES)  # "yes" to a fallback QUESTION
-        assert ev.kind == "query"  # never a synthesis / round end
-        assert rnd.outcome is None and not rnd.is_terminal
+    yeses = 0
+    while ev.kind == "query" and yeses < 12:
+        ev = await rnd.answer(Answer.YES)
+        yeses += 1
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.NO)  # rejects the proposal — round continues
+    assert rnd.outcome is None
+    assert ev.kind in ("query", "synthesis")
 
 
-async def test_transient_reasoner_failure_recovers_next_turn(
+async def test_round_never_ends_until_yes_rephrases_then_restarts(
     topics: list[Topic],
 ) -> None:
-    # A single transient failure (e.g. a model still cold-loading after a
-    # runtime switch) must NOT permanently kill the round — it falls back for
-    # that turn, then reasoning resumes on the next turn.
-    state = {"calls": 0}
+    # The full synthesis loop with small thresholds: question -> synthesize ->
+    # rephrase -> requestion -> synthesize -> after 2 failed attempts, RESTART.
+    # The round NEVER ends until a "yes" to an utterance.
+    tuning = ReasoningTuning(
+        min_yes_for_synthesis=2,
+        new_yes_for_resynthesis=1,
+        rephrase_limit=1,
+        synth_attempts_before_restart=2,
+    )
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                tuning=tuning, rng=_FixedRandom(0.99))
+    await rnd.open()
+    ev = await rnd.answer(Answer.YES)  # 1 yes -> still questioning
+    assert ev.kind == "query"
+    ev = await rnd.answer(Answer.YES)  # 2 yeses -> synthesis attempt #1
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.NO)  # reject -> rephrase
+    assert ev.kind == "synthesis" and rnd.outcome is None
+    ev = await rnd.answer(Answer.NO)  # reject again -> attempt #1 done -> question
+    assert ev.kind == "query" and rnd.outcome is None
+    ev = await rnd.answer(Answer.YES)  # 1 NEW yes -> synthesis attempt #2
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.NO)  # reject -> rephrase
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.NO)  # reject -> attempt #2 done -> RESTART
+    assert ev.kind == "query" and rnd.outcome is None
+    assert any(h["kind"] == "restart" for h in rnd.history)  # context dumped
+    ev = await rnd.answer(Answer.YES)  # 1 yes post-restart -> synthesis
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.YES)  # YES to the utterance -> ends
+    assert ev.kind == "synthesized" and rnd.is_terminal
 
-    def responder(messages: list) -> str:
-        state["calls"] += 1
-        if state["calls"] == 1:  # first reasoning call (the seed) blips out
-            raise LLMUnavailable("cold load timeout")
-        system = messages[0]["content"]
-        if "candidate NEEDS to test" in system:
-            return json.dumps({"hypotheses": SEED_NEEDS})
-        if "pin down the ONE specific" in system:
-            return json.dumps(
-                {"question": "Is it about a drink?", "yes_ids": ["h1"],
-                 "preface": "", "rationale": "x"}
-            )
-        return json.dumps({"utterance": "I would like a glass of water."})
 
-    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend(responder=responder))
+async def test_restart_keeps_yes_signal_and_dumps_no(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    rnd._history = [
+        {"kind": "query", "text": "Is it a drink?", "answer": "yes",
+         "slots": {"what": "a drink"}},
+        {"kind": "query", "text": "Is it a snack?", "answer": "no",
+         "slots": {"what": "a snack"}},
+        {"kind": "query", "text": "Is it the blanket?", "answer": "kinda",
+         "slots": {"what": "the blanket"}},
+    ]
+    await rnd._restart("test")
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] == 1.0  # round-specific yes kept
+    assert board["what"].get("a snack", 0.0) == 0.0  # the "no" influence dumped
+    assert board["what"].get("the blanket", 0.0) == 0.0  # "kinda" dumped too
+
+
+async def test_no_streak_triggers_restart(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    for _ in range(SOFT_RESET_NO_STREAK):  # exactly the threshold — no restart
+        await rnd.answer(Answer.NO)
+    assert not any(h["kind"] == "restart" for h in rnd.history)
+    await rnd.answer(Answer.NO)  # one MORE -> the restart recovery fires
+    assert any(h["kind"] == "restart" for h in rnd.history)
+    assert rnd.engine == "reasoning"  # stayed in reasoning throughout
+
+
+async def test_round_records_yes_into_memory(topics: list[Topic]) -> None:
+    mem = YesMemory()
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                yes_memory=mem, round_id="r1", rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    assert mem.needs()  # the confirmed slot value was logged
+    assert mem.items[0]["round_id"] == "r1"
+
+
+async def test_add_context_steers_and_boosts(topics: list[Topic]) -> None:
+    backend = _controller_backend(expand={"what": ["a drink"]})
+    rnd = Round(_topic(topics, "physical_health"), llm=backend,
+                rng=_FixedRandom(0.99))
+    first = await rnd.open()
+    ev = await rnd.add_context("She keeps pointing at the empty cup.")
+    assert ev.kind == "query"
+    assert "context" in [h["kind"] for h in rnd.history]
+    assert ev.text != first.text
+    what = next(f for f in ev.facets if f["category"] == "what")
+    assert what["contenders"][0] == {"value": "a drink", "score": 2.0}
+
+
+async def test_undo_removes_context_boost(topics: list[Topic]) -> None:
+    backend = _controller_backend(expand={"where": ["the kitchen"]})
+    rnd = Round(_topic(topics, "physical_health"), llm=backend,
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    ev = await rnd.add_context("pointing toward the kitchen")
+    where = next(f for f in ev.facets if f["category"] == "where")
+    assert where["contenders"]
+    ev = await rnd.undo()  # pops the context entry -> the boost disappears
+    where = next(f for f in ev.facets if f["category"] == "where")
+    assert not where["contenders"]
+
+
+# ------------------------------------------ failure -> recovery -> diagnostic
+
+
+async def test_no_llm_round_surfaces_a_diagnostic(topics: list[Topic]) -> None:
+    # No canned questions: without an LLM the round says so, honestly.
+    rnd = Round(_topic(topics, "physical_health"), llm=None)
     ev = await rnd.open()
-    assert ev.engine == "fallback" and ev.kind == "query"  # transient degrade
-    ev = await rnd.answer(Answer.NO)
-    assert ev.engine == "reasoning" and ev.kind == "query"  # recovered
-
-
-async def test_persistent_reasoner_failure_keeps_retrying(
-    topics: list[Topic],
-) -> None:
-    # Reasoning is NEVER permanently abandoned: even after many consecutive
-    # failures (well past the old give-up threshold) the reasoner is retried every
-    # turn, the round never ends on a failure, and a recovery resumes reasoning.
-    recover_at = MAX_CONSEC_REASON_FAILURES + 3
-    state = {"calls": 0}
-
-    def responder(messages: list) -> str:
-        state["calls"] += 1
-        if state["calls"] < recover_at:
-            raise LLMUnavailable("down")
-        system = messages[0]["content"]
-        if "candidate NEEDS to test" in system:
-            return json.dumps({"hypotheses": SEED_NEEDS})
-        if "pin down the ONE specific" in system:
-            return json.dumps(
-                {"question": "Is it about a drink?", "yes_ids": ["h1"],
-                 "preface": "", "rationale": "x"}
-            )
-        return json.dumps({"utterance": "I would like a glass of water."})
-
-    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend(responder=responder))
-    ev = await rnd.open()  # seed fails -> fallback question
-    assert ev.engine == "fallback" and not rnd.is_terminal
-    # Drive several turns through the persistent failure — never terminal, never
-    # permanently dropped (well past MAX_CONSEC_REASON_FAILURES).
-    while state["calls"] < recover_at - 1:
-        ev = await rnd.answer(Answer.NO)
-        assert ev.engine == "fallback" and not rnd.is_terminal
-    # Backend recovers -> reasoning resumes (the reasoner was kept all along).
-    ev = await rnd.answer(Answer.NO)
-    assert ev.engine == "reasoning" and ev.kind == "query"
+    assert ev.kind == "diagnostic" and ev.engine == "fallback"
+    assert ev.diagnostic is not None
+    assert not rnd.is_terminal  # the round is alive; retry is possible
 
 
 async def test_emergency_topic_short_circuits(topics: list[Topic]) -> None:
@@ -279,308 +420,114 @@ async def test_emergency_topic_short_circuits(topics: list[Topic]) -> None:
     assert rnd.outcome == "emergency"
 
 
-# -------------------------------------------------- hypothesis controller
-
-
-async def test_reasoning_round_converges_via_belief(topics: list[Topic]) -> None:
-    backend = _controller_backend(
-        asks=[
-            ("Is it something you want right now?", ["h1", "h2"]),
-            ("Are you feeling thirsty?", ["h1"]),
-            ("Is it about a drink?", ["h1"]),
-        ]
-    )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=0)
-    ev = await rnd.open()
-    assert ev.kind == "query" and ev.engine == "reasoning"
-    # The honest tile gets the full live belief.
-    assert len(ev.hypotheses) == len(SEED_NEEDS)
-    assert ev.hypotheses[0]["need"] in SEED_NEEDS
-
-    ev = await rnd.answer(Answer.YES)
-    yeses = 1
-    assert ev.kind == "query"  # NOT synthesized yet — far short of the yes gate
-    assert rnd.history[0]["yes_ids"] == ["h1", "h2"]
-
-    # Keep confirming; an utterance must not appear before MIN_YES_FOR_SYNTHESIS.
-    while ev.kind == "query" and yeses < 12:
-        ev = await rnd.answer(Answer.YES)
-        yeses += 1
-    assert ev.kind == "synthesis"
-    # Converged via READINESS (a dominant leader) before the full yes-gate — but
-    # never on the first yes; belief accumulation is required either way.
-    assert 2 <= yeses <= MIN_YES_FOR_SYNTHESIS
-
-    ev = await rnd.answer(Answer.YES)
-    assert ev.kind == "synthesized"
-    assert "water" in rnd.final_utterance
-
-
-async def test_undo_recomputes_belief(topics: list[Topic]) -> None:
-    backend = _controller_backend(
-        asks=[("Is it something you want?", ["h1", "h2"]), ("Is it a drink?", ["h1"])]
-    )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
-    await rnd.open()
-    await rnd.answer(Answer.YES)
-    assert len(rnd.history) == 1
-    ev = await rnd.undo()
-    assert len(rnd.history) == 0
-    assert ev.kind == "query" and len(ev.hypotheses) == len(SEED_NEEDS)
-
-
-async def test_safety_ceiling_stops_without_forcing_synthesis(topics: list[Topic]) -> None:
-    # A positive max_queries is a hard SAFETY ceiling — it ends the round, it does
-    # NOT force a half-baked utterance. Synthesis is readiness-driven only.
-    backend = _controller_backend(asks=[("Is it something you want?", ["h1", "h2"])])
-    rnd = Round(_topic(topics, "general"), llm=backend, max_queries=1)
-    ev = await rnd.open()
-    assert ev.kind == "query"
-    ev = await rnd.answer(Answer.NO)  # 1 query asked == ceiling -> stop, no synthesis
-    assert ev.kind == "abandoned"
-    assert rnd.outcome == "abandoned"
-
-
-async def test_unlimited_budget_keeps_questioning(topics: list[Topic]) -> None:
-    # The default (max_queries=0) is unlimited: a non-converging answer keeps the
-    # round collecting context rather than abandoning on a question count.
-    backend = _controller_backend(
-        asks=[
-            ("Is it something you want?", ["h1", "h2"]),
-            ("Are you thirsty?", ["h1"]),
-        ]
-    )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend)  # default unlimited
-    assert rnd.max_queries == 0
-    await rnd.open()
-    ev = await rnd.answer(Answer.NO)
-    assert rnd.outcome is None  # not abandoned by count
-    assert ev.kind in ("query", "synthesis")
-
-
-async def test_soft_reset_fires_after_no_streak(topics: list[Topic]) -> None:
-    # More than SOFT_RESET_NO_STREAK consecutive "no" answers triggers a soft
-    # reset: the next ask carries the SOFT RESET framing. It must NOT fire one
-    # "no" early, and the round must stay in reasoning mode (not degrade).
-    seen = {"reset": False}
-    n = {"ask": 0}
+async def test_unreachable_llm_yields_diagnostic_then_recovers(
+    topics: list[Topic],
+) -> None:
+    # Transient outage: the seed call blips -> diagnostic (no canned question),
+    # the caregiver retries -> reasoning resumes.
+    state = {"calls": 0}
+    inner = _controller_backend()
 
     def responder(messages: list) -> str:
+        state["calls"] += 1
+        if state["calls"] == 1:  # first call (the seed) blips out
+            raise LLMUnavailable("cold load timeout")
+        return inner.responder(messages)
+
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=MockBackend(responder=responder), rng=_FixedRandom(0.99))
+    ev = await rnd.open()
+    assert ev.kind == "diagnostic"
+    assert ev.diagnostic["llm_unreachable"] is True
+    assert ev.diagnostic["restart_attempted"] is False  # pointless when down
+    ev = await rnd.retry()
+    assert ev.kind == "query" and ev.engine == "reasoning"  # recovered
+
+
+async def test_fail_loop_triggers_restart_recovery(topics: list[Topic]) -> None:
+    # The model gets stuck repeating one question. The repeat gate exhausts the
+    # ask -> the engine dumps the no/kinda context (restart) and re-asks; the
+    # recovered question carries the restart note in its rationale. The mock
+    # un-sticks only once the DELIBERATE prompt shows the restart marker (the
+    # dumped-context history), mirroring a model freed by the context dump.
+    def responder(messages: list) -> str:
         system = messages[0]["content"]
-        if "candidate NEEDS to test" in system:
-            return json.dumps({"hypotheses": SEED_NEEDS})
-        if "pin down the ONE specific" in system:  # ask / drill
-            if "SOFT RESET" in messages[1]["content"]:
-                seen["reset"] = True
-            word = _DISTINCT_SUBJECTS[n["ask"] % len(_DISTINCT_SUBJECTS)]
-            n["ask"] += 1
-            # Explore a brand-new need each turn so a wall of "no" never depletes
-            # the seed candidates (a "no" on a minted id leaves the seeds alive).
+        if "starting GUESSES" in system:
+            return json.dumps(SEED_SLOTS)
+        if "pin down the ONE specific" in system:  # deliberate (sees history)
+            return (
+                "UNSTUCK" if "[restart" in messages[1]["content"] else "still stuck"
+            )
+        if "Convert a drafted question" in system:  # format (sees the draft)
+            if "UNSTUCK" in messages[1]["content"]:
+                return json.dumps(
+                    {"question": "Is it about the window?",
+                     "slots": {"what": "the window"}, "preface": "",
+                     "rationale": "fresh"}
+                )
             return json.dumps(
-                {"question": f"Is it about {word}?", "yes_ids": [],
-                 "new_need": f"I need {word}", "preface": "", "rationale": "drill"}
+                {"question": "Is it about a drink?", "slots": {"what": "a drink"},
+                 "preface": "", "rationale": "stuck"}
             )
         return json.dumps({"utterance": "x"})
 
-    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend(responder=responder))
-    await rnd.open()
-    for _ in range(SOFT_RESET_NO_STREAK):  # exactly the threshold -> still no reset
-        await rnd.answer(Answer.NO)
-    assert not seen["reset"]
-    await rnd.answer(Answer.NO)  # one MORE than the threshold -> reset fires
-    assert seen["reset"]
-    assert rnd.engine == "reasoning"  # stayed in reasoning, did not degrade
-
-
-def test_deliberate_messages_reset_injects_reset_framing() -> None:
-    # A reset ask drops the warm "kinda" framing and re-grounds in the yeses.
-    content = deliberate_messages(
-        "My feelings",
-        [("h1", "I feel scared", -2.0)],
-        [{"kind": "query", "text": "Are you hungry?", "answer": "yes"}],
-        reset=True,
-        yes_texts=["Are you hungry?"],
-        kinda_texts=["Are you cold?"],
-    )[1]["content"]
-    assert "SOFT RESET" in content
-    assert "CONFIRMED so far" in content and "Are you hungry?" in content
-    assert "NEARLY RIGHT" not in content  # the kinda block is suppressed on reset
-
-
-async def test_rejected_synthesis_keeps_going(topics: list[Topic]) -> None:
-    backend = _controller_backend(
-        asks=[
-            ("Is it something you want?", ["h1", "h2"]),
-            ("Are you thirsty?", ["h1"]),
-            ("Is it about a person?", ["h4"]),
-        ]
-    )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=0)
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=MockBackend(responder=responder), rng=_FixedRandom(0.99))
     ev = await rnd.open()
-    yeses = 0
-    while ev.kind == "query" and yeses < 12:  # confirm past the yes gate
-        ev = await rnd.answer(Answer.YES)
-        yeses += 1
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # rejects the proposal — round continues
-    assert rnd.outcome is None
-    assert ev.kind in ("query", "synthesis")
+    assert ev.text == "Is it about a drink?"
+    ev = await rnd.answer(Answer.NO)
+    # The stuck model repeated itself -> restart recovery -> fresh question.
+    assert ev.kind == "query"
+    assert ev.text == "Is it about the window?"
+    assert "(recovered after a context restart)" in ev.rationale
+    assert any(h["kind"] == "restart" for h in rnd.history)
 
 
-def test_reseed_marker_resets_belief(topics: list[Topic]) -> None:
-    # A reseed marker DUMPS the accumulated belief and restarts from its seeds.
-    rnd = Round(_topic(topics, "mental_health"), llm=MockBackend())
-    rnd._seed_hypotheses = [Hypothesis("h1", "old need")]
-    rnd._history = [
-        {"kind": "query", "text": "q", "answer": "yes", "yes_ids": ["h1"]},
-        {"kind": "reseed", "seeds": [{"id": "s1", "need": "fresh A"},
-                                     {"id": "s2", "need": "fresh B"}]},
-    ]
-    active, scores = rnd._replay_belief()
-    assert {h.need for h in active} == {"fresh A", "fresh B"}  # restarted
-    assert "h1" not in scores  # the old belief was dumped
-    assert scores == {"s1": 0.0, "s2": 0.0}  # fresh seeds, zeroed
-
-
-def _explorer_backend() -> MockBackend:
-    """A backend whose questions always explore a NEW need (minted id), so the
-    drilling never depends on specific seed ids — survives a reseed cleanly."""
-    state = {"q": 0}
+async def test_persistent_failure_surfaces_diagnostic_and_retry_works(
+    topics: list[Topic],
+) -> None:
+    # Even the restart recovery fails -> a diagnostic event with the reason;
+    # the round is NOT terminal and answer() without a pending action raises.
+    state = {"stuck": True}
 
     def responder(messages: list) -> str:
         system = messages[0]["content"]
-        if "candidate NEEDS to test" in system:
-            return json.dumps({"hypotheses": SEED_NEEDS})
-        if "pin down the ONE specific" in system:
-            word = _DISTINCT_SUBJECTS[state["q"] % len(_DISTINCT_SUBJECTS)]
-            state["q"] += 1
+        if "starting GUESSES" in system:
+            return json.dumps(SEED_SLOTS)
+        if "Convert a drafted question" in system:
+            if state["stuck"]:
+                return json.dumps(
+                    {"question": "Is it about a drink?",
+                     "slots": {"what": "a drink"}, "preface": "", "rationale": "x"}
+                )
             return json.dumps(
-                {"question": f"Is it about {word}?", "yes_ids": [],
-                 "new_need": f"I need {word}", "preface": "", "rationale": "x"}
+                {"question": "Is it about the radio?",
+                 "slots": {"what": "the radio"}, "preface": "", "rationale": "x"}
             )
-        return json.dumps({"utterance": "I would like a glass of water."})
+        if "pin down the ONE specific" in system:
+            return "hmm"
+        return json.dumps({"utterance": "x"})
 
-    return MockBackend(responder=responder)
-
-
-async def test_round_never_ends_until_yes_rephrases_then_reseeds(
-    topics: list[Topic],
-) -> None:
-    # The full synthesis loop with small thresholds: question -> synthesize ->
-    # rephrase -> requestion -> synthesize -> after 2 failed attempts, DUMP+reseed.
-    # The round NEVER ends until a "yes" to an utterance.
-    tuning = ReasoningTuning(
-        min_yes_for_synthesis=2,
-        new_yes_for_resynthesis=1,
-        rephrase_limit=1,
-        synth_attempts_before_reseed=2,
-    )
-    rnd = Round(_topic(topics, "physical_health"), llm=_explorer_backend(), tuning=tuning)
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=MockBackend(responder=responder), rng=_FixedRandom(0.99))
     await rnd.open()
-    ev = await rnd.answer(Answer.YES)  # 1 yes -> still questioning
-    assert ev.kind == "query"
-    ev = await rnd.answer(Answer.YES)  # 2 yeses -> synthesis attempt #1
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # reject -> rephrase
-    assert ev.kind == "synthesis" and rnd.outcome is None
-    ev = await rnd.answer(Answer.NO)  # reject again -> attempt #1 exhausted -> question
-    assert ev.kind == "query" and rnd.outcome is None
-    ev = await rnd.answer(Answer.YES)  # 1 NEW yes -> synthesis attempt #2
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # reject -> rephrase
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # reject -> attempt #2 exhausted -> RESEED
-    assert ev.kind == "query" and rnd.outcome is None
-    assert any(h["kind"] == "reseed" for h in rnd.history)  # context was dumped
-    # The ONLY way to end is a "yes" to an utterance. Post-reseed needs `new_yes`
-    # (a synthesis was already attempted this round), so one yes reaches the proposal.
-    ev = await rnd.answer(Answer.YES)  # 1 yes post-reseed -> synthesis
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.YES)  # YES to the utterance -> ends
-    assert ev.kind == "synthesized" and rnd.is_terminal
+    ev = await rnd.answer(Answer.NO)  # stuck through restart too -> diagnostic
+    assert ev.kind == "diagnostic"
+    assert ev.diagnostic["restart_attempted"] is True
+    assert "diagnostic" in [h["kind"] for h in rnd.history]
+    assert not rnd.is_terminal
+    # No pending action while diagnosed — answering is a state error.
+    try:
+        await rnd.answer(Answer.YES)
+        raise AssertionError("answer() must fail with no pending action")
+    except RuntimeError:
+        pass
+    state["stuck"] = False  # the model comes back
+    ev = await rnd.retry()
+    assert ev.kind == "query" and ev.text == "Is it about the radio?"
 
 
-async def test_round_records_yes_into_shared_memory(topics: list[Topic]) -> None:
-    # Each confirmed-yes query lands in the (session-shared) yes-memory, the durable
-    # signal used to reseed and to seed later rounds in the session.
-    mem = YesMemory()
-    backend = _controller_backend(asks=[("Is it about a drink?", ["h1"])])
-    rnd = Round(
-        _topic(topics, "physical_health"), llm=backend, yes_memory=mem, round_id="r1"
-    )
-    await rnd.open()
-    await rnd.answer(Answer.YES)
-    assert mem.needs()  # the confirmed need was remembered
-    assert any("water" in n.lower() for n in mem.needs())
-
-
-async def test_add_context_steers_next_question(topics: list[Topic]) -> None:
-    backend = _controller_backend(
-        asks=[("Is it something you want?", ["h1", "h2"]), ("Is it a drink?", ["h1"])]
-    )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend)
-    first = await rnd.open()
-    refreshed = await rnd.add_context("She keeps pointing at the empty cup.")
-    assert refreshed.kind == "query"
-    assert "context" in [h["kind"] for h in rnd.history]
-    assert refreshed.text != first.text
-
-
-async def test_add_context_expands_belief(topics: list[Topic]) -> None:
-    backend = _controller_backend(
-        seed=["My foot hurts", "I feel lonely", "I want to stand up", "I feel tired"],
-        asks=[("Is it about your body?", ["h1"]), ("Is it a drink?", ["h5"])],
-        expand=["I am thirsty and want a drink"],
-    )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
-    ev = await rnd.open()
-    assert len(ev.hypotheses) == 4
-    ev = await rnd.add_context("She keeps pointing at the empty cup.")
-    # The note's need was added and — being high-trust — leads the belief.
-    assert len(ev.hypotheses) == 5
-    assert ev.hypotheses[0]["need"] == "I am thirsty and want a drink"
-    assert "added" in rnd.history[-1]  # recorded so undo can reconstruct
-
-
-async def test_context_boosts_an_existing_candidate(topics: list[Topic]) -> None:
-    # The note adds no new need but confirms an existing one (h1, thirst) — the
-    # high-trust signal makes it lead even though it was a uniform seed.
-    backend = _controller_backend(
-        asks=[("Is it about your body?", ["h2"])], expand=[], boost=["h1"]
-    )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
-    await rnd.open()
-    ev = await rnd.add_context("She keeps reaching for her water cup.")
-    assert len(ev.hypotheses) == len(SEED_NEEDS)  # nothing new added
-    assert ev.hypotheses[0]["need"] == SEED_NEEDS[0]  # thirst now leads
-    assert ev.hypotheses[0]["weight"] > 0.5
-    assert rnd.history[-1]["boost"] == ["h1"]
-
-
-async def test_undo_removes_context_hypotheses(topics: list[Topic]) -> None:
-    backend = _controller_backend(
-        seed=["My foot hurts", "I feel lonely", "I want to stand up", "I feel tired"],
-        asks=[
-            ("Is it about your body?", ["h1"]),
-            ("Is it a drink?", ["h5"]),
-            ("Is it your body?", ["h1"]),
-        ],
-        expand=["I am thirsty and want a drink"],
-    )
-    rnd = Round(_topic(topics, "physical_health"), llm=backend, max_queries=20)
-    await rnd.open()
-    ev = await rnd.add_context("pointing at the cup")
-    assert len(ev.hypotheses) == 5
-    ev = await rnd.undo()  # pops the context entry -> the added need disappears
-    assert len(ev.hypotheses) == 4
-    assert all("thirsty" not in h["need"] for h in ev.hypotheses)
-
-
-async def test_malformed_seed_degrades_to_fallback(topics: list[Topic]) -> None:
-    backend = MockBackend(responder=lambda _m: "this is not json")
-    rnd = Round(_topic(topics, "physical_health"), llm=backend)
-    ev = await rnd.open()
-    assert ev.engine == "fallback" and ev.kind == "query"
+# ------------------------------------------------------------ session, misc
 
 
 def test_session_tracks_topic_sequence(topics: list[Topic]) -> None:
@@ -600,22 +547,57 @@ def test_seed_messages_includes_emotional_reading() -> None:
     assert "sad" in content and "happy" in content
 
 
+def test_deliberate_messages_carry_focus_and_directive() -> None:
+    from my20q.agent import facets as f
+
+    board = f.seed_board({"what": ["a drink", "a snack"]})
+    content = deliberate_messages(
+        "My body",
+        board,
+        [],
+        focus="what",
+        directive="split",
+        split_pair=("a drink", "a snack"),
+        asked=["Is it about food?"],
+    )[1]["content"]
+    assert "FOCUS SLOT: what" in content
+    assert "SPLIT the tie" in content
+    assert '"a drink" vs "a snack"' in content
+    assert "ALREADY ASKED" in content and "Is it about food?" in content
+
+
+def test_history_formatting_dumps_noise_after_restart() -> None:
+    from my20q.agent.prompts import _format_history
+
+    history = [
+        {"kind": "query", "text": "Old yes?", "answer": "yes"},
+        {"kind": "query", "text": "Old no?", "answer": "no"},
+        {"kind": "query", "text": "Old kinda?", "answer": "kinda"},
+        {"kind": "context", "text": "caregiver note", "answer": None},
+        {"kind": "restart", "reason": "no-streak", "board": {}},
+        {"kind": "query", "text": "Fresh question?", "answer": "no"},
+    ]
+    out = _format_history(history)
+    assert "Old yes?" in out  # confirmed signal survives the dump
+    assert "caregiver note" in out  # caregiver context survives the dump
+    assert "Old no?" not in out and "Old kinda?" not in out  # noise dumped
+    assert "restart" in out and "Fresh question?" in out
+
+
 def test_reasoning_tuning_from_env(monkeypatch) -> None:
-    # The behavior knobs are env-overridable, clamped to sane ranges, and fall back
-    # to defaults when unset.
     monkeypatch.setenv("MY20Q_MIN_YES", "7")
     monkeypatch.setenv("MY20Q_REPHRASE_LIMIT", "5")
     monkeypatch.setenv("MY20Q_EXPLORE_DECAY", "1.8")  # above the range -> clamped
+    monkeypatch.setenv("MY20Q_SPLIT_MARGIN", "0.5")
     t = ReasoningTuning.from_env()
     assert t.min_yes_for_synthesis == 7
     assert t.rephrase_limit == 5
     assert t.explore_decay == 1.0  # clamped into [0, 1]
+    assert t.facet_split_margin == 0.5
     assert t.new_yes_for_resynthesis == 3  # untouched -> default
 
 
 def test_explore_probability_decays_with_yeses(topics: list[Topic]) -> None:
-    # Exploration probability = explore_decay ** (yeses + 1): high early, decaying
-    # as yeses approach the synthesis threshold.
     rnd = Round(
         _topic(topics, "mental_health"),
         llm=MockBackend(),
@@ -632,16 +614,20 @@ async def test_exploration_decays_as_yeses_accrue(topics: list[Topic]) -> None:
     # once enough yeses accrue the decayed probability drops below the pin and
     # exploration stops. (min_yes is huge so the round never synthesizes.)
     seen: list[bool] = []
+    state = {"q": 0}
 
     def responder(messages: list) -> str:
         system = messages[0]["content"]
-        if "candidate NEEDS to test" in system:
-            return json.dumps({"hypotheses": SEED_NEEDS})
+        if "starting GUESSES" in system:
+            return json.dumps(SEED_SLOTS)
         if "pin down the ONE specific" in system:
-            seen.append("EXPLORE MODE" in messages[1]["content"])
-            word = _DISTINCT_SUBJECTS[len(seen) % len(_DISTINCT_SUBJECTS)]
+            seen.append("EXPLORE" in messages[1]["content"])
+            return "thinking"
+        if "Convert a drafted question" in system:
+            word = _SUBJECTS[state["q"] % len(_SUBJECTS)]
+            state["q"] += 1
             return json.dumps(
-                {"question": f"Is it about {word}?", "yes_ids": ["h1"],
+                {"question": f"Is it about {word}?", "slots": {"what": word},
                  "preface": "", "rationale": "x"}
             )
         return json.dumps({"utterance": "x"})

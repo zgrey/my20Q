@@ -68,7 +68,7 @@ class _RoundHandle:
 
 
 def _event_out(ev: RoundEvent, catalog: list[Pictogram]) -> schemas.EventOut:
-    match = retrieve(ev.text, catalog) if ev.text else None
+    match = retrieve(ev.text, catalog) if ev.text and ev.kind != "diagnostic" else None
     return schemas.EventOut(
         kind=ev.kind,
         text=ev.text,
@@ -78,7 +78,8 @@ def _event_out(ev: RoundEvent, catalog: list[Pictogram]) -> schemas.EventOut:
         engine=ev.engine,
         emergency_screen=ev.emergency_screen,
         pictogram=match.id if match else None,
-        hypotheses=ev.hypotheses,
+        facets=[schemas.FacetOut(**f) for f in ev.facets],
+        diagnostic=ev.diagnostic,
     )
 
 
@@ -262,7 +263,9 @@ def _register_routes(app: FastAPI) -> None:
                     rationale=e.get("rationale", ""),
                 )
                 for e in r.history
-                if e["kind"] != "reseed"  # internal belief marker — not shown
+                # Internal board markers are not conversation; diagnostics ARE
+                # shown (an honest trace of what the caregiver saw fail).
+                if e["kind"] not in ("reseed", "restart")
             ],
             outcome=r.outcome,
             final_utterance=r.final_utterance,
@@ -394,6 +397,18 @@ def _register_routes(app: FastAPI) -> None:
             # Re-proposes the pending query against the new context, so the
             # on-screen question refreshes to account for it.
             handle.last_event = await handle.round.add_context(body.text)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return _round_state(handle)
+
+    @app.post(
+        "/api/sessions/{sid}/rounds/{rid}/retry", response_model=schemas.RoundStateOut
+    )
+    async def retry(sid: str, rid: str) -> schemas.RoundStateOut:
+        """Re-run the reasoner after a diagnostic (the failure card's Retry)."""
+        handle = _handle(sid, rid)
+        try:
+            handle.last_event = await handle.round.retry()
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
         return _round_state(handle)

@@ -28,18 +28,28 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
   SSE progress channel, JSONL recording/export, and **local TTS** (piper or the
   warmer kokoro — voice readouts of queries/utterances; review auto-play reads
   each step).
-- **Reasoning controller** ✓ A hypothesis controller (LLM does language,
-  `agent/hypotheses.py` does control). Candidate needs carry **additive points** —
-  "yes" +1 to the need a question targeted, "kinda" +0.5 ("warm"), "no" −1 to that
-  need only (it never promotes the others; scores are not normalized). Each ask is
-  **two-phase for every model** (deliberate → format); it **drills more specific**
-  along the warm trail (body → leg → foot → big toe), proposes the utterance once
-  the belief is ready (a clearly dominant leader, or ≥5 "yes" confirmations),
-  **rephrases** a rejected utterance, and after repeated misses **dumps context and
-  reseeds**. The only model-side terminator is a **"yes" to a proposed utterance** —
-  a round never self-ends on a count or an LLM failure. Every knob is env-tunable.
+- **Reasoning controller** ✓ A **5W1H facet controller** (LLM does language,
+  `agent/facets.py` + `agent/dialogue.py` do control). The belief is a consensus
+  **board**: per slot — who / what / when / where / why / how — contender values
+  carry **additive points** ("yes" +1, "kinda" +0.5, "no" −1 to the pair the
+  question asserted only; never normalized, rivals never promoted). Crediting is
+  **anchored to the question text** — a value only scores if the question
+  literally says it (the fix for phantom-subject score drift). Each turn the
+  controller picks a **focus slot** (probe an unestablished core slot → split
+  tied contenders → drill the vague leader) and the ask is **two-phase for every
+  model** (deliberate → format) behind three hard gates: yes/no answerability, a
+  **repeat gate** (no reworded re-asks, ever), and slot anchoring. Synthesis
+  **weaves the slot leaders into one natural sentence** (placeholders for
+  unknown slots) once the yes-gate or board-readiness clears; a rejected
+  utterance is **rephrased**, and repeated misses / a long "no" streak / a
+  reasoner fail-loop all trigger the **restart recovery** — dump every
+  no/kinda influence, keep caregiver context + this round's confirmed yeses
+  (round-specific by construction), add fresh broad probes. There are **no
+  canned fallback questions**: a turn that still can't produce a question
+  surfaces a **diagnostic card** (reason + Retry) instead. The only model-side
+  terminator is a **"yes" to a proposed utterance**. Every knob is env-tunable.
   Mechanism + known risks: `tool-summary.html` (local) and
-  `docs/design/reasoning-retro.md`.
+  `docs/design/reasoning-retro.md` §8.
 - **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
   graph write path).
 
@@ -115,7 +125,7 @@ prompts, topics, and dialogue behavior):
 
 ```bash
 python -m my20q                          # reasoning mode (needs Ollama)
-python -m my20q --no-llm                 # deterministic fallback mode
+python -m my20q --no-llm                 # no LLM — rounds surface diagnostics
 python -m my20q --max-queries 30         # optional safety ceiling (0 = unlimited)
 ```
 
@@ -143,10 +153,11 @@ and CLI):
 | `MY20Q_MIN_YES` | `5` | "yes" answers before the first synthesis |
 | `MY20Q_NEW_YES` | `3` | new yeses before each later synthesis attempt |
 | `MY20Q_REPHRASE_LIMIT` | `3` | rephrases per synthesis attempt |
-| `MY20Q_SYNTH_ATTEMPTS` | `2` | failed synthesis attempts before dump-and-reseed |
+| `MY20Q_SYNTH_ATTEMPTS` | `2` | failed synthesis attempts before the restart recovery |
 | `MY20Q_EXPLORE_DECAY` | `0.67` | exploration probability = base^(yeses+1) |
-| `MY20Q_SOFT_RESET_NOS` | `10` | consecutive "no"s that trigger a soft reset |
-| `MY20Q_READINESS_MARGIN` | `2.0` | leader lead (points) for early synthesis |
+| `MY20Q_SOFT_RESET_NOS` | `10` | consecutive "no"s that trigger the restart recovery |
+| `MY20Q_FACET_READY` | `2.0` | points a slot leader needs to count as determined |
+| `MY20Q_SPLIT_MARGIN` | `1.0` | top-two contenders closer than this are tied → split question |
 | `MY20Q_MODE` | training | Dialogue mode |
 | `MY20Q_PROFILE` | — | Patient/persona profile to load |
 | `MY20Q_TOPICS` | bundled | Override the topics data path |

@@ -2,31 +2,16 @@
 
 A *topic* is the highest-level conditional dependency for a round. The
 caregiver picks one to open a round; every query and the synthesized
-utterance stay anchored to it. This replaces the deep taxonomy tree:
-reasoning mode drives questioning under the topic, and `fallback_questions`
-is a small ordered bank used only when the LLM is unreachable.
+utterance stay anchored to it. Reasoning mode drives all questioning under
+the topic — there is no canned question bank (a reasoning failure surfaces a
+diagnostic, never a pre-written question).
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-
-class FallbackQuestion(BaseModel):
-    """One question in a topic's fallback bank.
-
-    Used only in fallback mode (LLM unreachable): the bank is walked in
-    order and a `yes`/`kinda` answer synthesizes this question's `label`.
-    """
-
-    id: str
-    label: str = Field(description="The concrete need a 'yes' answer implies.")
-    question: str = Field(description="Yes/no question whose 'yes' answer implies `label`.")
-    image: str | None = Field(
-        default=None,
-        description="Optional curated pictogram override; otherwise retrieved by intent.",
-    )
-    emergency: bool = False
+_FACETS = ("who", "what", "when", "where", "why", "how")
 
 
 class Topic(BaseModel):
@@ -53,8 +38,24 @@ class Topic(BaseModel):
             "noise that crowds out profile-grounded candidates."
         ),
     )
+    core_facets: list[str] = Field(
+        default_factory=lambda: ["what", "how"],
+        description=(
+            "The 5W1H categories that must be confidently determined before a "
+            "synthesis is considered board-ready under this topic (the rest "
+            "are modifiers, placeholdered when unknown). Subset of "
+            "who/what/when/where/why/how."
+        ),
+    )
     image: str | None = Field(
         default=None,
         description="Optional curated pictogram override for the topic itself.",
     )
-    fallback_questions: list[FallbackQuestion] = Field(default_factory=list)
+
+    @field_validator("core_facets")
+    @classmethod
+    def _known_facets(cls, v: list[str]) -> list[str]:
+        unknown = [c for c in v if c not in _FACETS]
+        if unknown:
+            raise ValueError(f"unknown facet categories: {unknown}")
+        return v

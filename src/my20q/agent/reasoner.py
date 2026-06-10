@@ -1,17 +1,22 @@
-"""LLM-driven reasoning controller for a round.
+"""LLM-driven reasoning calls for a round.
 
-The LLM does *language*; ``agent/hypotheses.py`` + ``agent/dialogue.py`` do the
-*control*. Three focused calls replace the old single-shot proposer:
+The LLM does *language*; ``agent/facets.py`` + ``agent/dialogue.py`` do the
+*control*. Four focused calls:
 
-- :meth:`Reasoner.seed_hypotheses` — the round's candidate-need set (belief prior).
-- :meth:`Reasoner.ask` — the next most-discriminating yes/no question, with the
-  ``yes_ids`` it would split (validated by the format auditor *and* a balance
-  check, with a bounded correction loop).
-- :meth:`Reasoner.synthesize` — phrase the leading need as a first-person
-  utterance.
+- :meth:`Reasoner.seed_board` — starter contender values for the 5W1H slots.
+- :meth:`Reasoner.ask` — the next yes/no question for the controller's chosen
+  focus slot, with the ``slots`` it asserts. Three hard, code-level gates: the
+  question must be answerable as yes/no (``audit_query``), must not repeat a
+  prior question (``is_repeat`` — models demonstrably ignore the prompt nudge),
+  and every tagged slot value must actually be SAID by the question
+  (``facets.mentions`` — the fix for points landing on subjects no question
+  ever mentioned, e.g. the hallucinated "visit with Aaron").
+- :meth:`Reasoner.expand_slots` — facet values a caregiver note implies.
+- :meth:`Reasoner.synthesize` — weave the slot leaders into an utterance.
 
-Each output is validated and sanitized; anything unusable raises
-``ReasonerError`` so the engine degrades to deterministic fallback mode.
+Anything unusable raises ``ReasonerError``; the engine then runs its
+context-restart recovery and, failing that, surfaces a diagnostic to the
+caregiver — it NEVER falls back to canned questions.
 """
 
 from __future__ import annotations
@@ -23,42 +28,42 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from my20q.agent import prompts
-from my20q.agent.auditor import audit_query
-from my20q.agent.hypotheses import Hypothesis
+from my20q.agent import facets, prompts
+from my20q.agent.auditor import audit_query, is_repeat
 from my20q.agent.safety import sanitize_llm_text, sanitize_utterance
 from my20q.llm.base import LLMBackend, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-#: How many times a query failing the format audit is re-proposed.
+#: How many times a query failing the gates is re-proposed.
 MAX_AUDIT_RETRIES = 2
-#: Bounds on the seed candidate set.
-MIN_HYPOTHESES = 4
-MAX_HYPOTHESES = 10
+#: Bounds on the seeded board.
+MIN_SEED_VALUES = 4
+MAX_VALUES_PER_SLOT = 5
+MAX_VALUE_CHARS = 48
 
 # Output ceilings (num_predict). These are NOT a cost limit — inference is local
 # and free — they only guard against a runaway/looping generation hanging the
 # live cockpit. Because every call uses format=json, Ollama stops at the closing
 # brace, so a generous ceiling never adds latency to a normal response; it only
-# avoids truncating a longer one into invalid JSON. Kept roomy so the model can
-# produce its best questioning/reasoning without being clipped.
+# avoids truncating a longer one into invalid JSON.
 SEED_MAX_TOKENS = 1024
-ASK_MAX_TOKENS = 512
-# Two-phase ask (thinking models only): the deliberate phase is the REASONING
-# phase — do NOT token-cap it, or a verbose thinking model gets truncated
-# mid-thought and emits nothing (we then can't judge whether its reasoning was
-# any good). -1 = generate until the model stops naturally; latency is bounded by
-# the per-call timeout, which is the proper runaway guard. The format phase stays
-# cheap and capped (it only emits the JSON).
+# Two-phase ask (every model): the deliberate phase is the REASONING phase — do
+# NOT token-cap it, or a verbose thinking model gets truncated mid-thought and
+# emits nothing. -1 = generate until the model stops naturally; latency is
+# bounded by the per-call timeout, which is the proper runaway guard. The
+# format phase stays cheap and capped (it only emits the JSON).
 DELIBERATE_MAX_TOKENS = -1
 FORMAT_MAX_TOKENS = 512
 SYNTH_MAX_TOKENS = 256
 EXPAND_MAX_TOKENS = 512
 
+#: Longest preface (spoken lead-in) we let through, in characters.
+MAX_PREFACE_CHARS = 64
+
 
 class ReasonerError(RuntimeError):
-    """Raised when LLM output cannot be used — the engine should fall back."""
+    """Raised when LLM output cannot be used — the engine should recover."""
 
 
 @dataclass
@@ -66,17 +71,14 @@ class ReasonerAction:
     kind: Literal["query", "synthesis"]
     content: str
     rationale: str = ""
-    #: Short patient-facing spoken lead-in read just before a query.
+    #: Short spoken lead-in that flows grammatically into a query.
     preface: str = ""
-    #: For a query: the candidate ids this question would answer "yes" for.
-    yes_ids: list[str] = field(default_factory=list)
-    #: For a query that explores a NEED NOT in the candidate list: its first-person
-    #: text. On a yes/kinda the engine spawns it as a new candidate (its id is in
-    #: yes_ids). Lets exploration escape the seed set.
-    new_need: str = ""
-    #: For a synthesis: the hypothesis id it was built from (so a rejection can
-    #: eliminate it on belief replay).
-    hyp_id: str = ""
+    #: For a query: the (category -> value) pairs the question asserts — the
+    #: ONLY pairs an answer is allowed to score. For a synthesis: the slot
+    #: leaders the utterance was woven from.
+    slots: dict[str, str] = field(default_factory=dict)
+    #: The focus category the controller chose for this query.
+    focus: str = ""
 
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
@@ -106,8 +108,8 @@ class Reasoner:
         # Structured-JSON calls (seed, format, expand, synthesize) force thinking
         # OFF by default: on a thinking model a rich prompt makes the chain-of-
         # thought eat the whole num_predict budget before the JSON is emitted, so
-        # Ollama returns empty content and the round wrongly degrades to fallback.
-        # Free-form reasoning belongs in ask()'s separate `deliberate` phase.
+        # Ollama returns empty content. Free-form reasoning belongs in ask()'s
+        # separate `deliberate` phase.
         try:
             raw = await self.llm.chat(
                 messages, max_tokens=max_tokens, json_mode=True, think=think
@@ -128,10 +130,10 @@ class Reasoner:
     async def _deliberate(self, draft_messages: list) -> str:
         """Phase 1 of the ask: free-form reasoning toward the next question.
 
-        Uncapped so a thinking model can reason to completion; a non-thinking model
-        just writes a short rationale plus the question. If the model spends its
-        whole budget thinking and returns empty, retry once with thinking OFF so we
-        still get text; only a genuinely down backend raises.
+        Uncapped so a thinking model can reason to completion; a non-thinking
+        model just writes a short rationale plus the question. If the model
+        spends its whole budget thinking and returns empty, retry once with
+        thinking OFF so we still get text; only a genuinely down backend raises.
         """
         try:
             draft = await self.llm.chat(
@@ -152,17 +154,17 @@ class Reasoner:
         return draft
 
     async def _format_question(
-        self, candidates: list[tuple[str, str, float]], draft: str
+        self, board: facets.Board, focus: str, draft: str
     ) -> dict:
         """Phase 2 of the ask: format the draft into strict question JSON.
 
-        Salvages directly from the draft when the format call yields nothing usable
-        (the draft may already carry the structured question), so a flaky format
-        pass never costs us a whole turn.
+        Salvages directly from the draft when the format call yields nothing
+        usable (the draft may already carry the structured question), so a
+        flaky format pass never costs us a whole turn.
         """
         try:
             data = await self._chat_json(
-                prompts.format_question_messages(candidates, draft),
+                prompts.format_question_messages(board, focus, draft),
                 max_tokens=FORMAT_MAX_TOKENS,
                 think=False,
             )
@@ -176,7 +178,7 @@ class Reasoner:
 
     # ------------------------------------------------------------- the calls
 
-    async def seed_hypotheses(
+    async def seed_board(
         self,
         *,
         topic_label: str,
@@ -186,8 +188,8 @@ class Reasoner:
         emotional_state: dict | None = None,
         seed_universal_wants: bool = True,
         on_phase: Callable[[str], None] | None = None,
-    ) -> list[Hypothesis]:
-        """Propose the round's candidate needs (the belief's prior)."""
+    ) -> dict[str, list[str]]:
+        """Starter contender values per facet category (the board's prior)."""
         if on_phase is not None:
             on_phase("thinking")
         messages = prompts.seed_messages(
@@ -199,93 +201,65 @@ class Reasoner:
             include_universal_wants=seed_universal_wants,
         )
         data = await self._chat_json(messages, max_tokens=SEED_MAX_TOKENS)
-        items = data.get("hypotheses")
-        if not isinstance(items, list):
-            raise ReasonerError(f"seed: no hypotheses list in {data!r}")
-        needs: list[str] = []
-        seen: set[str] = set()
-        for it in items:
-            if not isinstance(it, str):
-                continue
-            clean = sanitize_llm_text(it)
-            key = clean.casefold()
-            if clean and key not in seen:
-                seen.add(key)
-                needs.append(clean)
-        needs = needs[:MAX_HYPOTHESES]
-        if len(needs) < MIN_HYPOTHESES:
-            raise ReasonerError(f"seed: too few usable hypotheses ({len(needs)})")
-        return [Hypothesis(id=f"h{i + 1}", need=n) for i, n in enumerate(needs)]
+        # Accept either the documented flat shape or a {"slots": {...}} wrapper.
+        source = data.get("slots") if isinstance(data.get("slots"), dict) else data
+        seeds = _clean_slot_lists(source)
+        total = sum(len(v) for v in seeds.values())
+        if total < MIN_SEED_VALUES or not seeds.get("what"):
+            raise ReasonerError(
+                f"seed: too few usable slot values (got {total}, what={seeds.get('what')})"
+            )
+        return seeds
 
     async def ask(
         self,
         *,
         topic_label: str,
-        candidates: list[tuple[str, str, float]],
+        board: facets.Board,
+        focus: str,
+        directive: str,
+        split_pair: tuple[str, str] | None = None,
         history: list[dict],
+        asked: list[str] | None = None,
         seed_context: str = "",
         profile_context: str = "",
         topic_hint: str = "",
         emotional_state: dict | None = None,
-        anchored: bool = False,
         exploratory: bool = False,
-        reset: bool = False,
         on_phase: Callable[[str], None] | None = None,
     ) -> ReasonerAction:
-        """Propose the next yes/no question, drilling toward the exact need.
+        """Propose the next yes/no question for the controller's focus slot.
 
-        Two phases for EVERY model: DELIBERATE (free-form reasoning, no JSON) then
-        FORMAT (strict JSON, salvaged from the draft if the format call comes up
-        empty). The ONLY hard check is that the result is answerable as yes/no
-        (``audit_query``); redundancy and on-topic fit are nudged through the prompt,
-        NOT enforced as rejections — a rejection used to dump the round into the
-        deterministic bank, which is worse than an imperfect real question. After the
-        retry budget we accept the best effort rather than fall back.
-
-        ``exploratory`` drops the profile to free up a new avenue; ``anchored``
-        restricts to the warm cluster; ``reset`` re-grounds in the YES confirmations
-        after a long run of "no".
+        Two phases for EVERY model: DELIBERATE (free-form reasoning, no JSON)
+        then FORMAT (strict JSON, salvaged from the draft if the format call
+        comes up empty). Three hard gates — yes/no answerability, the repeat
+        gate, and slot anchoring (every credited value must be words the
+        question says). After the retry budget, a clean non-repeating question
+        with empty slots is accepted (it still informs the dialogue; the
+        answer just scores nothing); otherwise raises for the engine's
+        recovery path.
         """
-        live_ids = {hid for hid, _, _ in candidates}
+        asked = list(asked or [])
         corrections: list[str] = []
         best: ReasonerAction | None = None
-        # Warm-trail material from the answered history (for the prompt blocks).
-        kinda_texts = [
-            h["text"]
-            for h in history
-            if h.get("kind") == "query"
-            and h.get("answer") == "kinda"
-            and h.get("text")
-        ]
-        # On a soft reset, re-ground the fresh question in what was actually
-        # confirmed ("yes"); the warm "kinda" trail is dumped, not echoed.
-        yes_texts = [
-            h["text"]
-            for h in history
-            if h.get("kind") == "query"
-            and h.get("answer") == "yes"
-            and h.get("text")
-        ]
-        # Exploratory turns ignore the profile so the model can open a new avenue.
-        eff_profile = "" if exploratory else profile_context
         for attempt in range(MAX_AUDIT_RETRIES + 1):
             if on_phase is not None:
                 on_phase("re-asking" if attempt else "thinking")
             draft = await self._deliberate(
                 prompts.deliberate_messages(
                     topic_label,
-                    candidates,
+                    board,
                     history,
+                    focus=focus,
+                    directive=directive,
+                    split_pair=split_pair,
+                    asked=asked,
                     seed_context=seed_context,
-                    profile_context=eff_profile,
+                    profile_context=profile_context,
                     topic_hint=topic_hint,
                     emotional_state=emotional_state,
                     corrections=corrections,
-                    anchored=anchored,
                     exploratory=exploratory,
-                    reset=reset,
-                    kinda_texts=kinda_texts,
-                    yes_texts=yes_texts,
                 )
             )
             if not draft.strip():
@@ -293,86 +267,78 @@ class Reasoner:
                     "the reasoning produced no question; state one plainly"
                 )
                 continue
-            data = await self._format_question(candidates, draft)
+            data = await self._format_question(board, focus, draft)
             question = data.get("question", "")
-            if not isinstance(question, str) or not question.strip():
+            cleaned = (
+                sanitize_llm_text(question) if isinstance(question, str) else ""
+            )
+            if not cleaned:
                 corrections.append("no usable question in the draft; state one plainly")
                 continue
-            cleaned = sanitize_llm_text(question)
-            if not cleaned:
-                corrections.append("question was unusable after sanitizing; rephrase")
-                continue
-            raw_ids = data.get("yes_ids", [])
-            yes_ids = (
-                [str(x) for x in raw_ids if str(x) in live_ids]
-                if isinstance(raw_ids, list)
-                else []
-            )
-            raw_new = data.get("new_need")
-            new_need = sanitize_llm_text(raw_new) if isinstance(raw_new, str) else ""
-            # If the question maps to no existing candidate but proposes a NEW need,
-            # mint a fresh candidate id — exploration escapes the seed set. On a
-            # yes/kinda the engine spawns it (see dialogue._replay_belief).
-            if not yes_ids and new_need:
-                n_new = sum(1 for h in history if h.get("new_need"))
-                yes_ids = [f"n{n_new + 1}"]
-            else:
-                new_need = ""  # mapped to an existing candidate — ignore any new_need
-            yes_set = set(yes_ids)
-            action = self._ask_action(
-                cleaned, yes_ids, data.get("preface", ""), data, new_need=new_need
-            )
-            best = action
 
-            # The ONE hard gate: it must be answerable as a yes/no question.
-            # Redundancy and on-topic fit are handled by the prompt, never enforced
-            # here — a reject would dump the round to the worse deterministic bank.
+            # Gate 1 — answerable as a plain yes/no, no leaked reasoning language.
             verdict = audit_query(cleaned)
             if not verdict.ok:
                 corrections.append(verdict.reason)
                 continue
-            # A "yes" has to land on something — an existing candidate or a new need.
-            if not yes_set:
+            # Gate 2 — the hard repeat gate. Checked against every question
+            # asked this round (including dumped segments); the prompt nudge
+            # alone demonstrably failed (the same question asked 7 times).
+            dup = is_repeat(cleaned, asked)
+            if dup is not None:
                 corrections.append(
-                    "tag yes_ids with the candidate(s) a 'yes' confirms, or set "
-                    "new_need to explore a brand-new need"
+                    f'you already asked "{dup}" — ask about something genuinely different'
+                )
+                continue
+            # Gate 3 — slot anchoring: keep only pairs whose value the question
+            # actually SAYS, folded onto existing contenders when equivalent.
+            slots = _anchored_slots(data.get("slots"), cleaned, board)
+            if not slots:
+                # Recover deterministically: credit board contenders the
+                # question text itself mentions.
+                slots = _derive_slots(cleaned, board, prefer=focus)
+            action = self._ask_action(cleaned, slots, data, focus)
+            best = action
+            if not slots:
+                corrections.append(
+                    "tag 1-2 slots whose value the question itself states "
+                    "(who/what/when/where/why/how)"
                 )
                 continue
             return action
 
-        # Retries exhausted — accept the best effort. A real, if imperfect, question
-        # beats degrading to the deterministic bank; only a total miss raises.
-        if best is not None and best.yes_ids:
+        # Retries exhausted. A clean, novel question with no scorable slots
+        # still beats stalling the round — accept it; the answer scores nothing.
+        if best is not None:
             best.rationale = f"(best-effort) {best.rationale}".strip()
             return best
         raise ReasonerError("ask: could not produce a usable question")
 
-    async def expand_hypotheses(
+    async def expand_slots(
         self,
         *,
         topic_label: str,
         context: str,
-        existing: list[tuple[str, str]],
+        board: facets.Board,
         history: list[dict],
         seed_context: str = "",
         profile_context: str = "",
         topic_hint: str = "",
         emotional_state: dict | None = None,
         on_phase: Callable[[str], None] | None = None,
-    ) -> tuple[list[str], list[str]]:
-        """New needs + confirmed-existing ids implied by a caregiver note.
+    ) -> dict[str, list[str]]:
+        """Facet values a caregiver note implies — never raises (additive).
 
-        Never raises — context is additive, so a failure just means "no change"
-        and the round carries on. Returns ``(new_needs, boost_ids)``: sanitized
-        needs not already present (capped so the set stays bounded), and the ids
-        of existing candidates the note confirms.
+        Each value must be anchored in the note's own words or match an
+        existing contender (the same anti-hallucination rule as questions);
+        a failure just means "no change" and the round carries on.
         """
         if on_phase is not None:
             on_phase("thinking")
         messages = prompts.expand_messages(
             topic_label,
             context,
-            existing,
+            board,
             history,
             seed_context=seed_context,
             profile_context=profile_context,
@@ -382,35 +348,26 @@ class Reasoner:
         try:
             data = await self._chat_json(messages, max_tokens=EXPAND_MAX_TOKENS)
         except ReasonerError:
-            return [], []
-        existing_ids = {hid for hid, _ in existing}
-        seen = {need.casefold() for _, need in existing}
-        new_needs: list[str] = []
-        items = data.get("hypotheses")
-        if isinstance(items, list):
-            for it in items:
-                if not isinstance(it, str):
-                    continue
-                clean = sanitize_llm_text(it)
-                key = clean.casefold()
-                if clean and key not in seen:
-                    seen.add(key)
-                    new_needs.append(clean)
-        room = max(0, MAX_HYPOTHESES - len(existing))
-        new_needs = new_needs[:room]
-        raw_boost = data.get("boost_ids")
-        boost_ids = (
-            [str(x) for x in raw_boost if str(x) in existing_ids]
-            if isinstance(raw_boost, list)
-            else []
-        )
-        return new_needs, boost_ids
+            return {}
+        source = data.get("slots") if isinstance(data.get("slots"), dict) else data
+        cleaned = _clean_slot_lists(source)
+        out: dict[str, list[str]] = {}
+        for cat, values in cleaned.items():
+            kept: list[str] = []
+            for value in values:
+                canonical = facets.canonical_value(board, cat, value)
+                known = canonical in board.get(cat, {})
+                if known or facets.mentions(context, value):
+                    kept.append(canonical if known else value)
+            if kept:
+                out[cat] = kept
+        return out
 
     async def synthesize(
         self,
         *,
         topic_label: str,
-        leading_need: str,
+        leaders: dict[str, str],
         history: list[dict],
         rejected: list[tuple[str, str]] | None = None,
         seed_context: str = "",
@@ -419,17 +376,18 @@ class Reasoner:
         emotional_state: dict | None = None,
         on_phase: Callable[[str], None] | None = None,
     ) -> ReasonerAction:
-        """Phrase the leading need as a confirmable first-person utterance.
+        """Weave the slot leaders into a confirmable first-person utterance.
 
-        ``rejected`` is ``(utterance, answer)`` for utterances the caregiver did
-        NOT confirm this attempt — the model must phrase it DIFFERENTLY (a "kinda"
-        means close, refine the wording; a "no" means try a different angle).
+        ``rejected`` is ``(utterance, answer)`` for utterances the caregiver
+        did NOT confirm this attempt — the model must phrase it DIFFERENTLY (a
+        "kinda" means close, refine the wording; a "no" means try a different
+        angle).
         """
         if on_phase is not None:
             on_phase("thinking")
         messages = prompts.synthesize_messages(
             topic_label,
-            leading_need,
+            leaders,
             history,
             rejected=rejected,
             seed_context=seed_context,
@@ -440,34 +398,124 @@ class Reasoner:
         data = await self._chat_json(messages, max_tokens=SYNTH_MAX_TOKENS)
         utterance = data.get("utterance", "")
         cleaned = sanitize_utterance(utterance) if isinstance(utterance, str) else ""
-        if not cleaned:  # fall back to the leading need itself
-            cleaned = sanitize_utterance(leading_need)
         if not cleaned:
             raise ReasonerError(f"synthesize: unusable utterance {data!r}")
         rationale = (
             "Rephrased — a prior utterance was not confirmed."
             if rejected
-            else "Proposed from the leading candidate need."
+            else "Proposed from the confirmed slot leaders."
         )
-        return ReasonerAction(kind="synthesis", content=cleaned, rationale=rationale)
+        return ReasonerAction(
+            kind="synthesis", content=cleaned, rationale=rationale, slots=dict(leaders)
+        )
 
     def _ask_action(
-        self,
-        question: str,
-        yes_ids: list[str],
-        preface_raw: object,
-        data: dict,
-        new_need: str = "",
+        self, question: str, slots: dict[str, str], data: dict, focus: str
     ) -> ReasonerAction:
         rationale = str(data.get("rationale", "") or "")[:240]
-        preface = sanitize_llm_text(str(preface_raw or ""))[:100]
-        if preface.casefold() == question.casefold():
-            preface = ""
+        preface = _fluent_preface(str(data.get("preface", "") or ""), question)
         return ReasonerAction(
             kind="query",
             content=question,
             rationale=rationale,
             preface=preface,
-            yes_ids=list(yes_ids),
-            new_need=new_need,
+            slots=slots,
+            focus=focus,
         )
+
+
+# ---------------------------------------------------------------- pure helpers
+
+
+def _clean_slot_lists(source: object) -> dict[str, list[str]]:
+    """Sanitize a ``{category: [values]}`` mapping from model JSON."""
+    out: dict[str, list[str]] = {}
+    if not isinstance(source, dict):
+        return out
+    for cat, values in source.items():
+        if cat not in facets.CATEGORIES or not isinstance(values, list):
+            continue
+        kept: list[str] = []
+        seen: set[str] = set()
+        for v in values:
+            if not isinstance(v, str):
+                continue
+            clean = sanitize_llm_text(v)[:MAX_VALUE_CHARS].strip()
+            key = clean.casefold()
+            if clean and key not in seen:
+                seen.add(key)
+                kept.append(clean)
+            if len(kept) >= MAX_VALUES_PER_SLOT:
+                break
+        if kept:
+            out[cat] = kept
+    return out
+
+
+def _anchored_slots(
+    raw: object, question: str, board: facets.Board
+) -> dict[str, str]:
+    """Keep only slot tags whose value the question text actually says.
+
+    This is the structural fix for the score-drift bug: a "yes" can no longer
+    credit a contender (e.g. an Aaron visit) when the question never mentioned
+    it. Values are folded onto existing contenders when equivalent so points
+    accumulate instead of fragmenting.
+    """
+    out: dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for cat, value in raw.items():
+        if cat not in facets.CATEGORIES or not isinstance(value, str):
+            continue
+        clean = sanitize_llm_text(value)[:MAX_VALUE_CHARS].strip()
+        if not clean or not facets.mentions(question, clean):
+            continue
+        out[cat] = facets.canonical_value(board, cat, clean)
+        if len(out) >= 2:
+            break
+    return out
+
+
+def _derive_slots(
+    question: str, board: facets.Board, *, prefer: str
+) -> dict[str, str]:
+    """Deterministic fallback tagging: board contenders the question mentions.
+
+    Used when the model's own tags all failed the anchoring gate — the
+    question still earns credit for any existing contender it plainly says.
+    """
+    out: dict[str, str] = {}
+    order = [prefer] + [c for c in facets.CATEGORIES if c != prefer]
+    for cat in order:
+        for value, _score in facets.live(board, cat):
+            if facets.mentions(question, value):
+                out[cat] = value
+                break
+        if len(out) >= 2:
+            break
+    return out
+
+
+def _fluent_preface(raw: str, question: str) -> str:
+    """Sanitize the spoken lead-in so `preface + question` reads as ONE flow.
+
+    The cockpit speaks ``f"{preface} {question}"`` — so the preface must be a
+    short connective, not a restatement and not its own question. Anything
+    that would read awkwardly is dropped (empty beats awkward), and the ending
+    is normalized to an em dash so the voice glides into the question.
+    """
+    preface = sanitize_llm_text(raw)
+    if not preface:
+        return ""
+    if len(preface) > MAX_PREFACE_CHARS:
+        return ""
+    if "?" in preface:
+        return ""  # a second question never flows into the real one
+    # A preface that mostly repeats the question is noise, not a lead-in.
+    if facets.overlap_ratio(preface, question) >= 0.5:
+        return ""
+    preface = preface.rstrip(" .,;:—-")
+    if not preface:
+        return ""
+    return preface + " —"

@@ -37,7 +37,6 @@ def find_topic(topics: list[Topic], topic_id: str) -> Topic | None:
 def _check_unique_ids(topics: list[Topic]) -> None:
     seen: set[str] = set()
     for topic in topics:
-        for tid in (topic.id, *(q.id for q in topic.fallback_questions)):
-            if tid in seen:
-                raise ValueError(f"Duplicate topic/question id: {tid!r}")
-            seen.add(tid)
+        if topic.id in seen:
+            raise ValueError(f"Duplicate topic id: {topic.id!r}")
+        seen.add(topic.id)

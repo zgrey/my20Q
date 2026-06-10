@@ -6,7 +6,7 @@ y/n/k/s (u to undo, q to quit), watch the reasoning, see the synthesized
 utterance.
 
     python -m my20q              # reasoning mode (needs Ollama)
-    python -m my20q --no-llm     # deterministic fallback mode
+    python -m my20q --no-llm     # no LLM — rounds surface diagnostics
 """
 
 from __future__ import annotations
@@ -62,6 +62,11 @@ def _render_event(event: RoundEvent) -> None:
                 style="magenta",
             )
         )
+    elif event.kind == "diagnostic":
+        body = f"[bold]Reasoning failed — no question this turn.[/bold]\n{event.text}"
+        if event.diagnostic and event.diagnostic.get("reason"):
+            body += f"\n[dim]{event.diagnostic['reason']}[/dim]"
+        console.print(Panel(body, style="red", title="DIAGNOSTIC"))
 
 
 def _render_emergency() -> None:
@@ -99,6 +104,16 @@ async def _play_round(session: Session, topic: Topic) -> None:
             )
             return
         _render_event(event)
+        if event.kind == "diagnostic":
+            raw = Prompt.ask(
+                "[bold]r retry[/bold] [dim](q quit)[/dim]",
+                choices=["r", "q"],
+                default="r",
+            )
+            if raw == "q":
+                raise _Quit
+            event = await rnd.retry()
+            continue
         raw = _ask_answer()
         event = await (rnd.undo() if raw == "u" else rnd.answer(_ANSWERS[raw]))
 
@@ -114,10 +129,14 @@ async def _run(cfg: Config) -> int:
         return 1
 
     if backend is None:
-        console.print("[dim]No LLM — deterministic fallback mode.[/dim]")
+        console.print(
+            "[dim]No LLM — rounds will surface a diagnostic instead of questions.[/dim]"
+        )
     elif not await backend.health():
-        console.print("[yellow]LLM backend unreachable — using fallback mode.[/yellow]")
-        backend = None
+        console.print(
+            "[yellow]LLM backend unreachable — rounds will surface diagnostics "
+            "until it is back.[/yellow]"
+        )
     else:
         console.print("[green]LLM backend ready.[/green]")
 
@@ -136,7 +155,9 @@ async def _run(cfg: Config) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="my20q", description=__doc__)
     parser.add_argument(
-        "--no-llm", action="store_true", help="Disable the LLM (fallback mode only)"
+        "--no-llm",
+        action="store_true",
+        help="Disable the LLM (rounds surface diagnostics instead of questions)",
     )
     parser.add_argument(
         "--max-queries", type=int, default=None, help="Override the per-round query budget"

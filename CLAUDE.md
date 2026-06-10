@@ -64,7 +64,11 @@ safety cap, not the primary terminator.
 Two **orthogonal** axes:
 
 - **Reasoning vs. fallback** — is the LLM reachable? Reasoning mode lets the
-  `Reasoner` drive; fallback is a deterministic degraded path.
+  `Reasoner` drive. There are **no canned fallback questions**: when reasoning
+  fails, the round first runs its restart recovery (dump no/kinda context,
+  keep caregiver context + the round's confirmed yeses) and, failing that,
+  surfaces a **diagnostic card** (reason + Retry) — a useful failure beats a
+  meaningless question.
 - **Training vs. operational** — do we trust the input? *Training* is
   caregiver-driven with reliable input (**the beta builds this only**).
   *Operational* is patient-solo with noisy input, leaning on the knowledge
@@ -115,8 +119,9 @@ dataset can never coexist.
   max length, no URLs, no medical-advice keywords, template match.
 - **No diagnostic language.** Asks about needs and feelings, never "do you have
   X condition?".
-- **Failure modes are soft.** If the LLM is unreachable, the dialogue degrades
-  to fallback mode — the app always keeps working.
+- **Failure modes are soft.** A reasoning failure never ends a round: the
+  engine auto-recovers (context restart), and if that fails the cockpit shows
+  an honest diagnostic with a Retry — never a canned, meaningless question.
 
 ## Directory Layout (target — populated incrementally by phase)
 
@@ -133,7 +138,9 @@ my20Q/
 │   ├── api/                      # FastAPI app + cockpit endpoints (Phase 2)
 │   ├── agent/
 │   │   ├── dialogue.py           # round state machine (rewindable history)
-│   │   ├── reasoner.py           # LLM-driven action proposer (strict JSON)
+│   │   ├── facets.py             # 5W1H consensus board (the belief)
+│   │   ├── reasoner.py           # LLM-driven question/synthesis calls
+│   │   ├── auditor.py            # yes/no audit + repeat gate
 │   │   ├── prompts.py            # system prompts + templating
 │   │   └── safety.py             # emergency detector + output sanitizer
 │   ├── cli.py                    # Rich-based developer harness (retained)
@@ -155,7 +162,7 @@ pip install -e ".[dev]"
 pytest
 ruff check .
 python -m my20q                  # CLI harness — reasoning mode
-python -m my20q --no-llm         # CLI harness — fallback mode
+python -m my20q --no-llm         # CLI harness — no LLM (diagnostics only)
 ```
 
 Local LLM prerequisite:

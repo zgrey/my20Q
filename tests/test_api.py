@@ -17,47 +17,51 @@ from fastapi.testclient import TestClient  # noqa: E402
 from my20q.api.app import _SHUTDOWN_SENTINEL, _lifespan, _sse, create_app  # noqa: E402
 
 
-def _fallback_client() -> TestClient:
-    """A client with no LLM — deterministic fallback engine."""
+def _no_llm_client() -> TestClient:
+    """A client with no LLM — rounds surface diagnostics, never questions."""
     return TestClient(create_app(replace(Config.from_env(), llm_enabled=False), backend=None))
 
 
-def _controller_backend(
-    *, seed: list[str], question: str, yes_ids: list[str], utterance: str
-) -> MockBackend:
-    """A MockBackend that plays the seed/ask/synthesize protocol."""
+def _controller_backend(*, utterance: str) -> MockBackend:
+    """A MockBackend that plays the seed/deliberate/format/synthesize protocol.
 
-    # Distinct, person-referencing drill questions so neither the redundancy nor
-    # the my_people on-topic audit rejects them (the test round is "my_people").
+    Distinct, person-anchored questions whose slots are words the question
+    says, so every code gate (audit, repeat, anchoring) passes.
+    """
     people_qs = [
-        "Do you want to call your son?",
-        "Is it about your daughter visiting?",
-        "Do you want to tell your husband something?",
-        "Is it about seeing your family?",
-        "Do you miss a friend?",
-        "Is it about someone phoning you?",
-        "Do you want a visit from them?",
-        "Is it about helping a loved one?",
+        ("Do you want to call your son?", {"who": "your son", "how": "call"}),
+        ("Do you want your son to visit you?", {"who": "your son", "how": "visit"}),
+        ("Do you need your son to bring something?", {"who": "your son", "how": "bring something"}),
+        ("Is it about thanking your son?", {"who": "your son", "how": "thanking"}),
+        ("Do you want to tell your son some news?", {"who": "your son", "how": "tell news"}),
+        ("Is it about a photo of your son?", {"what": "a photo", "who": "your son"}),
+        ("Do you miss your son today?", {"who": "your son", "why": "miss him"}),
+        ("Should your son fix something for you?", {"who": "your son", "how": "fix something"}),
     ]
     state = {"n": 0}
 
     def responder(messages: list) -> str:
         system = messages[0]["content"]
-        if "candidate NEEDS to test" in system:
-            return json.dumps({"hypotheses": seed})
-        if "pin down the ONE specific" in system:  # ask / drill
-            q = people_qs[state["n"] % len(people_qs)]
+        if "starting GUESSES" in system:  # seed
+            return json.dumps(
+                {"who": ["your son", "a friend"], "what": ["a phone call", "a visit"],
+                 "how": ["call", "visit"], "why": ["missing them"]}
+            )
+        if "pin down the ONE specific" in system:  # deliberate
+            return "thinking about who and what..."
+        if "Convert a drafted question" in system:  # format
+            q, slots = people_qs[state["n"] % len(people_qs)]
             state["n"] += 1
             return json.dumps(
-                {"question": q, "yes_ids": yes_ids, "preface": "", "rationale": "r"}
+                {"question": q, "slots": slots, "preface": "", "rationale": "r"}
             )
-        return json.dumps({"utterance": utterance})
+        return json.dumps({"utterance": utterance})  # synthesize
 
     return MockBackend(responder=responder)
 
 
 def test_health_and_topics() -> None:
-    client = _fallback_client()
+    client = _no_llm_client()
     health = client.get("/api/health").json()
     assert health["status"] == "ok"
     assert health["engine"] == "fallback"
@@ -67,28 +71,29 @@ def test_health_and_topics() -> None:
     assert len(topics) == 5
 
 
-def test_fallback_round_only_questions() -> None:
-    # Fallback mode only asks questions now — it never synthesizes or ends a round
-    # (only a "yes" to a reasoner utterance ends one). A "yes" just advances.
-    client = _fallback_client()
+def test_no_llm_round_serves_a_diagnostic_not_canned_questions() -> None:
+    # There is no canned question bank anymore: without an LLM the round
+    # surfaces a diagnostic card, answering 409s (nothing to answer), and
+    # retry re-checks rather than inventing a question.
+    client = _no_llm_client()
     sid = client.post("/api/sessions").json()["session_id"]
     state = client.post(
         f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
     ).json()
     rid = state["round_id"]
-    assert state["event"]["kind"] == "query"
-    assert state["engine"] == "fallback"
+    assert state["event"]["kind"] == "diagnostic"
+    assert state["event"]["diagnostic"]["llm_unreachable"] is True
+    assert state["outcome"] is None  # alive — not abandoned by the failure
 
-    for _ in range(3):
-        state = client.post(
-            f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"}
-        ).json()
-        assert state["event"]["kind"] == "query"  # never a synthesis / end
-        assert state["outcome"] is None
+    resp = client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+    assert resp.status_code == 409  # no pending question to answer
+
+    state = client.post(f"/api/sessions/{sid}/rounds/{rid}/retry").json()
+    assert state["event"]["kind"] == "diagnostic"  # still no LLM — still honest
 
 
 def test_emergency_topic_short_circuits() -> None:
-    client = _fallback_client()
+    client = _no_llm_client()
     sid = client.post("/api/sessions").json()["session_id"]
     state = client.post(
         f"/api/sessions/{sid}/rounds", json={"topic_id": "emergency"}
@@ -98,13 +103,12 @@ def test_emergency_topic_short_circuits() -> None:
 
 
 def test_context_and_undo() -> None:
-    client = _fallback_client()
+    client = _reasoning_client()
     sid = client.post("/api/sessions").json()["session_id"]
     rid = client.post(
         f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
     ).json()["round_id"]
 
-    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "no"})
     state = client.post(
         f"/api/sessions/{sid}/rounds/{rid}/context",
         json={"text": "He pointed at the kitchen."},
@@ -116,7 +120,7 @@ def test_context_and_undo() -> None:
 
 
 def test_unknown_ids_return_404() -> None:
-    client = _fallback_client()
+    client = _no_llm_client()
     assert (
         client.post("/api/sessions/nope/rounds", json={"topic_id": "general"}).status_code
         == 404
@@ -125,25 +129,16 @@ def test_unknown_ids_return_404() -> None:
 
 
 def test_unknown_topic_returns_400() -> None:
-    client = _fallback_client()
+    client = _no_llm_client()
     sid = client.post("/api/sessions").json()["session_id"]
     resp = client.post(f"/api/sessions/{sid}/rounds", json={"topic_id": "ghost"})
     assert resp.status_code == 400
 
 
 def test_reasoning_round_via_injected_backend() -> None:
-    # Repeated "yes" answers concentrate the belief AND clear the positive-evidence
-    # gate (>= MIN_YES_FOR_SYNTHESIS), so the round eventually proposes an utterance
-    # — never on the first yes.
+    # Repeated "yes" answers build per-slot consensus AND clear the yes gate, so
+    # the round eventually proposes an utterance — never on the first yes.
     backend = _controller_backend(
-        seed=[
-            "I would like to call my son this afternoon",
-            "I want to see a visitor",
-            "I miss my friend",
-            "I want to write a letter",
-        ],
-        question="Is this about phoning someone today?",
-        yes_ids=["h1"],
         utterance="I would like to call my son this afternoon.",
     )
     client = TestClient(create_app(Config.from_env(), backend=backend))
@@ -155,7 +150,11 @@ def test_reasoning_round_via_injected_backend() -> None:
     state = client.get(f"/api/sessions/{sid}/rounds/{rid}").json()
     assert state["engine"] == "reasoning"
     assert state["event"]["kind"] == "query"
-    assert len(state["event"]["hypotheses"]) == 4  # the honest tile is populated
+    facets = state["event"]["facets"]
+    assert [f["category"] for f in facets] == ["who", "what", "when", "where", "why", "how"]
+    assert any(f["focus"] for f in facets)  # the targeted slot is marked
+    who = facets[0]
+    assert {"value": "your son", "score": 0.0} in who["contenders"]
 
     # First yes must NOT synthesize — far short of the gate.
     state = client.post(
@@ -180,6 +179,7 @@ def test_sse_event_route_is_registered() -> None:
     app = create_app(replace(Config.from_env(), llm_enabled=False), backend=None)
     paths = {getattr(r, "path", "") for r in app.routes}
     assert "/api/sessions/{sid}/rounds/{rid}/events" in paths
+    assert "/api/sessions/{sid}/rounds/{rid}/retry" in paths
 
 
 def test_sse_payload_formatting() -> None:
@@ -187,7 +187,7 @@ def test_sse_payload_formatting() -> None:
 
 
 def test_recording_disabled_without_real_profile() -> None:
-    client = _fallback_client()
+    client = _no_llm_client()
     rec = client.get("/api/recording").json()
     assert rec["enabled"] is False
     assert rec["status"] == "disabled"
@@ -221,7 +221,7 @@ def test_real_profile_records_an_emergency_round(tmp_path) -> None:
 
 
 def test_emotion_endpoint_accepts_a_reading() -> None:
-    client = _fallback_client()
+    client = _no_llm_client()
     sid = client.post("/api/sessions").json()["session_id"]
     resp = client.post(
         f"/api/sessions/{sid}/emotion",
@@ -234,12 +234,7 @@ def test_emotion_endpoint_accepts_a_reading() -> None:
 def _reasoning_client(**cfg_overrides) -> TestClient:
     """A client whose injected reasoning backend reaches a confirmed utterance
     after a single yes (min_yes gate lowered for short tests)."""
-    backend = _controller_backend(
-        seed=["I am thirsty", "My foot hurts", "I feel cold", "I want to rest"],
-        question="Is it about a drink?",
-        yes_ids=["h1"],
-        utterance="I would like a glass of water.",
-    )
+    backend = _controller_backend(utterance="I would like a glass of water.")
     cfg = replace(
         Config.from_env(),
         reasoning=ReasoningTuning(min_yes_for_synthesis=1),
@@ -270,6 +265,9 @@ def test_export_session_jsonl_mirrors_recording_format() -> None:
     assert record["topic_id"] == "physical_health"
     assert record["session_id"] == sid
     assert "queries" in record and "job_b" in record and "recorded_at" in record
+    # query entries carry their asserted slots for trial autopsies
+    q = record["queries"][0]
+    assert q["kind"] == "query" and q["slots"]
 
     md = client.get(f"/api/sessions/{sid}/export", params={"format": "md"})
     assert md.status_code == 200
@@ -279,12 +277,12 @@ def test_export_session_jsonl_mirrors_recording_format() -> None:
 
 
 def test_export_unknown_session_404() -> None:
-    client = _fallback_client()
+    client = _no_llm_client()
     assert client.get("/api/sessions/nope/export").status_code == 404
 
 
 def test_recordings_empty_without_real_profile() -> None:
-    client = _fallback_client()
+    client = _no_llm_client()
     assert client.get("/api/recordings").json() == []
     assert client.get("/api/recordings/anything").status_code == 404
 

@@ -1,14 +1,19 @@
-"""Session-scoped memory of confirmed ("yes") answers.
+"""Confirmed-("yes")-answer log.
 
 The most durable signal in a session is what the caregiver actually CONFIRMED.
 Unlike the full round recording, this keeps ONLY the yes-answers — the question
-and the need(s) it confirmed — so important context is never lost: it can reseed a
-round after a context dump, or seed a fresh round later in the SAME session.
+and the slot value(s) it confirmed.
+
+The engine WRITES this log but no longer reads it: restart recovery rebuilds
+its yes-context from the round's own history, which keeps recovered signal
+ROUND-specific by design (a restart must never import yeses from another
+round). The log exists for the recorded dataset and the future caregiver
+interview tooling.
 
 Privacy: like the recording, the on-disk file is written only for a real patient,
-local-only, under the git-ignored data dir. The in-memory list always works (so
-reseeds function in synthetic / test runs); only the file write is gated — the
-caller passes ``path`` for a real patient and leaves it ``None`` otherwise.
+local-only, under the git-ignored data dir. The in-memory list always works;
+only the file write is gated — the caller passes ``path`` for a real patient
+and leaves it ``None`` otherwise.
 
 This is deliberately WITHIN-session: it is not auto-loaded into future sessions,
 preserving the two-layer rule (the volatile current-need layer never persists
@@ -46,7 +51,7 @@ class YesMemory:
         self._append_file(rec)
 
     def needs(self) -> list[str]:
-        """De-duplicated confirmed needs, most-recent first (drives reseeding)."""
+        """De-duplicated confirmed needs, most-recent first."""
         seen: set[str] = set()
         out: list[str] = []
         for rec in reversed(self.items):

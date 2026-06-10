@@ -43,7 +43,7 @@ not just in the reasoning tile).
 ┌─ brand · Live|Review ── Topic ▼ ── ⬇ · ● REC · 🔊 · ☀ ─┐
 │ ┌──────────────────────┐ ┌─────────────────────┐ │
 │ │ 1 Conversation       │ │ 2 Live reasoning    │ │
-│ │   transcript + live  │ │   belief panel +    │ │
+│ │   transcript + live  │ │   consensus board + │ │
 │ │   query / synthesis  │ │   SSE + sliders     │ │
 │ ├──────────────────────┤ │                     │ │
 │ │ 3 Input  y/n/k/s/u/q │ │                     │ │
@@ -55,10 +55,13 @@ not just in the reasoning tile).
 > real sessions). The component and backend retrieval are retained — re-mount
 > once the image slot is driven by a generator.
 
-**Belief panel** (in the reasoning tile): the honest reasoning view. The engine
-maintains a live belief over candidate needs and asks the most-discriminating
-yes/no question each turn; the tile renders those candidates ranked with weight
-bars, leader highlighted, updating with every answer (from `event.hypotheses`).
+**Consensus board** (in the reasoning tile): the honest reasoning view. The
+engine tracks the need as six 5W1H slots — Who / What / When / Where / Why /
+How — each holding contender values with additive consensus points. The tile
+renders one row per slot: contender chips with raw points (leader bolded,
+negatives dimmed), the currently-targeted slot pulsing (from `event.facets`).
+When reasoning fails, the conversation tile shows a **diagnostic card** with
+the failure reason and a **Retry** button — never a canned question.
 
 **Emotion sliders** (in the reasoning tile): ten opposed-emotion pairs, each a
 coarse 5-detent scale (strong/mild each side + neutral) with large pole labels.

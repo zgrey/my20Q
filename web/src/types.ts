@@ -19,12 +19,29 @@ export type EventKind =
   | "synthesis"
   | "emergency"
   | "synthesized"
-  | "abandoned";
+  | "abandoned"
+  | "diagnostic";
 
-// One candidate need in the live belief, with its current weight (0..1).
-export interface Hypothesis {
-  need: string;
-  weight: number;
+// One contender value of a 5W1H facet category, with its consensus points.
+export interface FacetContender {
+  value: string;
+  score: number;
+}
+
+// One 5W1H category of the live board (the honest reasoning tile).
+export interface Facet {
+  category: string; // who | what | when | where | why | how
+  label: string;
+  contenders: FacetContender[];
+  focus: boolean; // the slot the current question targets
+}
+
+// For kind === "diagnostic": what failed and what was attempted.
+export interface Diagnostic {
+  reason: string;
+  consecutive_failures: number;
+  llm_unreachable: boolean;
+  restart_attempted: boolean;
 }
 
 export interface RoundEvent {
@@ -36,11 +53,12 @@ export interface RoundEvent {
   engine: "reasoning" | "fallback";
   emergency_screen: EmergencyScreen | null;
   pictogram: string | null;
-  hypotheses: Hypothesis[]; // live belief over candidate needs (honest tile)
+  facets: Facet[]; // live 5W1H consensus board (honest tile)
+  diagnostic: Diagnostic | null;
 }
 
 export interface HistoryEntry {
-  kind: "query" | "synthesis" | "context";
+  kind: "query" | "synthesis" | "context" | "diagnostic";
   text: string;
   answer: Answer | null;
   rationale: string;

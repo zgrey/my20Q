@@ -560,7 +560,7 @@ body,
   color: var(--ink);
 }
 
-/* ---- honest reasoning: the live belief over candidate needs ---- */
+/* ---- honest reasoning: the 5W1H consensus board ---- */
 .belief {
   margin-top: 12px;
   display: flex;
@@ -574,7 +574,7 @@ body,
   text-transform: uppercase;
   color: var(--heading);
 }
-.belief-list {
+.facet-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -582,45 +582,136 @@ body,
   flex-direction: column;
   gap: 5px;
 }
-.belief-row {
+.facet-row {
   display: grid;
-  grid-template-columns: 1fr 84px 34px;
-  align-items: center;
+  grid-template-columns: 58px 1fr;
+  align-items: baseline;
   gap: 8px;
   font-size: 13px;
   color: var(--ink-soft);
-  opacity: 0.78;
+  padding: 2px 4px;
+  border-radius: 6px;
 }
-.belief-row.lead {
+.facet-row.focus {
+  background: var(--accent-soft);
   color: var(--ink);
-  opacity: 1;
+}
+.facet-cat {
+  font-weight: 600;
+  color: var(--heading);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.facet-focus-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-hover);
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.facet-contenders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.facet-chip {
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.facet-chip b {
+  font-variant-numeric: tabular-nums;
+  margin-left: 3px;
+  color: var(--accent-hover);
+}
+.facet-chip.lead {
+  border-color: var(--accent);
+  color: var(--ink);
   font-weight: 600;
 }
-.belief-need {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.facet-chip.neg {
+  opacity: 0.55;
 }
-.belief-bar {
-  height: 7px;
-  border-radius: 999px;
+.facet-chip.neg b {
+  color: var(--no);
+}
+.facet-empty {
+  opacity: 0.5;
+}
+
+/* ---- diagnostic: reasoning failed — a failure card, never a canned question ---- */
+.turn.diagnostic {
+  border-left: 3px solid var(--no);
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--ink-soft);
   background: var(--nested);
-  overflow: hidden;
+  border-radius: 6px;
 }
-.belief-fill {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--accent);
-  transition: width 0.3s ease;
+.turn.diagnostic .tag {
+  color: var(--no);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 8px;
 }
-.belief-row.lead .belief-fill {
-  background: var(--accent-hover);
+.diagnostic-card {
+  border: 1px solid var(--no);
+  border-radius: var(--radius);
+  background: var(--nested);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-.belief-pct {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+.diagnostic-card .label {
+  font-weight: 700;
+  color: var(--no);
+}
+.diag-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.diag-reason {
+  margin: 0;
   font-size: 12px;
+  color: var(--ink-soft);
+  word-break: break-word;
+}
+.diag-reason .tag {
+  color: var(--no);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  margin-right: 6px;
+}
+.retry-btn {
+  align-self: flex-start;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 7px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.retry-btn:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.rstep-kind.diagnostic {
+  color: var(--no);
 }
 
 /* ----------------------------------------------------------------- input */

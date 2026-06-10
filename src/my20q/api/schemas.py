@@ -49,8 +49,24 @@ class ContextIn(BaseModel):
     text: str
 
 
+class FacetContenderOut(BaseModel):
+    """One contender value of a facet category, with its consensus points."""
+
+    value: str
+    score: float
+
+
+class FacetOut(BaseModel):
+    """One 5W1H category of the live board — the honest reasoning tile."""
+
+    category: str  # who | what | when | where | why | how
+    label: str
+    contenders: list[FacetContenderOut] = Field(default_factory=list)
+    focus: bool = False  # the slot the current question targets
+
+
 class EventOut(BaseModel):
-    """The current round event — a pending query/synthesis, or a terminal."""
+    """The current round event — a pending query/synthesis, a diagnostic, or a terminal."""
 
     kind: str
     text: str = ""
@@ -60,9 +76,12 @@ class EventOut(BaseModel):
     engine: str = "reasoning"
     emergency_screen: dict | None = None
     pictogram: str | None = None  # catalog concept id, or null when none matched
-    # Live belief over candidate needs ([{need, weight}], sorted) — the honest
-    # reasoning tile. Empty for fallback/emergency/terminal events.
-    hypotheses: list[dict] = Field(default_factory=list)
+    # The live 5W1H facet board (per-category contender scores) that drove this
+    # question. Empty for emergency/terminal/diagnostic events.
+    facets: list[FacetOut] = Field(default_factory=list)
+    # For kind == "diagnostic": what failed and what was attempted (reason,
+    # llm_unreachable, restart_attempted, consecutive_failures).
+    diagnostic: dict | None = None
 
 
 class HistoryEntryOut(BaseModel):

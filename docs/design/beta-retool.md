@@ -80,8 +80,11 @@ Two **orthogonal** axes — a 2×2, not a 1×4:
 - **Operational mode** — patient drives the tool solo, inputs noisy, leans on the
   graph as a prior. Deferred. It still plays the full game; it is not a
   graph-lookup shortcut.
-- `reasoning`/`fallback` is unchanged from Phase 1: fallback is a degraded path for
-  when Ollama is unreachable.
+- `reasoning`/`fallback` *(revised 2026-06-10)* — there are **no canned fallback
+  questions** anymore. A reasoning failure triggers the round's restart recovery
+  (dump no/kinda influence; keep caregiver context + the round's confirmed
+  yeses); if that fails too, the cockpit shows a diagnostic card with a Retry.
+  "Fallback" now only labels the no-LLM-configured state.
 
 **"Testing" is not a fourth mode.** It is training mode run against a *synthetic
 persona* for development. The distinguishing flag is **"is a real patient profile
@@ -169,9 +172,12 @@ varying generated images would undermine the reinforcement.
 
 The deep `taxonomy/data/tree.yaml` is retired as the primary structure. It is
 replaced by a **flat, easily-editable topic list** (YAML) — the high-level contexts.
-Each topic optionally carries a small ordered **fallback question bank** so
-fallback mode still works without a deep tree. Emergency short-circuit behavior is
-retained unchanged.
+Each topic declares its **core 5W1H facets** (`core_facets` — the slots that must
+be determined before a synthesis is board-ready) and an optional reasoning hint.
+*(The per-topic fallback question banks were removed 2026-06-10 — the June-9
+trials showed bank questions are pure noise mid-round, and the bank-exhausted
+holding question looped verbatim. Failures surface diagnostics instead.)*
+Emergency short-circuit behavior is retained unchanged.
 
 ---
 
@@ -341,6 +347,8 @@ weight fine-tuning; native app.
 
 1. **Topic structure** — flatten the deep `tree.yaml` into a flat editable topic
    list; each topic carries an optional small fallback question bank.
+   *(Superseded 2026-06-10: the banks are removed — failures surface diagnostic
+   cards; topics carry `core_facets` instead. See reasoning-retro.md §8.)*
 2. **On-topic audit** — *block* (silently re-prompt the model on drift) **and**
    *surface* the event in the reasoning tile.
 3. **Topic dropdown mid-round** — changeable; a change ends the current round

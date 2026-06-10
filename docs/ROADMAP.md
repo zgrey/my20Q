@@ -41,8 +41,13 @@ The caregiver-driven web cockpit — the real product interface. Delivered:
   mid-round caregiver context.
 - **Retooled dialogue engine** — session/round/query model, async,
   synthesis-terminated rounds, rewindable history/undo, training/operational
-  mode axis, reasoning + fallback, and the format auditor (re-prompts
-  non-yes/no queries).
+  mode axis, and the format auditor (re-prompts non-yes/no queries).
+  **Rebuilt 2026-06-10 as the 5W1H facet controller**: per-slot consensus
+  scores (who/what/when/where/why/how) anchored to the question text, a
+  code-level focus policy (probe → split ties → drill), a hard repeat gate,
+  leader-weaving synthesis with placeholders, and a unified restart recovery —
+  canned fallback questions removed in favor of diagnostic cards (see
+  `design/reasoning-retro.md` §8).
 - **Flat topic list** replacing the taxonomy tree; **3-tier recording/dataset**
   writer + Job-B metric, gated by `real_patient_profile_loaded` + a caregiver
   pause control; **pictogram retrieval** from a curated ARASAAC catalog.

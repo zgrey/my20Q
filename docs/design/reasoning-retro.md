@@ -1,4 +1,107 @@
 
+### 8. The 5W1H facet rebuild — consensus boards, restart recovery, no more banks (2026-06-10)
+
+Two more live trials against the target *"I need Zach to help move a large
+picture in the house"* (June 9 recordings, gemma3:12b + gemma4:e4b): both
+failed-but-improved. gemma3/people round 1: **81 q, abandoned**; round 2:
+synthesized after **58 q** ("Could you please help me lift this picture so
+everything feels more peaceful?" — close, but who/what surfaced only at q~55).
+gemma4/feelings: 40 q to a confirmed utterance; gemma4/people: aborted at 0 q.
+
+**Autopsy — four mechanisms, all confirmed in the recordings.**
+
+1. **The "Aaron" hallucination = slot mis-attribution.** q30 *"Is this
+   arrangement about a one-time event?"* was formatted with
+   `new_need: "I need to ask if Aaron is coming to visit soon"` — resurrecting
+   the already-rejected h3 under a fresh id (n2) — and the yes credited n2.
+   q35 *"…related to physically assisting you?"* → yes was ALSO tagged
+   `yes_ids:[n2]`. So "Aaron visit" gained points from questions that never
+   said "Aaron", became leader, and every synthesis baked "when Aaron visits"
+   in. Root cause: **crediting was never anchored to the question text**, and
+   a `new_need` could re-mint an eliminated candidate at zero.
+2. **Verbatim repeats.** *"Do you want to talk to Zach about something
+   important?"* asked **7×** (gemma3). §7 removed the hard `is_repeat` because
+   a reject then dumped the round into the bank — proving prompt nudges alone
+   don't stop gemma3 repeating.
+3. **Canned bank questions are pure noise.** Transient reasoner failures
+   walked the my_people bank mid-round (wife/husband/mother/…), and once
+   exhausted the generic holding question looped **5× verbatim** ("Is it
+   something you need help with right now?" → yes, ×5). The pre-overhaul
+   6:16 PM trial looped "Do you want your wife?" **14×**.
+4. **Lateral churn while a core unknown starves.** Round 2 spent ~20 q on WHY
+   (look better / feel right / peaceful) while WHAT ("a picture") went
+   unasked until q55 — nothing in the controller knew which *dimension* of
+   the need was still open.
+
+**The rebuild (this commit).** The single ranked-needs belief is replaced by a
+**5W1H consensus board** (`agent/facets.py`): per slot — who / what / when /
+where / why / how — contender values with the same additive scoring (+1 yes,
++0.5 kinda, −1 no to the asserted pair only; no normalization; floor −2;
+caregiver context +2). What carried over from the old controller: additive
+no-renormalization scoring, two-phase deliberate→format ask, explore-decay,
+rephrase ladder, yes-gates, undo-as-replay, the honest tile. What's new:
+
+- **Slot anchoring (the Aaron fix).** The formatter tags `slots` (≤2 pairs);
+  each value must be *words the question says* (`facets.mentions`, stemmed +
+  prefix-tolerant) or it is dropped; variants fold onto existing contenders
+  (`canonical_value`); a no-tag question falls back to deterministic
+  board-scan tagging. Rejected values stay on the board at negative scores —
+  nothing can be re-minted fresh at zero.
+- **Hard repeat gate, safely this time.** `auditor.is_repeat` (normalized +
+  SequenceMatcher ≥ 0.85) hard-rejects rewords against EVERY question asked
+  this round — safe now because there is no bank to fall into; persistent
+  repeats raise into the restart recovery. `audit_query` also rejects leaked
+  reasoning language ("the draft", "candidate", …).
+- **Code-side focus policy** (`Round._pick_focus`): probe an unestablished
+  core slot → split tied top contenders (the user-spec "scores still match"
+  case) → drill the weakest leader / enrich an empty modifier slot; never the
+  same slot >2 turns in a row (the WHY-hammering guard). Topics declare
+  `core_facets` (people: who+how; feelings: what+why; body: what+how).
+- **Synthesis weaves slot leaders** into ONE natural sentence — confirmed
+  slots verbatim-ish, unknown slots placeholdered (someone/something/soon) or
+  omitted, never a categorical dump; board-readiness (every core slot ≥
+  `facet_ready_points` with ≥ `facet_split_margin` lead) joins the yes-gate
+  as the early path.
+- **One restart recovery, three triggers** (synthesis-exhausted, >10-no
+  streak, reasoner fail-loop): dump every no/kinda influence; rebuild from
+  caregiver context + **this round's** confirmed yeses (round-specific by
+  construction — recovery no longer reads the session YesMemory) + fresh
+  profile-free probes. Post-restart prompts hide the dumped noise; the repeat
+  gate still spans the whole round, so a restart can't cause re-asks.
+- **Banks deleted; diagnostics added.** Topic fallback banks are gone from
+  the YAML/model/engine. A turn that fails through recovery emits a
+  `diagnostic` event — reason, what was attempted, llm-unreachable flag — and
+  the cockpit renders a failure card with **Retry** (`POST …/retry`); the
+  reasoning tile renders the per-slot contender scores (`event.facets`)
+  instead of the candidate list.
+- **Preface fluidity** enforced in code: ≤64 chars, never its own question,
+  dropped when ≥50 % of its content words restate the question, terminal
+  punctuation normalized to an em dash so `preface + question` reads as one
+  spoken line. Preface + slots + focus are now persisted per history entry,
+  so future autopsies can actually see them (they were invisible before).
+
+**20Q-research cross-check** (sources in the session log): UoT/multi-turn
+planning work finds LLMs cannot track belief implicitly across turns —
+externalizing state to code and handing the model a scoreboard each turn is
+the supported design. EIG/split-in-half optimality applies cleanly to the
+*split* directive; with a noisy answerer (Rényi–Ulam "liar" setting) single
+answers must never hard-eliminate — kept (soft scores, floor at −2,
+confirmation-seeking). Slot-filling dialogue literature matches the
+per-category belief + "ask the lowest-confidence slot" policy and explicit
+confirmation turns (our synthesis proposals). Aphasia SCA guidance endorses
+general→specific yes/no laddering and warns against relying on yes/no alone —
+the caregiver context channel and the kinda button are the compensators.
+**Known gaps deliberately deferred:** no true EIG question *selection* (we
+pick the slot in code but trust the model for the question itself); no
+explicit taxonomy ladder within a slot (coarse↔fine contenders coexist and
+fine ones must out-score coarse ones); answer-noise is modeled by weights,
+not by a confusion model.
+
+Net: −1 module (`hypotheses.py`), 135 tests pass (was 128), ruff clean,
+cockpit builds. **Watch in the next trial:** does the board's what-slot fill
+early on the picture target; do diagnostics ever appear in normal operation
+(they should be rare); does gemma4:e4b's preface now read as one sentence.
+
 ### 7. Trial autopsy + simplification — restoring gemma3 (2026-06-09)
 
 Two live trials: **feelings/gemma4 succeeded** (40 q, 8 yes → synthesized; allowed

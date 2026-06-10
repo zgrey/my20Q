@@ -12,18 +12,19 @@ from my20q.topics import Topic, find_topic
 
 
 def _reasoning_backend() -> MockBackend:
-    """A MockBackend that seeds, asks one drill question, then synthesizes."""
+    """A MockBackend that seeds the board, asks one question, then synthesizes."""
 
     def responder(messages: list) -> str:
         system = messages[0]["content"]
-        if "candidate NEEDS to test" in system:
+        if "starting GUESSES" in system:
             return json.dumps(
-                {"hypotheses": ["I am thirsty", "My foot hurts", "I feel cold",
-                                "I want to rest"]}
+                {"what": ["a drink", "a rest"], "how": ["bring it"], "why": ["thirsty"]}
             )
-        if "pin down the ONE specific" in system:
+        if "pin down the ONE specific" in system:  # deliberate
+            return "thinking..."
+        if "Convert a drafted question" in system:  # format
             return json.dumps(
-                {"question": "Is it about a drink?", "yes_ids": ["h1"],
+                {"question": "Is it about a drink?", "slots": {"what": "a drink"},
                  "preface": "", "rationale": "x"}
             )
         return json.dumps({"utterance": "I would like a glass of water."})
@@ -145,8 +146,30 @@ async def test_abandon_finalizes_a_live_round(topics: list[Topic]) -> None:
     topic = find_topic(topics, "my_people")
     assert topic is not None
     rnd = Round(topic, llm=None)
-    await rnd.open()
+    await rnd.open()  # surfaces a no-LLM diagnostic; the round stays live
     assert not rnd.is_terminal
     rnd.abandon()
     assert rnd.outcome == "abandoned"
     assert rnd.is_terminal
+
+
+def test_round_record_drops_internal_markers() -> None:
+    from my20q.recording import build_round_record
+
+    record = build_round_record(
+        session_id="s",
+        round_id="r",
+        topic_id="general",
+        engine="reasoning",
+        history=[
+            {"kind": "query", "text": "q", "answer": "no", "slots": {"what": "x"}},
+            {"kind": "restart", "reason": "no-streak", "board": {}},
+            {"kind": "diagnostic", "text": "ask failed", "answer": None},
+        ],
+        outcome=None,
+        final_utterance="",
+        model="m",
+    )
+    kinds = [q["kind"] for q in record["queries"]]
+    assert "restart" not in kinds  # internal board marker — not conversation
+    assert "diagnostic" in kinds  # the failure the caregiver saw IS kept

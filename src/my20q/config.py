@@ -17,7 +17,7 @@ class ReasoningTuning:
     """Tunable knobs for the round state machine — all env-overridable.
 
     These shape *behavior* (how long to question, when to synthesize, when to
-    rephrase vs. reseed, how often to explore) WITHOUT code edits — the serve
+    rephrase vs. restart, how often to explore) WITHOUT code edits — the serve
     script can export the ``MY20Q_*`` vars below. ``agent/dialogue.py`` reads
     these off the active ``Round.tuning``.
     """
@@ -31,21 +31,27 @@ class ReasoningTuning:
     #: attempt (so an attempt shows up to ``1 + rephrase_limit`` utterances).
     rephrase_limit: int = 3
     #: Failed synthesis attempts (each = initial + rephrases, all rejected)
-    #: tolerated before the round DUMPS its context and reseeds.
-    synth_attempts_before_reseed: int = 2
+    #: tolerated before the round RESTARTS (dumps the no/kinda influence and
+    #: rebuilds the board from caregiver context + this round's yeses).
+    synth_attempts_before_restart: int = 2
     #: Exploration DECAYS as yeses accrue toward synthesis. The next question is
-    #: exploratory (profile dropped, free to open a brand-new on-topic avenue) with
+    #: exploratory (profile dropped, free to probe a brand-new on-topic value) with
     #: probability ``explore_decay ** (yeses + 1)`` — high early, low as the round
     #: homes in. The yes-count resets after each synthesis attempt and after a
-    #: reseed, so exploration re-opens. Base in [0, 1]; 2/3 ≈ 0.67 initially.
+    #: restart, so exploration re-opens. Base in [0, 1]; 2/3 ≈ 0.67 initially.
     explore_decay: float = 2 / 3
-    #: MORE than this many CONSECUTIVE "no" answers triggers a soft reset (dump the
-    #: "kinda" warmth, re-open around the yeses). See ``Round._consec_no_streak``.
+    #: MORE than this many CONSECUTIVE "no" answers triggers the restart recovery
+    #: (the working context is wrong — dump it). See ``Round._consec_no_streak``.
     soft_reset_no_streak: int = 10
-    #: Synthesize EARLY once the belief concentrates: when the leader is ahead of the
-    #: runner-up by at least this many points (with >= new_yes confirmations) it is
-    #: "ready", even before the full min_yes count. 0 effectively disables it.
-    readiness_margin: float = 2.0
+    #: A facet category counts as DETERMINED once its leading contender has at
+    #: least this many consensus points (and a clear margin — below). When every
+    #: core category is determined, synthesis can fire early with placeholders
+    #: for the rest.
+    facet_ready_points: float = 2.0
+    #: Top-two contenders of a category within this margin are TIED — the
+    #: controller schedules a splitting question; a leader needs at least this
+    #: margin over the runner-up to count as determined.
+    facet_split_margin: float = 1.0
 
     @classmethod
     def from_env(cls) -> ReasoningTuning:
@@ -61,10 +67,11 @@ class ReasoningTuning:
             min_yes_for_synthesis=_int("MY20Q_MIN_YES", 5, minimum=1),
             new_yes_for_resynthesis=_int("MY20Q_NEW_YES", 3, minimum=1),
             rephrase_limit=_int("MY20Q_REPHRASE_LIMIT", 3, minimum=0),
-            synth_attempts_before_reseed=_int("MY20Q_SYNTH_ATTEMPTS", 2, minimum=1),
+            synth_attempts_before_restart=_int("MY20Q_SYNTH_ATTEMPTS", 2, minimum=1),
             explore_decay=_float("MY20Q_EXPLORE_DECAY", 2 / 3, lo=0.0, hi=1.0),
             soft_reset_no_streak=_int("MY20Q_SOFT_RESET_NOS", 10, minimum=1),
-            readiness_margin=_float("MY20Q_READINESS_MARGIN", 2.0, lo=0.0, hi=1e9),
+            facet_ready_points=_float("MY20Q_FACET_READY", 2.0, lo=0.5, hi=1e9),
+            facet_split_margin=_float("MY20Q_SPLIT_MARGIN", 1.0, lo=0.0, hi=1e9),
         )
 
 

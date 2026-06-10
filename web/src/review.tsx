@@ -52,12 +52,13 @@ function buildSteps(records: RoundRecord[]): Step[] {
     }
     let qn = 0;
     entries.forEach((entry, i) => {
-      if (entry.kind !== "context") qn += 1;
+      const numbered = entry.kind !== "context" && entry.kind !== "diagnostic";
+      if (numbered) qn += 1;
       steps.push({
         roundIndex,
         round,
         entry,
-        entryNumber: entry.kind === "context" ? 0 : qn,
+        entryNumber: numbered ? qn : 0,
         isRoundStart: i === 0,
       });
     });
@@ -77,6 +78,7 @@ function emotionLine(state: Record<string, number>): string {
 function stepSpeech(s: Step): string {
   const e = s.entry;
   if (!e) return "";
+  if (e.kind === "diagnostic") return ""; // technical detail — not voiced
   if (e.kind === "context") return e.text;
   const parts = [e.text];
   if (e.rationale) parts.push(e.rationale);
@@ -94,6 +96,9 @@ function StepKindLabel({ step }: { step: Step }) {
   }
   if (step.entry.kind === "context") {
     return <span class="rstep-kind context">caregiver context</span>;
+  }
+  if (step.entry.kind === "diagnostic") {
+    return <span class="rstep-kind diagnostic">reasoning failure</span>;
   }
   return (
     <span class="rstep-kind">

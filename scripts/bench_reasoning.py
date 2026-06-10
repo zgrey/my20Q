@@ -231,6 +231,7 @@ async def _drive_round(
     rnd = Round(topic, llm=reasoner, max_queries=max_queries)
     transcript: list[str] = []
     latencies: list[float] = []
+    diagnostics = 0
 
     async def step(coro):
         t0 = time.perf_counter()
@@ -251,6 +252,15 @@ async def _drive_round(
             ok = await _simulate_confirm(sim, scenario.need, ev.text)
             transcript.append(f"SYN: “{ev.text}”  → {'confirm' if ok else 'reject'}")
             ev = await step(rnd.answer(Answer.YES if ok else Answer.NO))
+        elif ev.kind == "diagnostic":
+            # No canned questions anymore — a failed turn surfaces a
+            # diagnostic. Retry a few times (mirrors the cockpit button), then
+            # give up on the round.
+            diagnostics += 1
+            transcript.append(f"DIAG: {ev.text}")
+            if diagnostics > 3:
+                break
+            ev = await step(rnd.retry())
         else:
             break
 
@@ -269,7 +279,7 @@ async def _drive_round(
         outcome=rnd.outcome,
         queries=rnd.query_count,
         reasks=reasks,
-        degraded=rnd.engine == "fallback",
+        degraded=diagnostics > 0,
         degrade_reason=rnd.degrade_reason,
         final_utterance=rnd.final_utterance,
         transcript=transcript,
