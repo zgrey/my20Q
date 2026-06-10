@@ -285,18 +285,26 @@ export function App() {
   // y/n/k/s answer shortcuts, u = undo, q = new round. The handlers are
   // re-bound each render so they close over current state.
   //
-  // Shortcuts also fire from inside the context field, but only while it
-  // is empty — so a single keystroke answers like it does outside the
-  // field, yet you can still type multi-character context (Enter sends).
-  // The topic dropdown keeps its own keyboard behavior.
+  // While a text-entry surface is focused (the caregiver context field, the
+  // topic dropdown, the emotion sliders, or any contenteditable) the shortcuts
+  // are DISABLED — the keyboard belongs to that control. Otherwise the first
+  // letter of any context beginning with y/n/k/s/u/q would be swallowed as an
+  // answer and never reach the field. The context field blurs itself on send,
+  // so the shortcuts resume the moment context is submitted.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (view !== "live") return; // review mode has its own navigation
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
-      if (tag === "SELECT" || tag === "TEXTAREA") return;
-      if (tag === "INPUT" && (el as HTMLInputElement).value !== "") return;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el?.isContentEditable
+      ) {
+        return;
+      }
       const map: Record<string, Answer> = {
         y: "yes",
         n: "no",

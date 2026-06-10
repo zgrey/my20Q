@@ -541,12 +541,16 @@ export function InputTile(props: InputProps) {
   const { canAnswer, canUndo, terminal, busy, onAnswer, onUndo, onSend, onNewRound } =
     props;
   const [text, setText] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const submit = () => {
     const v = text.trim();
     if (v && !busy) {
       onSend(v);
       setText("");
+      // Release the keyboard so the y/n/k/s answer shortcuts work again right
+      // away — otherwise focus lingers in the field and they stay disabled.
+      inputRef.current?.blur();
     }
   };
 
@@ -575,6 +579,7 @@ export function InputTile(props: InputProps) {
       </div>
       <div class="context-row">
         <input
+          ref={inputRef}
           type="text"
           placeholder="Type context to steer the questioning…"
           value={text}
