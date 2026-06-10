@@ -1,51 +1,43 @@
-# Reasoning architecture — live-trial retrospective (2026-06-02)
 
-A record of what we built, what live trials on cerberus showed, and the decision
-to simplify the working line. Nothing here is lost — Stages 1–3 are preserved on
-the `augmented-reasoning` branch.
+### 7. Trial autopsy + simplification — restoring gemma3 (2026-06-09)
 
-## What we built (in stages)
+Two live trials: **feelings/gemma4 succeeded** (40 q, 8 yes → synthesized; allowed
+to drift from "confused about the TV" to the root cause "general confusion"). **people/
+gemma3 failed** (56 q, abandoned) with the old artifacts back: dumb repeated questions,
+no depth.
 
-1. **Hypothesis belief controller** (`37f99f5`) — a flat belief over candidate
-   needs; each turn asks the most *discriminating* yes/no question; the cockpit
-   shows the live belief (the "honest tile"). Fixed the "asks what's *wrong*,
-   never what you *want*" drift. **~1 LLM call per question.** *Keep.*
-2. **Context expansion** (`d4955c0`) — a caregiver note adds/boosts candidate
-   needs as high-trust evidence. *Keep.*
-3. **Reason→format decouple — "Stage 1"** (`b05bf42`) — split the ask into
-   *deliberate* (free reasoning) + *format* (strict JSON), to let thinking
-   models (gemma4) participate without the JSON being starved.
-   **2 LLM calls per question.**
-4. **Augmented hierarchical zoom + trace — "Stage 2/3"** (`7318e4e`) — a toggle:
-   on take-root, zoom into finer sub-needs and descend a grammatical ladder
-   (need → object → modifier); `effort = 1 + depth` deliberate→critique→refine
-   passes; a reasoning trace surfacing the explicit passes *and* a summary of a
-   thinking model's opaque reasoning. **Many LLM calls per question.**
+**Autopsy (per-round stats from the recordings).** Early gemma3 (06-07): **0 fallback
+turns, 0 repeats**, synthesizing in 3-16 q. The failed round (06-10): **27 of 56 turns
+were fallback, 19 repeats, 45 no**. gemma4 in the same trial: **1 fallback, 0 repeats**.
+So gemma3's *reasoner* was failing almost every other turn and dropping to the bank
+(which looped). Root cause = the **question audits** (§5, b1bdef2): `topic_violation`
+under `my_people` requires a person-word/name, but the target *"I want Zach to move a
+large picture"* forces object/action questions ("move the picture") → rejected →
+retries exhausted → `ReasonerError` → fallback bank → loop. **The audit added to fix
+redundancy was what caused it.** gemma4 survived because its two-phase deliberate pass
+phrases on-topic and clears the audits.
 
-## What live trials showed
+**Simplification (the fix).**
+- **Audits non-fatal.** The ask accepts its best-effort question after the retry
+  budget; only `audit_query` (is it yes/no-answerable) is enforced. `topic_violation`
+  and the `is_repeat` hard-reject are gone (`auditor.py` is now just `audit_query`);
+  redundancy and on-topic fit are nudged via the prompt. A real, if imperfect, question
+  always beats the looping bank.
+- **Two-phase for every model.** Deleted the single-call `ASK_SYSTEM`/`ask_messages`
+  path and the `is_thinking_model` gate; everyone deliberates then formats. `_format_
+  question` salvages the question straight from the draft if the format pass is empty.
+- **Fallback never loops the bank** — a single neutral holding question when exhausted
+  (and it is rare now that audits don't force it).
+- **Synthesis gate = readiness OR yes-count.** A dominant leader (margin ≥
+  `readiness_margin`) with ≥ `new_yes` confirmations synthesizes early, restoring the
+  fast convergence gemma3 had before the hard 5-yes gate. First synth still needs
+  `min_yes`; later attempts (incl. post-reseed) need `new_yes`.
+- **Preface flows into the question** as one cohesive spoken read.
 
-- **Question generation is too slow.** Augmented mode makes `(1+depth)`
-  deliberate+critique passes, plus a format call, plus zoom and a
-  thinking-summary call — several round-trips per question. With a thinking
-  model (gemma4) each call is already slow, so turns ran tens of seconds to
-  minutes and frequently **degraded to fallback at the timeout**. In practice
-  this makes the gemma4 models obsolete for live use.
-- **"Zoom" did not demonstrably help** — it narrows along the ladder, but the
-  latency cost was not justified by any clear quality gain; at times it felt
-  worse.
-- **TTS unstable** — voice activates only occasionally. Likely a *separate*
-  issue (the TTS path itself was unchanged) but aggravated by slow turns, since
-  TTS fires per question and questions became rare/slow. **Needs its own
-  investigation** (candidates: piper subprocess flakiness, a frontend
-  speak/stop race, autoplay gating).
-
-## Cost — LLM calls per question
-
-| Stage | calls / question |
-|---|---|
-| original single-shot reasoner | ~1 |
-| hypothesis belief controller | ~1 |
-| + Stage 1 (reason→format) | 2 |
+Net **−200 lines**. 113 tests pass, ruff clean. **Still open:** TTS drops randomly (its
+own reliability pass). **Next:** re-incorporate hierarchical zoom + deep-research
+alternative strategies on this simplified base.
+ 2 |
 | + augmented (Stage 2/3), depth `d` | ~`(1+d)·2` + zoom + summary |
 
 ## Decision
