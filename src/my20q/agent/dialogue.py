@@ -394,7 +394,12 @@ class Round:
                     if ever_synthesized
                     else T.min_yes_for_synthesis
                 )
-                move = "synthesize" if new_yes >= need else "question"
+                # Synthesize on the yes-count gate OR on READINESS — a clearly
+                # dominant leader with at least new_yes confirmations. Readiness
+                # restores early convergence for a belief that concentrates fast,
+                # without forcing a half-baked utterance.
+                ready = new_yes >= T.new_yes_for_resynthesis and self._belief_ready()
+                move = "synthesize" if (new_yes >= need or ready) else "question"
 
             if move == "reseed":
                 await self._reseed()  # appends a reseed marker (dumps the context)
@@ -496,7 +501,6 @@ class Round:
         exploratory = soft_reset or self._rng.random() < self._explore_probability(yeses)
         action = await self._reasoner.ask(
             candidates=candidates,
-            topic_id=self.topic.id,
             anchored=anchored,
             exploratory=exploratory,
             reset=soft_reset,
@@ -551,6 +555,20 @@ class Round:
             else:
                 break
         return runs, tail
+
+    def _belief_ready(self) -> bool:
+        """Whether the belief has concentrated on a clear leader.
+
+        True when the top need leads the runner-up by at least ``readiness_margin``
+        points (and is positive). Lets a confident, concentrated belief synthesize
+        before the full yes-count — restoring early convergence — without forcing it.
+        """
+        _, scores = self._replay_belief()
+        ranked = sorted(scores.values(), reverse=True)
+        if not ranked or ranked[0] <= 0:
+            return False
+        second = ranked[1] if len(ranked) > 1 else float("-inf")
+        return (ranked[0] - second) >= self.tuning.readiness_margin
 
     @staticmethod
     def _yes_since_last_synth(seg: list[dict]) -> int:
@@ -800,8 +818,15 @@ class Round:
         )
         if nxt is None:  # then retry the deferred (not_sure) questions, in order
             nxt = next((q for q in bank if q.id in deferred), None)
-        if nxt is None:  # all consumed — LOOP the bank rather than end the round
-            nxt = bank[0]
+        if nxt is None:  # bank exhausted — a neutral holding question, NOT a repeat
+            action = ReasonerAction(
+                kind="query",
+                content=_GENERIC_FALLBACK_Q,
+                rationale="Fallback: reasoning is briefly unavailable.",
+            )
+            self._pending = action
+            self._pending_qid = None
+            return self._event_for(action)
 
         action = ReasonerAction(
             kind="query",

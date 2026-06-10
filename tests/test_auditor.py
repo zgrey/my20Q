@@ -28,16 +28,18 @@ def test_audit_flags_open_wh_question() -> None:
 
 
 async def test_ask_reprompts_until_query_passes() -> None:
-    # The first question is an either/or (fails the audit); the reasoner feeds
-    # the reason back and re-asks until it gets a clean yes/no.
+    # The format pass first yields an either/or (fails the audit); the reasoner
+    # feeds the reason back and re-asks until it gets a clean yes/no.
     bad = json.dumps({"question": "Is it inside or outside?", "yes_ids": ["h1"], "rationale": "x"})
     good = json.dumps({"question": "Is it inside the house?", "yes_ids": ["h1"], "rationale": "x"})
-    state = {"i": 0}
+    state = {"fmt": 0}
 
-    def responder(_msgs: list) -> str:
-        out = [bad, good][min(state["i"], 1)]
-        state["i"] += 1
-        return out
+    def responder(msgs: list) -> str:
+        if "Convert a drafted question" in msgs[0]["content"]:  # FORMAT pass
+            out = [bad, good][min(state["fmt"], 1)]
+            state["fmt"] += 1
+            return out
+        return "thinking about inside vs the house"  # DELIBERATE draft
 
     reasoner = Reasoner(MockBackend(responder=responder))
     action = await reasoner.ask(
@@ -60,7 +62,6 @@ async def test_ask_can_propose_a_new_need() -> None:
     reasoner = Reasoner(MockBackend(responder=lambda _m: out))
     action = await reasoner.ask(
         topic_label="My feelings",
-        topic_id="mental_health",
         candidates=[("h1", "I am lonely", 0.0)],
         history=[],
     )

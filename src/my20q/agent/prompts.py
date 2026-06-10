@@ -5,7 +5,8 @@ The retooled engine wraps the LLM in a hypothesis controller (see
 code does *control*, via three focused calls:
 
 - ``seed_messages``      — list candidate needs to test (the belief's prior).
-- ``ask_messages``       — the single most-discriminating yes/no question.
+- ``deliberate_messages``/``format_question_messages`` — the two-phase ask: reason
+  out the next yes/no question, then format it into strict JSON.
 - ``synthesize_messages``— phrase the leading need as a first-person utterance.
 
 See docs/design/beta-retool.md §7.
@@ -49,51 +50,11 @@ _UNIVERSAL_WANTS = (
     "or too cold. A basic want like thirst is easy to miss — do not skip it."
 )
 
-ASK_SYSTEM = """\
-You help pin down the ONE specific thing a person with aphasia is trying to say.
-You are given CANDIDATE needs (each with an id and accumulated POINTS — higher =
-more confirmed) and the dialogue so far. Ask the next yes/no question that gets
-CLOSER to the exact need.
-
-Read the answers so far as a trail:
-- a recent "yes" means that question was CORRECT — now get MORE SPECIFIC within it;
-- "kinda" means NEARLY correct — ask a fresh VARIATION (a different angle on the
-  same area), never a reworded repeat;
-- "no" means wrong — move away from it;
-- "not sure" — try a different angle.
-
-Move through three stages as you narrow: (1) identify the SUBJECT (the general
-thing), then (2) the specific ACTION/aspect of that subject, then (3) the
-context-specific MODIFIERS of the subject and action (e.g. feelings: emotion →
-what it is about → how strong / when; body: region → part → exact spot).
-
-OUTPUT — STRICT JSON, nothing else:
-{"question": "...", "yes_ids": ["h2"], "new_need": "", "preface": "...", "rationale": "..."}
-
-- "question": ONE plain yes/no question, ~8-16 everyday words. The caregiver can
-  only answer yes / no / kinda / not sure — so NEVER an either/or. Narrow and
-  specific is GOOD; you do NOT need to split the candidates in half. It must be a
-  GENUINELY NEW question — not a reworded version of any already in the history.
-- "yes_ids": the candidate id(s) a "yes" would confirm (>=1). If the question
-  drills into a more specific version of a candidate, tag that candidate.
-- "new_need": you are NOT limited to the listed candidates. If your question
-  explores a need NOT in the list (a fresh avenue), leave "yes_ids" empty and put
-  the first-person need here (e.g. "I feel scared and confused about where I am").
-  On a "yes"/"kinda" it becomes a new candidate to drill. Otherwise leave it "".
-- "preface": a SHORT spoken lead-in (<=12 words) — warm, varies each turn.
-- "rationale": one short sentence for the caregiver's panel; never spoken.
-
-STAY ON TOPIC — every question must fit the round's topic (feelings = an emotion
-or mental state; body = physical health; people = a specific person). BANNED —
-vague meta-questions about whether the person WANTS to talk / share how they feel.
-No medical advice, URLs, markup, or emoji.
-"""
-
-# Thinking models take a two-phase ask: first DELIBERATE (free-form reasoning —
+# The ask is two-phase for EVERY model: first DELIBERATE (free-form reasoning —
 # the model thinks as long as it wants, no JSON budget pressure), then FORMAT
-# (a cheap thinking-off call that turns the draft into strict JSON). This keeps
-# the thinking from starving the JSON answer. Non-thinking models skip this and
-# use the single-call ASK_SYSTEM path above.
+# (a cheap thinking-off call that turns the draft into strict JSON). This keeps the
+# reasoning from starving the JSON answer, and gives a non-thinking model an open
+# chain-of-thought too (it used to answer in a single cramped JSON call).
 
 DELIBERATE_SYSTEM = """\
 You help pin down the ONE specific thing a person with aphasia is trying to say.
@@ -128,8 +89,10 @@ OUTPUT — STRICT JSON, nothing else:
   into a more specific version of a candidate, tag that candidate.
 - "new_need": if the draft explores a need NOT in the candidate list, leave
   "yes_ids" empty and put that first-person need here; otherwise "".
-- "preface": a SHORT spoken lead-in (<=12 words) read just before the question —
-  warm, plain, never just restating the question.
+- "preface": a SHORT warm spoken lead-in (<=12 words) that flows GRAMMATICALLY
+  into the question, so the preface and question read aloud as ONE natural,
+  cohesive sentence (e.g. "Thinking about your body —" then "is something
+  hurting?"). It must lead INTO the question, not stand alone or restate it.
 - "rationale": one short sentence for the caregiver's panel; never spoken.
 No medical advice, URLs, markup, or emoji.
 """
@@ -330,73 +293,6 @@ def _asked_block(history: list[dict]) -> str:
         "new:\n"
         f"{lines}\n\n"
     )
-
-
-def ask_messages(
-    topic_label: str,
-    candidates: list[tuple[str, str, float]],
-    history: list[dict],
-    *,
-    seed_context: str = "",
-    profile_context: str = "",
-    topic_hint: str = "",
-    emotional_state: dict | None = None,
-    corrections: list[str] | None = None,
-    anchored: bool = False,
-    exploratory: bool = False,
-    reset: bool = False,
-    kinda_texts: list[str] | None = None,
-    yes_texts: list[str] | None = None,
-) -> list[LLMMessage]:
-    """Ask for the next drilling yes/no question over ``candidates``.
-
-    ``candidates`` is ``(id, need, score)`` for the live hypotheses (score =
-    accumulated points). ``anchored`` restricts to the warm cluster; ``exploratory``
-    drops the profile and pushes a new avenue; ``kinda_texts`` are warm questions
-    to vary (not repeat). ``reset`` (a soft reset after a run of "no") replaces the
-    warm-anchor / kinda framing with a re-grounding in ``yes_texts`` or a new avenue.
-    """
-    listing = "\n".join(
-        f"  {hid}: {need}  [points {score:+.1f}]" for hid, need, score in candidates
-    )
-    instruction = f"Topic for this round: {topic_label}\n\n"
-    instruction += _context_block(
-        profile_context=profile_context,
-        seed_context=seed_context,
-        topic_hint=topic_hint,
-        emotional_state=emotional_state,
-    )
-    if exploratory:
-        instruction += _EXPLORE_NOTE
-    if reset:
-        # A soft reset replaces the warm-anchor / kinda framing entirely: dump the
-        # lukewarm trail and re-ground in the yes confirmations (or a new avenue).
-        instruction += _RESET_NOTE
-        instruction += _affirmed_block(yes_texts)
-    else:
-        if anchored:
-            instruction += _ANCHOR_NOTE
-        instruction += _kinda_block(kinda_texts)
-    instruction += _asked_block(history)
-    instruction += (
-        "CANDIDATE needs in play (id: need [points]):\n"
-        f"{listing}\n\n"
-        f"History so far:\n{_format_history(history)}\n\n"
-    )
-    if corrections:
-        joined = "\n".join(f"  - {c}" for c in corrections)
-        instruction += (
-            "YOUR PREVIOUS ATTEMPT WAS REJECTED:\n"
-            f"{joined}\n"
-            "Produce a corrected yes/no question.\n\n"
-        )
-    instruction += (
-        'Return the next yes/no question and its "yes_ids" as strict JSON.'
-    )
-    return [
-        {"role": "system", "content": ASK_SYSTEM},
-        {"role": "user", "content": instruction},
-    ]
 
 
 def deliberate_messages(

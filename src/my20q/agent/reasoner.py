@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from my20q.agent import prompts
-from my20q.agent.auditor import audit_query, is_repeat, topic_violation
+from my20q.agent.auditor import audit_query
 from my20q.agent.hypotheses import Hypothesis
 from my20q.agent.safety import sanitize_llm_text, sanitize_utterance
 from my20q.llm.base import LLMBackend, LLMUnavailable
@@ -125,21 +125,54 @@ class Reasoner:
             raise ReasonerError(f"invalid JSON from LLM: {raw!r}")
         return data
 
-    async def _thinking_model(self) -> bool:
-        """Whether the active backend is a thinking model.
+    async def _deliberate(self, draft_messages: list) -> str:
+        """Phase 1 of the ask: free-form reasoning toward the next question.
 
-        Gates the two-phase ask: thinking models deliberate then format so the
-        reasoning never starves the JSON; everything else keeps the fast
-        single-call path. Backends without a probe (or a failing probe) are
-        treated as non-thinking.
+        Uncapped so a thinking model can reason to completion; a non-thinking model
+        just writes a short rationale plus the question. If the model spends its
+        whole budget thinking and returns empty, retry once with thinking OFF so we
+        still get text; only a genuinely down backend raises.
         """
-        probe = getattr(self.llm, "is_thinking_model", None)
-        if probe is None:
-            return False
         try:
-            return bool(await probe())
-        except Exception:  # never let a probe failure break the ask
-            return False
+            draft = await self.llm.chat(
+                draft_messages, max_tokens=DELIBERATE_MAX_TOKENS, json_mode=False
+            )
+        except LLMUnavailable:
+            draft = ""
+        if not draft.strip():
+            try:
+                draft = await self.llm.chat(
+                    draft_messages,
+                    max_tokens=DELIBERATE_MAX_TOKENS,
+                    json_mode=False,
+                    think=False,
+                )
+            except LLMUnavailable as exc:
+                raise ReasonerError(f"llm unreachable: {exc}") from exc
+        return draft
+
+    async def _format_question(
+        self, candidates: list[tuple[str, str, float]], draft: str
+    ) -> dict:
+        """Phase 2 of the ask: format the draft into strict question JSON.
+
+        Salvages directly from the draft when the format call yields nothing usable
+        (the draft may already carry the structured question), so a flaky format
+        pass never costs us a whole turn.
+        """
+        try:
+            data = await self._chat_json(
+                prompts.format_question_messages(candidates, draft),
+                max_tokens=FORMAT_MAX_TOKENS,
+                think=False,
+            )
+        except ReasonerError:
+            data = {}
+        if not data.get("question"):
+            salvaged = _extract_json(draft)
+            if isinstance(salvaged, dict) and salvaged.get("question"):
+                return salvaged
+        return data
 
     # ------------------------------------------------------------- the calls
 
@@ -188,7 +221,6 @@ class Reasoner:
         self,
         *,
         topic_label: str,
-        topic_id: str = "",
         candidates: list[tuple[str, str, float]],
         history: list[dict],
         seed_context: str = "",
@@ -202,25 +234,22 @@ class Reasoner:
     ) -> ReasonerAction:
         """Propose the next yes/no question, drilling toward the exact need.
 
-        Builds on the warm trail: a recent "yes" means that question was correct
-        (get MORE specific about it); "kinda" means nearly correct (explore a
-        VARIATION of it); "no" means wrong (move away). Each proposed question is
-        audited for format, **redundancy** (not a reworded repeat), and
-        **on-topic** fit before it is accepted. ``exploratory`` turns drop the
-        patient profile so the model explores freely (2 of every 3 turns); the
-        rest may use the profile. ``reset`` (a soft reset after a long run of
-        "no") dumps the warm "kinda" framing and re-grounds the question in the
-        YES confirmations or a brand-new avenue. Thinking models take the
-        two-phase path.
+        Two phases for EVERY model: DELIBERATE (free-form reasoning, no JSON) then
+        FORMAT (strict JSON, salvaged from the draft if the format call comes up
+        empty). The ONLY hard check is that the result is answerable as yes/no
+        (``audit_query``); redundancy and on-topic fit are nudged through the prompt,
+        NOT enforced as rejections — a rejection used to dump the round into the
+        deterministic bank, which is worse than an imperfect real question. After the
+        retry budget we accept the best effort rather than fall back.
+
+        ``exploratory`` drops the profile to free up a new avenue; ``anchored``
+        restricts to the warm cluster; ``reset`` re-grounds in the YES confirmations
+        after a long run of "no".
         """
         live_ids = {hid for hid, _, _ in candidates}
         corrections: list[str] = []
         best: ReasonerAction | None = None
-        two_phase = await self._thinking_model()
-        # Redundancy + warm-trail material from the answered history.
-        prior_questions = [
-            h["text"] for h in history if h.get("kind") == "query" and h.get("text")
-        ]
+        # Warm-trail material from the answered history (for the prompt blocks).
         kinda_texts = [
             h["text"]
             for h in history
@@ -237,17 +266,13 @@ class Reasoner:
             and h.get("answer") == "yes"
             and h.get("text")
         ]
-        # Exploratory turns ignore the profile so the model is free to explore new
-        # avenues (2 of every 3 turns); only context turns may lean on it.
+        # Exploratory turns ignore the profile so the model can open a new avenue.
         eff_profile = "" if exploratory else profile_context
         for attempt in range(MAX_AUDIT_RETRIES + 1):
             if on_phase is not None:
                 on_phase("re-asking" if attempt else "thinking")
-            if two_phase:
-                # Phase 1 — deliberate (free-form; backend-default thinking; no
-                # JSON), then Phase 2 — format the draft into strict JSON with
-                # thinking forced off.
-                deliberate_msgs = prompts.deliberate_messages(
+            draft = await self._deliberate(
+                prompts.deliberate_messages(
                     topic_label,
                     candidates,
                     history,
@@ -262,60 +287,17 @@ class Reasoner:
                     kinda_texts=kinda_texts,
                     yes_texts=yes_texts,
                 )
-                try:
-                    draft = await self.llm.chat(
-                        deliberate_msgs,
-                        max_tokens=DELIBERATE_MAX_TOKENS,
-                        json_mode=False,
-                    )
-                except LLMUnavailable:
-                    # A thinking model can spend the whole budget thinking and
-                    # return EMPTY content (Ollama reports this as "empty
-                    # response"); a big model never even finishes the thought.
-                    # Don't kill the round — retry the draft with thinking OFF so
-                    # we still get a question. A genuinely down backend will fail
-                    # this retry too and surface as a ReasonerError.
-                    draft = ""
-                if not draft.strip():
-                    try:
-                        draft = await self.llm.chat(
-                            deliberate_msgs,
-                            max_tokens=DELIBERATE_MAX_TOKENS,
-                            json_mode=False,
-                            think=False,
-                        )
-                    except LLMUnavailable as exc:
-                        raise ReasonerError(f"llm unreachable: {exc}") from exc
-                if not draft.strip():
-                    corrections.append(
-                        "the reasoning produced no question; state one plainly"
-                    )
-                    continue
-                data = await self._chat_json(
-                    prompts.format_question_messages(candidates, draft),
-                    max_tokens=FORMAT_MAX_TOKENS,
-                    think=False,
+            )
+            if not draft.strip():
+                corrections.append(
+                    "the reasoning produced no question; state one plainly"
                 )
-            else:
-                messages = prompts.ask_messages(
-                    topic_label,
-                    candidates,
-                    history,
-                    seed_context=seed_context,
-                    profile_context=eff_profile,
-                    topic_hint=topic_hint,
-                    emotional_state=emotional_state,
-                    corrections=corrections,
-                    anchored=anchored,
-                    exploratory=exploratory,
-                    reset=reset,
-                    kinda_texts=kinda_texts,
-                    yes_texts=yes_texts,
-                )
-                data = await self._chat_json(messages, max_tokens=ASK_MAX_TOKENS)
+                continue
+            data = await self._format_question(candidates, draft)
             question = data.get("question", "")
             if not isinstance(question, str) or not question.strip():
-                raise ReasonerError("ask: empty question")
+                corrections.append("no usable question in the draft; state one plainly")
+                continue
             cleaned = sanitize_llm_text(question)
             if not cleaned:
                 corrections.append("question was unusable after sanitizing; rephrase")
@@ -342,24 +324,14 @@ class Reasoner:
             )
             best = action
 
+            # The ONE hard gate: it must be answerable as a yes/no question.
+            # Redundancy and on-topic fit are handled by the prompt, never enforced
+            # here — a reject would dump the round to the worse deterministic bank.
             verdict = audit_query(cleaned)
             if not verdict.ok:
                 corrections.append(verdict.reason)
                 continue
-            # On-topic: the question must fit the round's high-level topic.
-            violation = topic_violation(topic_id, cleaned)
-            if violation:
-                corrections.append(violation)
-                continue
-            # Redundancy: not a reworded repeat of an already-answered question.
-            if is_repeat(cleaned, prior_questions):
-                corrections.append(
-                    "that repeats a question already asked — ask about a genuinely "
-                    "DIFFERENT subject, action, or modifier"
-                )
-                continue
-            # Must credit a candidate OR propose a new need (a "yes" has to land
-            # on something). No balance/split requirement.
+            # A "yes" has to land on something — an existing candidate or a new need.
             if not yes_set:
                 corrections.append(
                     "tag yes_ids with the candidate(s) a 'yes' confirms, or set "
@@ -368,17 +340,12 @@ class Reasoner:
                 continue
             return action
 
-        # Retries exhausted — accept the best effort, but NEVER a known repeat or
-        # an off-topic question (raise instead → a recoverable fallback turn).
-        if (
-            best is not None
-            and best.yes_ids
-            and not is_repeat(best.content, prior_questions)
-            and not topic_violation(topic_id, best.content)
-        ):
-            best.rationale = f"(imperfect question accepted) {best.rationale}".strip()
+        # Retries exhausted — accept the best effort. A real, if imperfect, question
+        # beats degrading to the deterministic bank; only a total miss raises.
+        if best is not None and best.yes_ids:
+            best.rationale = f"(best-effort) {best.rationale}".strip()
             return best
-        raise ReasonerError("ask: could not produce a usable, novel, on-topic question")
+        raise ReasonerError("ask: could not produce a usable question")
 
     async def expand_hypotheses(
         self,

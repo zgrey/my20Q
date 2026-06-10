@@ -42,6 +42,10 @@ class ReasoningTuning:
     #: MORE than this many CONSECUTIVE "no" answers triggers a soft reset (dump the
     #: "kinda" warmth, re-open around the yeses). See ``Round._consec_no_streak``.
     soft_reset_no_streak: int = 10
+    #: Synthesize EARLY once the belief concentrates: when the leader is ahead of the
+    #: runner-up by at least this many points (with >= new_yes confirmations) it is
+    #: "ready", even before the full min_yes count. 0 effectively disables it.
+    readiness_margin: float = 2.0
 
     @classmethod
     def from_env(cls) -> ReasoningTuning:
@@ -60,6 +64,7 @@ class ReasoningTuning:
             synth_attempts_before_reseed=_int("MY20Q_SYNTH_ATTEMPTS", 2, minimum=1),
             explore_decay=_float("MY20Q_EXPLORE_DECAY", 2 / 3, lo=0.0, hi=1.0),
             soft_reset_no_streak=_int("MY20Q_SOFT_RESET_NOS", 10, minimum=1),
+            readiness_margin=_float("MY20Q_READINESS_MARGIN", 2.0, lo=0.0, hi=1e9),
         )
 
 

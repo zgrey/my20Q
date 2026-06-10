@@ -14,7 +14,7 @@ from my20q.agent.dialogue import (
     Session,
 )
 from my20q.agent.hypotheses import Hypothesis
-from my20q.agent.prompts import ask_messages, seed_messages
+from my20q.agent.prompts import deliberate_messages, seed_messages
 from my20q.config import ReasoningTuning
 from my20q.llm import MockBackend
 from my20q.llm.base import LLMUnavailable
@@ -307,7 +307,9 @@ async def test_reasoning_round_converges_via_belief(topics: list[Topic]) -> None
         ev = await rnd.answer(Answer.YES)
         yeses += 1
     assert ev.kind == "synthesis"
-    assert yeses >= MIN_YES_FOR_SYNTHESIS  # the positive-evidence gate held
+    # Converged via READINESS (a dominant leader) before the full yes-gate — but
+    # never on the first yes; belief accumulation is required either way.
+    assert 2 <= yeses <= MIN_YES_FOR_SYNTHESIS
 
     ev = await rnd.answer(Answer.YES)
     assert ev.kind == "synthesized"
@@ -390,9 +392,9 @@ async def test_soft_reset_fires_after_no_streak(topics: list[Topic]) -> None:
     assert rnd.engine == "reasoning"  # stayed in reasoning, did not degrade
 
 
-def test_ask_messages_reset_injects_reset_framing() -> None:
+def test_deliberate_messages_reset_injects_reset_framing() -> None:
     # A reset ask drops the warm "kinda" framing and re-grounds in the yeses.
-    content = ask_messages(
+    content = deliberate_messages(
         "My feelings",
         [("h1", "I feel scared", -2.0)],
         [{"kind": "query", "text": "Are you hungry?", "answer": "yes"}],
