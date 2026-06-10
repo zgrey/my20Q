@@ -25,30 +25,33 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 - **Phase 2 — caregiver cockpit** ✓ FastAPI backend + Preact/Vite web cockpit:
   4-tile layout (conversation · pictogram · live reasoning + emotion sliders ·
   input), persistent topic bar, recording light, session **Review** dashboard,
-  SSE progress channel, JSONL recording/export, and **local piper TTS**
-  (voice readouts of queries/utterances; review auto-play reads each step).
-- **Reasoning controller** ✓ A **confirmation-driven** hypothesis controller
-  (LLM does language, `agent/hypotheses.py` does control). Candidate needs carry
-  **additive points** — a "yes" adds points to the need a question targeted,
-  "kinda" is a softer "warm" signal, a "no" subtracts from that need only (it
-  never promotes the others; scores are not normalized). Each turn it asks the
-  next yes/no question that **drills more specific** along the warm trail
-  (body → leg → foot → big toe), and **synthesizes only after ≥5 "yes"
-  confirmations** — building the utterance from the confirmed trail. It **never
-  terminates early**: it keeps questioning until the gate is met. The cockpit's
-  reasoning tile renders the live points. Mechanism + known risks:
-  `tool-summary.html` (local) and `docs/design/reasoning-retro.md`.
+  SSE progress channel, JSONL recording/export, and **local TTS** (piper or the
+  warmer kokoro — voice readouts of queries/utterances; review auto-play reads
+  each step).
+- **Reasoning controller** ✓ A hypothesis controller (LLM does language,
+  `agent/hypotheses.py` does control). Candidate needs carry **additive points** —
+  "yes" +1 to the need a question targeted, "kinda" +0.5 ("warm"), "no" −1 to that
+  need only (it never promotes the others; scores are not normalized). Each ask is
+  **two-phase for every model** (deliberate → format); it **drills more specific**
+  along the warm trail (body → leg → foot → big toe), proposes the utterance once
+  the belief is ready (a clearly dominant leader, or ≥5 "yes" confirmations),
+  **rephrases** a rejected utterance, and after repeated misses **dumps context and
+  reseeds**. The only model-side terminator is a **"yes" to a proposed utterance** —
+  a round never self-ends on a count or an LLM failure. Every knob is env-tunable.
+  Mechanism + known risks: `tool-summary.html` (local) and
+  `docs/design/reasoning-retro.md`.
 - **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
   graph write path).
 
 ## Terminology
 
 Three-tier scale: **Session** (one open→close) ⊃ **Round** (one convergence
-attempt under a single topic, ending on synthesis / topic change / session end)
-⊃ **Query** (one generated question). **Synthesis fires only after ≥5 "yes"
-confirmations** on the leading need; the round **never terminates early** on its
-own. There is no question budget by default — `MY20Q_MAX_QUERIES` is only an
-optional hard safety ceiling that stops a round without forcing an utterance.
+attempt under a single topic) ⊃ **Query** (one generated question). A round ends
+**only when the caregiver confirms a proposed utterance with "yes"** — it never
+self-ends on a question count or an LLM failure. Out-of-band stops only: an
+emergency topic, a caregiver topic switch, or the optional `MY20Q_MAX_QUERIES`
+safety ceiling. The first synthesis needs ≥5 "yes" confirmations (or a clearly
+dominant leader); each later attempt needs 3 new yeses.
 
 ## Privacy invariant
 
@@ -57,7 +60,7 @@ optional hard safety ceiling that stops a round without forcing an utterance.
 real profile the LLM is local-only (Ollama) and recording is on; with a
 synthetic persona the Anthropic backend is permitted and recording is off. The
 recorded dataset and any cloud backend can never coexist. TTS is **always**
-local (piper) — there is no cloud-voice path.
+local (piper or kokoro) — there is no cloud-voice path.
 
 ## Install
 
@@ -85,6 +88,10 @@ export MY20Q_PIPER_BIN=/path/to/piper[.exe]            # if not on PATH
 export MY20Q_PIPER_MODEL=/path/to/en_US-amy-medium.onnx
 # verify: GET /api/tts/status -> { "available": true }
 ```
+
+For a warmer voice, use **kokoro** instead: `pip install -e ".[kokoro]"`, set
+`MY20Q_TTS_ENGINE=kokoro`, and point `MY20Q_KOKORO_MODEL` / `MY20Q_KOKORO_VOICES`
+at the downloaded model/voices files. See [`KOKORO.md`](KOKORO.md).
 
 ## Run
 
@@ -133,15 +140,26 @@ and CLI):
 | `MY20Q_OLLAMA_TIMEOUT` | `120` | Per-call timeout (s); the runaway guard for uncapped reasoning |
 | `MY20Q_ANTHROPIC_MODEL` | — | Anthropic model (synthetic personas only) |
 | `MY20Q_MAX_QUERIES` | `0` | `0` = unlimited; positive = hard safety ceiling (same as `--max-queries`) |
+| `MY20Q_MIN_YES` | `5` | "yes" answers before the first synthesis |
+| `MY20Q_NEW_YES` | `3` | new yeses before each later synthesis attempt |
+| `MY20Q_REPHRASE_LIMIT` | `3` | rephrases per synthesis attempt |
+| `MY20Q_SYNTH_ATTEMPTS` | `2` | failed synthesis attempts before dump-and-reseed |
+| `MY20Q_EXPLORE_DECAY` | `0.67` | exploration probability = base^(yeses+1) |
+| `MY20Q_SOFT_RESET_NOS` | `10` | consecutive "no"s that trigger a soft reset |
+| `MY20Q_READINESS_MARGIN` | `2.0` | leader lead (points) for early synthesis |
 | `MY20Q_MODE` | training | Dialogue mode |
 | `MY20Q_PROFILE` | — | Patient/persona profile to load |
 | `MY20Q_TOPICS` | bundled | Override the topics data path |
 | `MY20Q_DATA_DIR` | repo-local | Recorded-dataset directory (real patient) |
 | `MY20Q_RECORDING_THRESHOLD_MB` | — | Dataset-size warning threshold |
 | `MY20Q_TTS` | `1` | Set `0` to disable TTS |
+| `MY20Q_TTS_ENGINE` | `piper` | `piper` or `kokoro` (warmer voice) |
 | `MY20Q_PIPER_BIN` | `piper` | piper binary (name on PATH or full path) |
 | `MY20Q_PIPER_MODEL` | — | Voice model `.onnx` path |
 | `MY20Q_PIPER_TIMEOUT` | `20` | piper synthesis timeout (s) |
+| `MY20Q_KOKORO_MODEL` | — | kokoro model `.onnx` (when `engine=kokoro`) |
+| `MY20Q_KOKORO_VOICES` | — | kokoro voices `.bin` path |
+| `MY20Q_KOKORO_VOICE` | `af_heart` | kokoro voice name |
 
 ## Tests
 

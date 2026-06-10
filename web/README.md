@@ -73,7 +73,7 @@ highlighted and auto-scrolls into view, descending one pair at a time:
 
 - **Prev / Next** move the highlight; click any step to jump to it.
 - **▶ Auto-play** steps through on its own.
-- With 🔊 audio + piper available, each step is read aloud as
+- With 🔊 audio available (piper or kokoro), each step is read aloud as
   *question → reasoning → "the patient then indicated &lt;answer&gt;"*;
   auto-play advances only after each readout finishes.
 
