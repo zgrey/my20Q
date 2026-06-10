@@ -1,14 +1,26 @@
 """Round state machine — the my20Q dialogue engine.
 
 A `Session` spans one tool process and spawns `Round`s. A `Round` is one
-convergence attempt under a single topic: it issues queries and ends when
-the caregiver confirms a synthesized utterance (success), the query
-budget is exhausted, or the round is abandoned. Terminology and the round
-lifecycle: docs/design/beta-retool.md §2, §7.
+convergence attempt under a single topic. A round ends ONLY when the caregiver
+confirms a synthesized utterance with "yes" (success) — that is the sole
+model-side terminator. It never stops itself on a question count or an LLM
+failure: it keeps questioning, synthesizing, rephrasing, and (after repeated
+rejected utterances) DUMPING its context and reseeding, indefinitely. The
+caregiver can still end it out-of-band (an emergency topic short-circuit, a topic
+switch, or an operator safety ceiling). Terminology and lifecycle:
+docs/design/beta-retool.md §2, §7.
 
-Reasoning mode (LLM available) — the `Reasoner` proposes each query and
-the synthesis. Fallback mode (LLM unreachable) — a deterministic,
-stateless walk of the topic's fallback question bank.
+The synthesis loop (all thresholds are env-tunable — see `config.ReasoningTuning`):
+question until ``min_yes_for_synthesis`` yeses → propose an utterance → on a
+no/kinda, rephrase up to ``rephrase_limit`` times → if still unconfirmed, return
+to questioning for ``new_yes_for_resynthesis`` NEW yeses and try again → after
+``synth_attempts_before_reseed`` failed attempts, dump context and reseed (half
+the seeds from the session's memorized yeses, half fresh random on-topic).
+
+Reasoning mode (LLM available) — the `Reasoner` proposes each query and the
+synthesis. Fallback mode (LLM briefly unreachable) — a transient, deterministic
+walk of the topic's fallback bank that ONLY asks questions; it never synthesizes
+and never ends the round, and the reasoner is retried every turn.
 
 The engine is async: the FastAPI layer awaits it directly; a CLI wraps
 it in `asyncio.run`. The round history is a flat list, so `undo()` is
@@ -18,6 +30,7 @@ just a truncation — no separate rewind bookkeeping.
 from __future__ import annotations
 
 import logging
+import random
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -25,11 +38,17 @@ from typing import Literal
 
 from my20q.agent import hypotheses as hyp
 from my20q.agent.hypotheses import Hypothesis
-from my20q.agent.reasoner import Reasoner, ReasonerAction, ReasonerError
+from my20q.agent.reasoner import (
+    MAX_HYPOTHESES,
+    Reasoner,
+    ReasonerAction,
+    ReasonerError,
+)
 from my20q.agent.safety import EMERGENCY_SCREEN
-from my20q.config import Config, Mode
+from my20q.config import Config, Mode, ReasoningTuning
 from my20q.llm.base import LLMBackend
-from my20q.profiles import PatientProfile
+from my20q.profiles import PatientProfile, is_real_patient
+from my20q.recording.yes_memory import YesMemory, dated_path
 from my20q.topics import FallbackQuestion, Topic, find_topic
 
 log = logging.getLogger(__name__)
@@ -47,18 +66,24 @@ _AFFIRMED = {Answer.YES.value, Answer.KINDA.value}
 EventKind = Literal["query", "synthesis", "emergency", "synthesized", "abandoned"]
 Engine = Literal["reasoning", "fallback"]
 
-#: Consecutive reasoning failures tolerated before a round gives up on the LLM
-#: for good. A single transient failure (e.g. a model still cold-loading after a
-#: runtime switch) degrades to fallback for *that turn only* and retries the next
-#: turn; only a persistent fault sticks. A success resets the streak.
+#: Consecutive reasoning failures after which the log level escalates. Reasoning is
+#: NEVER permanently abandoned — every turn retries the reasoner, because only the
+#: reasoner can produce the utterance a round needs to end. A failed turn just
+#: degrades to a fallback QUESTION for that turn (see _handle_reason_failure).
 MAX_CONSEC_REASON_FAILURES = 3
-#: An utterance is never synthesized until the caregiver has given at least this
-#: many "yes" answers — positive confirmation that the round is on the right need.
-#: The round NEVER terminates early on its own: it keeps questioning (drilling
-#: more specific on each yes/kinda) until the gate is met, then synthesizes from
-#: the confirmed trail. Only a topic change, session end, or an explicit positive
-#: max_queries safety ceiling can stop it before then.
-MIN_YES_FOR_SYNTHESIS = 5
+
+#: Default behavior knobs — the single source of truth for the tuning defaults. A
+#: `Round` uses the `ReasoningTuning` it is handed (the API/CLI thread the
+#: env-configured one through `Session`); these module aliases are the defaults,
+#: kept for readability and the tests. Override via MY20Q_* env vars (see config).
+_DEFAULT_TUNING = ReasoningTuning()
+MIN_YES_FOR_SYNTHESIS = _DEFAULT_TUNING.min_yes_for_synthesis
+SOFT_RESET_NO_STREAK = _DEFAULT_TUNING.soft_reset_no_streak
+
+#: Used only when the LLM is briefly unavailable AND the topic has no fallback bank
+#: — a single neutral holding question so the round keeps going (it never ends on
+#: a failure; only a "yes" to an utterance ends a round).
+_GENERIC_FALLBACK_Q = "Is it something you need help with right now?"
 
 
 @dataclass
@@ -98,10 +123,14 @@ class Round:
         seed_context: str = "",
         profile_context: str = "",
         emotional_state: dict[str, float] | None = None,
+        tuning: ReasoningTuning | None = None,
+        yes_memory: YesMemory | None = None,
+        round_id: str = "",
+        rng: random.Random | None = None,
     ) -> None:
         self.topic = topic
         self.llm = llm
-        # <= 0 means unlimited — a pure safety ceiling, not a terminator.
+        # <= 0 means unlimited — a pure operator safety ceiling, not a terminator.
         self.max_queries = max_queries
         self.mode = mode
         self.seed_context = seed_context.strip()
@@ -109,6 +138,15 @@ class Round:
         # Caregiver emotional-slider reading; steers question tone (the API
         # keeps it in sync mid-round). See docs/design/beta-retool.md §6.
         self.emotional_state: dict[str, float] = dict(emotional_state or {})
+        # Behavior knobs (env-configurable). Defaults match the module aliases.
+        self.tuning = tuning or ReasoningTuning()
+        # Session-scoped memory of confirmed yeses — survives a context dump and
+        # seeds reseeds. Defaults to an ephemeral in-memory store (tests / no
+        # session); the Session passes a shared, file-backed one for a real patient.
+        self._yes_memory = yes_memory if yes_memory is not None else YesMemory()
+        self.round_id = round_id
+        # Drives the (decaying) exploration coin-flip; injectable for tests.
+        self._rng = rng or random.Random()
         self.engine: Engine = "reasoning" if llm is not None else "fallback"
         #: Why the round dropped from reasoning to fallback mid-round, if it
         #: did — surfaced for diagnostics (e.g. the model bench). Empty unless
@@ -192,9 +230,10 @@ class Round:
         }
         if self._pending_qid is not None:
             entry["qid"] = self._pending_qid
-        # Belief-replay metadata: a query carries the candidates it split (so
-        # undo can recompute weights); a synthesis carries the hypothesis it was
-        # built from (so a rejection eliminates that need).
+        # Belief-replay metadata: a query carries the candidates it targeted (so
+        # undo can recompute scores); a synthesis carries the hypothesis it was
+        # built from (retained for rephrasing and the belief view — a rejected
+        # synthesis no longer eliminates its need, it gets rephrased instead).
         if pending.yes_ids:
             entry["yes_ids"] = list(pending.yes_ids)
         # A query that explored a brand-new need carries its text, so belief
@@ -206,6 +245,10 @@ class Round:
         self._history.append(entry)
         self._pending = None
         self._pending_qid = None
+        # Remember every confirmed-YES query — the durable signal that survives a
+        # context dump and seeds reseeds / new rounds within this session.
+        if pending.kind == "query" and a is Answer.YES:
+            self._record_yes(pending)
 
         if pending.kind == "synthesis" and a is Answer.YES:
             self._outcome = "synthesized"
@@ -302,27 +345,15 @@ class Round:
     # -------------------------------------------------------- internal
 
     async def _advance(self) -> RoundEvent:
-        # Reasoning is gone for good only when there is no reasoner — no LLM was
-        # provided, or we gave up after repeated failures. A *transient* degrade
-        # keeps the reasoner so the next turn retries (see _handle_reason_failure).
+        # No reasoner at all (constructed without an LLM) → permanent fallback
+        # questioning. A mid-round reasoning failure does NOT land here: the
+        # reasoner is kept and retried every turn (see _handle_reason_failure).
         if self._reasoner is None:
             self.engine = "fallback"
             return self._fallback_advance()
 
-        # Synthesis is READINESS-driven (should_synthesize), never forced by a
-        # question count — the "20" was only ever a soft name, not a method. We
-        # keep collecting context through questioning until the belief is actually
-        # ready; it is fine for a round to ask many questions and never synthesize
-        # (the questioning is the point). max_queries is a pure safety ceiling:
-        # <= 0 means unlimited, and when a positive ceiling is hit we simply stop,
-        # we do NOT force a half-baked utterance.
-        if self.max_queries > 0 and self.query_count >= self.max_queries:
-            self._outcome = "abandoned"
-            return RoundEvent(
-                kind="abandoned", query_index=self.query_count, engine=self.engine
-            )
-
         assert self._reasoner is not None
+        T = self.tuning
         try:
             # Seed the candidate-need set once, on the first advance.
             if not self._seed_hypotheses:
@@ -330,54 +361,63 @@ class Round:
                     seed_universal_wants=self.topic.seed_universal_wants,
                     **self._reasoner_ctx(),
                 )
-            active, scores = self._replay_belief()
-            by_id = {h.id: h for h in active}
-            # Positive-evidence gate: synthesize ONLY after the caregiver has given
-            # >= MIN_YES_FOR_SYNTHESIS "yes" answers. Otherwise keep questioning —
-            # the round never terminates early on its own. (Each yes/kinda drives
-            # the next question MORE specific; see prompts.ask_messages.)
-            yes_count = sum(
-                1
-                for e in self._history
-                if e.get("kind") == "query" and e.get("answer") == Answer.YES.value
-            )
 
-            if yes_count >= MIN_YES_FOR_SYNTHESIS:
-                top = hyp.leader(scores)
-                leader_hyp = by_id.get(top[0]) if top else None
-                if leader_hyp is None:
-                    return self._permanent_fallback("no leading hypothesis")
-                action = await self._reasoner.synthesize(
-                    leading_need=leader_hyp.need,
-                    history=self._history,
-                    **self._reasoner_ctx(),
-                )
-                action.hyp_id = leader_hyp.id
+            # Decide the next move from the belief SEGMENT (history since the last
+            # reseed): question, synthesize, rephrase, or dump-and-reseed.
+            seg = self._segment()
+            last = seg[-1] if seg else None
+            synth_runs, tail_run = self._synth_runs(seg)
+
+            if last is not None and last.get("kind") == "synthesis":
+                # Mid synthesis attempt — the last utterance was rejected (a "yes"
+                # would have ended the round). Rephrase up to the per-attempt limit,
+                # then return to questioning, then (after enough failed attempts)
+                # dump everything and reseed.
+                if tail_run <= T.rephrase_limit:
+                    move = "rephrase"
+                elif synth_runs >= T.synth_attempts_before_reseed:
+                    move = "reseed"
+                else:
+                    move = "question"
             else:
-                # Drill. Anchor on warm content: once any need has been confirmed
-                # (yes) or warmed (kinda), focus questions there and get MORE
-                # specific to pin down the exact need, instead of drifting to cold
-                # needs or asking laterally.
-                warm = {
-                    str(x)
-                    for e in self._history
-                    if e.get("kind") == "query" and e.get("answer") in _AFFIRMED
-                    for x in (e.get("yes_ids") or [])
-                }
-                focused, anchored = hyp.anchor_focus(hyp.ranked(active, scores), warm)
-                candidates = [(h.id, h.need, s) for h, s in focused]
-                # 2 of every 3 questions are EXPLORATORY (profile dropped, free to
-                # try a new avenue); every 3rd is context/profile-driven. Keeps the
-                # questioning from collapsing onto profile themes.
-                exploratory = self.query_count % 3 != 2
-                action = await self._reasoner.ask(
-                    candidates=candidates,
-                    topic_id=self.topic.id,
-                    anchored=anchored,
-                    exploratory=exploratory,
-                    history=self._history,
-                    **self._reasoner_ctx(),
+                # Questioning — synthesize once enough yeses have accrued. The first
+                # attempt needs `min_yes`; every later attempt needs `new_yes` NEW
+                # yeses (counted since the last utterance).
+                new_yes = self._yes_since_last_synth(seg)
+                # The first-ever synthesis of the round needs `min_yes`; every later
+                # attempt — after a failed attempt OR a reseed — needs `new_yes`.
+                ever_synthesized = any(
+                    h.get("kind") == "synthesis" for h in self._history
                 )
+                need = (
+                    T.new_yes_for_resynthesis
+                    if ever_synthesized
+                    else T.min_yes_for_synthesis
+                )
+                move = "synthesize" if new_yes >= need else "question"
+
+            if move == "reseed":
+                await self._reseed()  # appends a reseed marker (dumps the context)
+                seg = self._segment()  # now fresh (post-marker)
+                move = "question"
+
+            # Operator safety ceiling — the ONLY count-based stop, off by default
+            # (<= 0). It never forces a half-baked utterance; it just abandons.
+            if (
+                move == "question"
+                and self.max_queries > 0
+                and self.query_count >= self.max_queries
+            ):
+                self._outcome = "abandoned"
+                return RoundEvent(
+                    kind="abandoned", query_index=self.query_count, engine=self.engine
+                )
+
+            action: ReasonerAction | None = None
+            if move in ("synthesize", "rephrase"):
+                action, active, scores = await self._propose_synthesis(seg, move)
+            if action is None:  # questioning — or synthesis had no leader to use
+                action, active, scores = await self._propose_question(seg)
         except ReasonerError as exc:
             return self._handle_reason_failure(str(exc))
 
@@ -388,6 +428,203 @@ class Round:
         self._pending = action
         self._pending_qid = None
         return self._event_for(action, self._belief_view(active, scores))
+
+    async def _propose_synthesis(
+        self, seg: list[dict], move: str
+    ) -> tuple[ReasonerAction | None, list[Hypothesis], dict[str, float]]:
+        """Build an utterance from the leading need (or a rephrase of it).
+
+        Returns ``(action, active, scores)``; ``action`` is None when there is no
+        leading hypothesis to synthesize — the caller then keeps questioning rather
+        than ending the round (only a confirmed utterance ends a round).
+        """
+        assert self._reasoner is not None
+        active, scores = self._replay_belief()
+        by_id = {h.id: h for h in active}
+        top = hyp.leader(scores)
+        leader_hyp = by_id.get(top[0]) if top else None
+        if leader_hyp is None:
+            return None, active, scores
+        rejected: list[tuple[str, str]] | None = None
+        if move == "rephrase":
+            # The rejected utterances of THIS attempt (the trailing synthesis run)
+            # so the model phrases it differently — kinda = close, no = wrong angle.
+            rejected = []
+            for h in reversed(seg):
+                if h.get("kind") == "synthesis":
+                    rejected.append((h.get("text", ""), h.get("answer", "")))
+                else:
+                    break
+            rejected.reverse()
+        action = await self._reasoner.synthesize(
+            leading_need=leader_hyp.need,
+            history=self._history,
+            rejected=rejected,
+            **self._reasoner_ctx(),
+        )
+        action.hyp_id = leader_hyp.id
+        return action, active, scores
+
+    async def _propose_question(
+        self, seg: list[dict]
+    ) -> tuple[ReasonerAction, list[Hypothesis], dict[str, float]]:
+        """Ask the next drilling question, with soft-reset + exploratory cadence."""
+        assert self._reasoner is not None
+        T = self.tuning
+        # Soft reset: a long run of "no" means the warm avenue is WRONG — dump the
+        # "kinda" rewards, keep only the YES confirmations, force fresh exploration.
+        soft_reset = self._consec_no_streak() > T.soft_reset_no_streak
+        active, scores = self._replay_belief(drop_kinda=soft_reset)
+        # Anchor on warm content (yes/kinda); a soft reset narrows "warm" to
+        # YES-only so the dumped kinda needs release the anchor and the field
+        # re-opens. Warm is taken over the current segment (after any reseed).
+        affirmed = {Answer.YES.value} if soft_reset else _AFFIRMED
+        warm = {
+            str(x)
+            for e in seg
+            if e.get("kind") == "query" and e.get("answer") in affirmed
+            for x in (e.get("yes_ids") or [])
+        }
+        focused, anchored = hyp.anchor_focus(hyp.ranked(active, scores), warm)
+        candidates = [(h.id, h.need, s) for h, s in focused]
+        # Exploration DECAYS as yeses accrue toward synthesis — explore with
+        # probability explore_decay**(yeses+1): high early, low as we home in. The
+        # yes-count resets after each synthesis attempt and after a reseed (it is
+        # counted within the segment), so a reset re-opens exploration. A soft reset
+        # forces it.
+        yeses = self._yes_since_last_synth(seg)
+        exploratory = soft_reset or self._rng.random() < self._explore_probability(yeses)
+        action = await self._reasoner.ask(
+            candidates=candidates,
+            topic_id=self.topic.id,
+            anchored=anchored,
+            exploratory=exploratory,
+            reset=soft_reset,
+            history=self._history,
+            **self._reasoner_ctx(),
+        )
+        return action, active, scores
+
+    def _explore_probability(self, yeses: int) -> float:
+        """Probability the next question is exploratory: ``explore_decay**(yeses+1)``.
+
+        High when few yeses have accrued toward synthesis, decaying as the round
+        homes in. ``yeses`` is counted since the last synthesis in the current
+        segment, so it resets after each synthesis attempt and after a reseed —
+        re-opening exploration each time (see config.ReasoningTuning.explore_decay).
+        """
+        return self.tuning.explore_decay ** (yeses + 1)
+
+    # ---- belief-segment helpers (the synthesis state machine reads these) ----
+
+    def _segment(self) -> list[dict]:
+        """History since the last reseed — the live belief segment.
+
+        A reseed DUMPS context, so the synthesis state machine (yes counts, attempt
+        runs) reasons only over entries after the most recent reseed marker.
+        """
+        start = 0
+        for i, h in enumerate(self._history):
+            if h.get("kind") == "reseed":
+                start = i + 1
+        return self._history[start:]
+
+    @staticmethod
+    def _synth_runs(seg: list[dict]) -> tuple[int, int]:
+        """``(number of synthesis attempts, length of the trailing one)``.
+
+        An "attempt" is a maximal run of consecutive synthesis entries (the initial
+        utterance plus its rephrases). ``tail_run`` is 0 unless the segment ends in
+        a synthesis run.
+        """
+        runs = 0
+        prev = None
+        for h in seg:
+            kind = h.get("kind")
+            if kind == "synthesis" and prev != "synthesis":
+                runs += 1
+            prev = kind
+        tail = 0
+        for h in reversed(seg):
+            if h.get("kind") == "synthesis":
+                tail += 1
+            else:
+                break
+        return runs, tail
+
+    @staticmethod
+    def _yes_since_last_synth(seg: list[dict]) -> int:
+        """Count query "yes" answers after the last synthesis entry in the segment."""
+        n = 0
+        for h in reversed(seg):
+            if h.get("kind") == "synthesis":
+                break
+            if h.get("kind") == "query" and h.get("answer") == Answer.YES.value:
+                n += 1
+        return n
+
+    def _record_yes(self, pending: ReasonerAction) -> None:
+        """Add a confirmed-yes query to the session's yes-memory."""
+        active, _ = self._replay_belief()
+        by_id = {h.id: h.need for h in active}
+        needs = [by_id[i] for i in pending.yes_ids if i in by_id]
+        if pending.new_need and not needs:
+            needs = [pending.new_need]
+        self._yes_memory.add(
+            question=pending.content,
+            needs=needs,
+            topic_id=self.topic.id,
+            round_id=self.round_id,
+        )
+
+    async def _reseed(self) -> None:
+        """Dump the round's accumulated belief and reseed with fresh candidates.
+
+        Half the new seeds come from the session's memorized YES needs (so hard-won
+        confirmations are not lost), half from a fresh, profile-free (deliberately
+        random) on-topic seed call. Recorded as a ``reseed`` marker carrying the new
+        seeds, so the belief stays reconstructible and undo still works. A no-op if
+        no seeds can be assembled (keeps the prior belief rather than emptying it).
+        """
+        assert self._reasoner is not None
+        memorized = self._yes_memory.needs()
+        random_needs: list[str] = []
+        try:
+            ctx = self._reasoner_ctx()
+            ctx["profile_context"] = ""  # drop the profile → deliberately broad
+            fresh = await self._reasoner.seed_hypotheses(
+                seed_universal_wants=self.topic.seed_universal_wants, **ctx
+            )
+            random_needs = [h.need for h in fresh]
+        except ReasonerError:
+            random_needs = []
+
+        cap = MAX_HYPOTHESES
+        half = max(1, cap // 2)
+        chosen: list[str] = []
+        seen: set[str] = set()
+
+        def _take(src: list[str], limit: int) -> None:
+            for need in src:
+                if len(chosen) >= limit:
+                    break
+                key = need.casefold()
+                if need and key not in seen:
+                    seen.add(key)
+                    chosen.append(need)
+
+        _take(memorized, half)  # up to half from the memorized yeses
+        _take(random_needs, cap)  # fill the rest with fresh random on-topic needs
+        _take(memorized, cap)  # backfill from memory if the fresh call came up short
+        if not chosen:
+            return  # nothing to seed with — keep the existing belief, keep going
+        seeds = [{"id": f"s{i + 1}", "need": need} for i, need in enumerate(chosen)]
+        self._history.append({"kind": "reseed", "seeds": seeds})
+        log.info(
+            "round reseeded: dumped context → %d seeds (%d from memory)",
+            len(seeds),
+            sum(1 for s in seeds if s["need"] in set(memorized)),
+        )
 
     def _reasoner_ctx(self) -> dict:
         """Shared keyword context passed to every reasoner call."""
@@ -400,7 +637,35 @@ class Round:
             "on_phase": self.on_phase,
         }
 
-    def _replay_belief(self) -> tuple[list[Hypothesis], dict[str, float]]:
+    def _consec_no_streak(self) -> int:
+        """Consecutive 'no'-answered queries at the tail of the history.
+
+        Counts back from the latest entry over queries answered "no"; a "yes" or
+        "kinda" (real positive signal) ends the run, while "not sure" (no
+        information) and caregiver-context entries are transparent. A reseed or a
+        synthesis attempt is a hard boundary (the run does not span them). Drives
+        the soft reset (see soft_reset_no_streak): a long run means the warm anchor
+        is wrong and the round should re-open.
+        """
+        streak = 0
+        for h in reversed(self._history):
+            kind = h.get("kind")
+            if kind in ("reseed", "synthesis"):
+                break  # a reseed or synthesis attempt ends the run of "no"s
+            if kind != "query":
+                continue  # caregiver context etc. is transparent
+            answer = h.get("answer")
+            if answer == Answer.NO.value:
+                streak += 1
+            elif answer == Answer.NOT_SURE.value:
+                continue  # no information — neither extends nor breaks the run
+            else:
+                break  # yes / kinda — a real positive signal ends the run
+        return streak
+
+    def _replay_belief(
+        self, *, drop_kinda: bool = False
+    ) -> tuple[list[Hypothesis], dict[str, float]]:
         """Rebuild the active hypothesis set and its additive scores from history.
 
         Walks events in order so undo is just pop-and-recompute:
@@ -409,15 +674,24 @@ class Round:
           high-trust points to them;
         - a query adds points to the needs it targeted (yes/kinda positive, no
           subtracts from those needs only — never promotes the others);
-        - a *rejected* synthesis eliminates the need it proposed (so the same
-          guess can't be re-led).
+        - a [reseed] entry DUMPS everything so far and restarts the belief from the
+          fresh seeds it carries;
+        - a synthesis entry does NOT change the belief — a rejected utterance is
+          rephrased, not eliminated, so its need survives to be tried again.
+
+        ``drop_kinda`` (a soft reset) withholds the "kinda" rewards: the warm
+        candidates stay in play but earn no points, so a lukewarm-but-wrong guess
+        no longer holds the lead.
         """
         active = list(self._seed_hypotheses)
         scores = hyp.seed_scores(active)
-        eliminated: set[str] = set()
         for h in self._history:
             kind = h["kind"]
-            if kind == "context":
+            if kind == "reseed":
+                # Dump all accumulated context; restart from the carried seeds.
+                active = [Hypothesis(s["id"], s["need"]) for s in (h.get("seeds") or [])]
+                scores = hyp.seed_scores(active)
+            elif kind == "context":
                 added = h.get("added") or []
                 boost = h.get("boost") or []
                 if added or boost:
@@ -437,14 +711,13 @@ class Round:
                         if nid and all(hh.id != nid for hh in active):
                             active = active + [Hypothesis(nid, new_need)]
                             scores[nid] = 0.0
+                    # Soft reset dumps the warm "kinda" rewards: the candidate
+                    # stays in play (spawned above, at its current score) but the
+                    # +0.5 is withheld, so a lukewarm-but-wrong guess no longer
+                    # holds the lead or the anchor.
+                    if drop_kinda and answer == Answer.KINDA.value:
+                        continue
                     scores = hyp.update_score(scores, yes, answer)
-            elif kind == "synthesis":
-                answer = h.get("answer")
-                if answer and answer != Answer.YES.value and h.get("hyp_id"):
-                    eliminated.add(h["hyp_id"])
-        if eliminated:
-            active = [h for h in active if h.id not in eliminated]
-            scores = {k: v for k, v in scores.items() if k not in eliminated}
         return active, scores
 
     def _belief_view(
@@ -466,72 +739,55 @@ class Round:
         return self._event_for(self._pending)
 
     def _handle_reason_failure(self, reason: str) -> RoundEvent:
-        """A reasoning call failed — fall back, transiently or for good.
+        """A reasoning call failed THIS turn — degrade to a fallback QUESTION.
 
-        Falls back for *this turn only* (keeping the reasoner so the next turn
-        retries) until failures pile up to ``MAX_CONSEC_REASON_FAILURES``, then
-        gives up on reasoning for the rest of the round. A transient blip — e.g.
-        a model still cold-loading after a runtime switch, or a one-off timeout —
-        should not permanently kill the round; only a persistent fault should.
+        Reasoning is never permanently abandoned: the reasoner is kept and retried
+        every turn, because only it can produce the utterance a round needs to end.
+        A failure never ends a round and never forces a synthesis — it just asks a
+        deterministic holding question this turn while the model recovers.
         """
         self._consec_failures += 1
         self.degrade_reason = reason
-        if self._consec_failures >= MAX_CONSEC_REASON_FAILURES:
-            log.warning(
-                "reasoner failed %d× (%s) — fallback for the rest of the round",
-                self._consec_failures,
-                reason,
-            )
-            return self._permanent_fallback(reason)
-        log.warning(
-            "reasoner failed (%s) — fallback this turn, will retry next turn (%d/%d)",
+        level = (
+            log.error
+            if self._consec_failures >= MAX_CONSEC_REASON_FAILURES
+            else log.warning
+        )
+        level(
+            "reasoner failed (%s) — fallback question this turn, will retry (×%d)",
             reason,
             self._consec_failures,
-            MAX_CONSEC_REASON_FAILURES,
         )
         self.engine = "fallback"
         return self._fallback_advance()
 
-    def _permanent_fallback(self, reason: str = "") -> RoundEvent:
-        """Give up on reasoning for the rest of the round (deterministic bank).
-
-        Drops the reasoner, which is what ``_advance`` checks to stay in
-        fallback for every remaining turn.
-        """
-        self.engine = "fallback"
-        self.degrade_reason = reason
-        self._reasoner = None
-        self._pending = None
-        self._pending_qid = None
-        return self._fallback_advance()
-
     def _fallback_advance(self) -> RoundEvent:
-        """Deterministic, stateless walk of the topic's fallback bank.
+        """Degraded QUESTIONING only — a transient stand-in for a failed turn.
 
-        Position is derived from history each call, so undo just works.
+        It ONLY asks questions: it never synthesizes and never ends the round (only
+        a "yes" to an utterance ends a round, and only the reasoner produces
+        utterances). It walks the topic's fallback bank, LOOPING when the bank is
+        exhausted so questioning continues until reasoning recovers. Position is
+        derived from history, so undo just works.
         """
+        # Operator safety ceiling only (off by default) — never a model decision.
+        if self.max_queries > 0 and self.query_count >= self.max_queries:
+            self._outcome = "abandoned"
+            return RoundEvent(
+                kind="abandoned", query_index=self.query_count, engine=self.engine
+            )
+
         bank = self.topic.fallback_questions
-        last = self._history[-1] if self._history else None
+        if not bank:  # topic has no bank — a single neutral holding question
+            action = ReasonerAction(
+                kind="query",
+                content=_GENERIC_FALLBACK_Q,
+                rationale="Fallback: reasoning is briefly unavailable.",
+            )
+            self._pending = action
+            self._pending_qid = None
+            return self._event_for(action)
 
-        # A just-affirmed fallback query → synthesize from its label.
-        if (
-            last is not None
-            and last["kind"] == "query"
-            and last.get("qid")
-            and last["answer"] in _AFFIRMED
-        ):
-            fq = self._find_fq(last["qid"])
-            if fq is not None:
-                action = ReasonerAction(
-                    kind="synthesis",
-                    content=fq.label,
-                    rationale="Fallback mode: confirming the matched need.",
-                )
-                self._pending = action
-                self._pending_qid = None
-                return self._event_for(action)
-
-        # Otherwise advance to the next un-consumed bank question.
         answers: dict[str, str] = {}
         for h in self._history:
             if h["kind"] == "query" and h.get("qid"):
@@ -542,14 +798,10 @@ class Round:
         nxt: FallbackQuestion | None = next(
             (q for q in bank if q.id not in consumed and q.id not in deferred), None
         )
-        if nxt is None:  # retry the deferred (not_sure) questions, in file order
+        if nxt is None:  # then retry the deferred (not_sure) questions, in order
             nxt = next((q for q in bank if q.id in deferred), None)
-
-        if nxt is None or (self.max_queries > 0 and self.query_count >= self.max_queries):
-            self._outcome = "abandoned"
-            return RoundEvent(
-                kind="abandoned", query_index=self.query_count, engine=self.engine
-            )
+        if nxt is None:  # all consumed — LOOP the bank rather than end the round
+            nxt = bank[0]
 
         action = ReasonerAction(
             kind="query",
@@ -559,9 +811,6 @@ class Round:
         self._pending = action
         self._pending_qid = nxt.id
         return self._event_for(action)
-
-    def _find_fq(self, qid: str) -> FallbackQuestion | None:
-        return next((q for q in self.topic.fallback_questions if q.id == qid), None)
 
     def _event_for(
         self, action: ReasonerAction, belief: list[dict] | None = None
@@ -595,6 +844,15 @@ class Session:
         self.profile = profile
         self.rounds: list[Round] = []
         self.emotional_state: dict[str, float] = {}
+        # One yes-memory per session, shared by every round it spawns (so a reseed
+        # or a later round can draw on every confirmed-yes so far). File-backed for
+        # a real patient (the privacy invariant); in-memory only otherwise.
+        self.yes_memory = self._build_yes_memory()
+
+    def _build_yes_memory(self) -> YesMemory:
+        if self.config and self.profile and is_real_patient(self.profile):
+            return YesMemory(path=dated_path(self.config.recording_dir, self.profile.id))
+        return YesMemory()
 
     def start_round(self, topic_id: str, *, seed_context: str = "") -> Round:
         topic = find_topic(self.topics, topic_id)
@@ -608,6 +866,9 @@ class Session:
             seed_context=seed_context,
             profile_context=(self.profile.context or "") if self.profile else "",
             emotional_state=self.emotional_state,
+            tuning=self.config.reasoning if self.config else None,
+            yes_memory=self.yes_memory,
+            round_id=f"r{len(self.rounds) + 1}",
         )
         self.rounds.append(round_)
         return round_

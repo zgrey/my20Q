@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from my20q.config import Config
+from my20q.config import Config, ReasoningTuning
 from my20q.llm import MockBackend
 
 pytest.importorskip("fastapi")
@@ -67,7 +67,9 @@ def test_health_and_topics() -> None:
     assert len(topics) == 5
 
 
-def test_fallback_round_to_synthesis() -> None:
+def test_fallback_round_only_questions() -> None:
+    # Fallback mode only asks questions now — it never synthesizes or ends a round
+    # (only a "yes" to a reasoner utterance ends one). A "yes" just advances.
     client = _fallback_client()
     sid = client.post("/api/sessions").json()["session_id"]
     state = client.post(
@@ -77,16 +79,12 @@ def test_fallback_round_to_synthesis() -> None:
     assert state["event"]["kind"] == "query"
     assert state["engine"] == "fallback"
 
-    state = client.post(
-        f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"}
-    ).json()
-    assert state["event"]["kind"] == "synthesis"
-    state = client.post(
-        f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"}
-    ).json()
-    assert state["event"]["kind"] == "synthesized"
-    assert state["outcome"] == "synthesized"
-    assert state["final_utterance"]
+    for _ in range(3):
+        state = client.post(
+            f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"}
+        ).json()
+        assert state["event"]["kind"] == "query"  # never a synthesis / end
+        assert state["outcome"] is None
 
 
 def test_emergency_topic_short_circuits() -> None:
@@ -233,14 +231,31 @@ def test_emotion_endpoint_accepts_a_reading() -> None:
     assert resp.json()["ok"] is True
 
 
+def _reasoning_client(**cfg_overrides) -> TestClient:
+    """A client whose injected reasoning backend reaches a confirmed utterance
+    after a single yes (min_yes gate lowered for short tests)."""
+    backend = _controller_backend(
+        seed=["I am thirsty", "My foot hurts", "I feel cold", "I want to rest"],
+        question="Is it about a drink?",
+        yes_ids=["h1"],
+        utterance="I would like a glass of water.",
+    )
+    cfg = replace(
+        Config.from_env(),
+        reasoning=ReasoningTuning(min_yes_for_synthesis=1),
+        **cfg_overrides,
+    )
+    return TestClient(create_app(cfg, backend=backend))
+
+
 def test_export_session_jsonl_mirrors_recording_format() -> None:
-    client = _fallback_client()
+    client = _reasoning_client()
     sid = client.post("/api/sessions").json()["session_id"]
     rid = client.post(
         f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
     ).json()["round_id"]
-    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
-    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})  # synth
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})  # confirm
 
     # default format is JSONL — one round per line, recording record schema
     resp = client.get(f"/api/sessions/{sid}/export")
@@ -277,21 +292,18 @@ def test_recordings_empty_without_real_profile() -> None:
 def test_recordings_list_and_read_for_real_profile(tmp_path) -> None:
     profile = tmp_path / "real.yaml"
     profile.write_text("id: test_patient\ndisplay_name: T\n", encoding="utf-8")
-    cfg = replace(
-        Config.from_env(),
-        llm_enabled=False,
-        profile_path=profile,
-        recording_dir=tmp_path / "data",
-    )
-    client = TestClient(create_app(cfg, backend=None))
+    # Real patient -> recorder active. A reasoning backend reaches a confirmed
+    # (recordable) round; the yes-memory file lives under memory/ so it does not
+    # masquerade as a session recording.
+    client = _reasoning_client(profile_path=profile, recording_dir=tmp_path / "data")
 
     # record a round so there is a session file to review
     sid = client.post("/api/sessions").json()["session_id"]
     rid = client.post(
         f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
     ).json()["round_id"]
-    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
-    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})  # synth
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})  # confirm
 
     listing = client.get("/api/recordings").json()
     assert len(listing) == 1

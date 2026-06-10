@@ -5,8 +5,30 @@ from __future__ import annotations
 import json
 
 from my20q.agent.dialogue import Answer, Round
+from my20q.config import ReasoningTuning
+from my20q.llm import MockBackend
 from my20q.recording import Recorder, job_b_score, transcript
 from my20q.topics import Topic, find_topic
+
+
+def _reasoning_backend() -> MockBackend:
+    """A MockBackend that seeds, asks one drill question, then synthesizes."""
+
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "candidate NEEDS to test" in system:
+            return json.dumps(
+                {"hypotheses": ["I am thirsty", "My foot hurts", "I feel cold",
+                                "I want to rest"]}
+            )
+        if "pin down the ONE specific" in system:
+            return json.dumps(
+                {"question": "Is it about a drink?", "yes_ids": ["h1"],
+                 "preface": "", "rationale": "x"}
+            )
+        return json.dumps({"utterance": "I would like a glass of water."})
+
+    return MockBackend(responder=responder)
 
 
 def test_job_b_rewards_a_confirmed_round() -> None:
@@ -26,10 +48,17 @@ def test_job_b_penalizes_an_abandoned_round() -> None:
 async def test_recorder_writes_a_round(tmp_path, topics: list[Topic]) -> None:
     topic = find_topic(topics, "physical_health")
     assert topic is not None
-    rnd = Round(topic, llm=None)
+    # Only a reasoning round can reach a confirmed utterance; a low yes-gate keeps
+    # the test short. (Fallback never synthesizes — see test_dialogue.)
+    rnd = Round(
+        topic,
+        llm=_reasoning_backend(),
+        tuning=ReasoningTuning(min_yes_for_synthesis=1),
+    )
     await rnd.open()
-    await rnd.answer(Answer.YES)  # fallback query -> synthesis
-    await rnd.answer(Answer.YES)  # confirm -> synthesized
+    await rnd.answer(Answer.YES)  # 1 yes clears the gate -> synthesis
+    await rnd.answer(Answer.YES)  # confirm the utterance -> synthesized
+    assert rnd.outcome == "synthesized"
 
     recorder = Recorder(tmp_path, "patient_x")
     recorder.record_round(

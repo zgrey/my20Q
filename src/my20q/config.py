@@ -13,6 +13,57 @@ TTSEngineChoice = Literal["piper", "kokoro"]
 
 
 @dataclass(frozen=True)
+class ReasoningTuning:
+    """Tunable knobs for the round state machine — all env-overridable.
+
+    These shape *behavior* (how long to question, when to synthesize, when to
+    rephrase vs. reseed, how often to explore) WITHOUT code edits — the serve
+    script can export the ``MY20Q_*`` vars below. ``agent/dialogue.py`` reads
+    these off the active ``Round.tuning``.
+    """
+
+    #: "Yes" answers required before the FIRST synthesis attempt of a round.
+    min_yes_for_synthesis: int = 5
+    #: NEW "yes" answers required before each *subsequent* synthesis attempt
+    #: (after a prior attempt's rephrases were all rejected).
+    new_yes_for_resynthesis: int = 3
+    #: Rephrased utterances offered after the initial proposal within one synthesis
+    #: attempt (so an attempt shows up to ``1 + rephrase_limit`` utterances).
+    rephrase_limit: int = 3
+    #: Failed synthesis attempts (each = initial + rephrases, all rejected)
+    #: tolerated before the round DUMPS its context and reseeds.
+    synth_attempts_before_reseed: int = 2
+    #: Exploration DECAYS as yeses accrue toward synthesis. The next question is
+    #: exploratory (profile dropped, free to open a brand-new on-topic avenue) with
+    #: probability ``explore_decay ** (yeses + 1)`` — high early, low as the round
+    #: homes in. The yes-count resets after each synthesis attempt and after a
+    #: reseed, so exploration re-opens. Base in [0, 1]; 2/3 ≈ 0.67 initially.
+    explore_decay: float = 2 / 3
+    #: MORE than this many CONSECUTIVE "no" answers triggers a soft reset (dump the
+    #: "kinda" warmth, re-open around the yeses). See ``Round._consec_no_streak``.
+    soft_reset_no_streak: int = 10
+
+    @classmethod
+    def from_env(cls) -> ReasoningTuning:
+        def _int(name: str, default: int, *, minimum: int) -> int:
+            raw = os.environ.get(name, "").strip()
+            return max(minimum, int(raw)) if raw else default
+
+        def _float(name: str, default: float, *, lo: float, hi: float) -> float:
+            raw = os.environ.get(name, "").strip()
+            return min(hi, max(lo, float(raw))) if raw else default
+
+        return cls(
+            min_yes_for_synthesis=_int("MY20Q_MIN_YES", 5, minimum=1),
+            new_yes_for_resynthesis=_int("MY20Q_NEW_YES", 3, minimum=1),
+            rephrase_limit=_int("MY20Q_REPHRASE_LIMIT", 3, minimum=0),
+            synth_attempts_before_reseed=_int("MY20Q_SYNTH_ATTEMPTS", 2, minimum=1),
+            explore_decay=_float("MY20Q_EXPLORE_DECAY", 2 / 3, lo=0.0, hi=1.0),
+            soft_reset_no_streak=_int("MY20Q_SOFT_RESET_NOS", 10, minimum=1),
+        )
+
+
+@dataclass(frozen=True)
 class Config:
     """Process-wide settings. See `from_env` for the environment variables.
 
@@ -50,6 +101,8 @@ class Config:
     kokoro_voice: str
     kokoro_speed: float
     kokoro_lang: str
+    # Round state-machine behavior knobs (env-overridable; see ReasoningTuning).
+    reasoning: ReasoningTuning
 
     @classmethod
     def from_env(cls) -> Config:
@@ -108,4 +161,5 @@ class Config:
             kokoro_voice=os.environ.get("MY20Q_KOKORO_VOICE", "af_heart"),
             kokoro_speed=float(os.environ.get("MY20Q_KOKORO_SPEED", "1.0")),
             kokoro_lang=os.environ.get("MY20Q_KOKORO_LANG", "en-us"),
+            reasoning=ReasoningTuning.from_env(),
         )

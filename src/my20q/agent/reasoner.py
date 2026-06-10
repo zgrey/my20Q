@@ -197,6 +197,7 @@ class Reasoner:
         emotional_state: dict | None = None,
         anchored: bool = False,
         exploratory: bool = False,
+        reset: bool = False,
         on_phase: Callable[[str], None] | None = None,
     ) -> ReasonerAction:
         """Propose the next yes/no question, drilling toward the exact need.
@@ -207,7 +208,10 @@ class Reasoner:
         audited for format, **redundancy** (not a reworded repeat), and
         **on-topic** fit before it is accepted. ``exploratory`` turns drop the
         patient profile so the model explores freely (2 of every 3 turns); the
-        rest may use the profile. Thinking models take the two-phase path.
+        rest may use the profile. ``reset`` (a soft reset after a long run of
+        "no") dumps the warm "kinda" framing and re-grounds the question in the
+        YES confirmations or a brand-new avenue. Thinking models take the
+        two-phase path.
         """
         live_ids = {hid for hid, _, _ in candidates}
         corrections: list[str] = []
@@ -222,6 +226,15 @@ class Reasoner:
             for h in history
             if h.get("kind") == "query"
             and h.get("answer") == "kinda"
+            and h.get("text")
+        ]
+        # On a soft reset, re-ground the fresh question in what was actually
+        # confirmed ("yes"); the warm "kinda" trail is dumped, not echoed.
+        yes_texts = [
+            h["text"]
+            for h in history
+            if h.get("kind") == "query"
+            and h.get("answer") == "yes"
             and h.get("text")
         ]
         # Exploratory turns ignore the profile so the model is free to explore new
@@ -245,7 +258,9 @@ class Reasoner:
                     corrections=corrections,
                     anchored=anchored,
                     exploratory=exploratory,
+                    reset=reset,
                     kinda_texts=kinda_texts,
+                    yes_texts=yes_texts,
                 )
                 try:
                     draft = await self.llm.chat(
@@ -293,7 +308,9 @@ class Reasoner:
                     corrections=corrections,
                     anchored=anchored,
                     exploratory=exploratory,
+                    reset=reset,
                     kinda_texts=kinda_texts,
+                    yes_texts=yes_texts,
                 )
                 data = await self._chat_json(messages, max_tokens=ASK_MAX_TOKENS)
             question = data.get("question", "")
@@ -428,19 +445,26 @@ class Reasoner:
         topic_label: str,
         leading_need: str,
         history: list[dict],
+        rejected: list[tuple[str, str]] | None = None,
         seed_context: str = "",
         profile_context: str = "",
         topic_hint: str = "",
         emotional_state: dict | None = None,
         on_phase: Callable[[str], None] | None = None,
     ) -> ReasonerAction:
-        """Phrase the leading need as a confirmable first-person utterance."""
+        """Phrase the leading need as a confirmable first-person utterance.
+
+        ``rejected`` is ``(utterance, answer)`` for utterances the caregiver did
+        NOT confirm this attempt — the model must phrase it DIFFERENTLY (a "kinda"
+        means close, refine the wording; a "no" means try a different angle).
+        """
         if on_phase is not None:
             on_phase("thinking")
         messages = prompts.synthesize_messages(
             topic_label,
             leading_need,
             history,
+            rejected=rejected,
             seed_context=seed_context,
             profile_context=profile_context,
             topic_hint=topic_hint,
@@ -453,11 +477,12 @@ class Reasoner:
             cleaned = sanitize_utterance(leading_need)
         if not cleaned:
             raise ReasonerError(f"synthesize: unusable utterance {data!r}")
-        return ReasonerAction(
-            kind="synthesis",
-            content=cleaned,
-            rationale="Proposed from the leading candidate need.",
+        rationale = (
+            "Rephrased — a prior utterance was not confirmed."
+            if rejected
+            else "Proposed from the leading candidate need."
         )
+        return ReasonerAction(kind="synthesis", content=cleaned, rationale=rationale)
 
     def _ask_action(
         self,

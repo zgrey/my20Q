@@ -32,10 +32,27 @@ export MY20Q_KOKORO_MODEL="${MY20Q_KOKORO_MODEL:-}"
 export MY20Q_KOKORO_VOICES="${MY20Q_KOKORO_VOICES:-}"
 export MY20Q_KOKORO_VOICE="${MY20Q_KOKORO_VOICE:-}"
 
-# Per-LLM-call timeout. Augmented (hierarchical-zoom) reasoning makes several
-# deliberate/critique passes per question and a thinking model is slow, so the
-# 30s default is too tight — give it room before degrading to fallback.
+# Per-LLM-call timeout. A thinking model takes a two-phase deliberate→format pass
+# per question and is slow, so the 30s default is too tight — give it room before
+# degrading to fallback (which now only asks questions; it never ends the round).
 export MY20Q_OLLAMA_TIMEOUT="${MY20Q_OLLAMA_TIMEOUT:-120}"
+
+# Reasoning behavior knobs (see config.ReasoningTuning). Empty = code default.
+# Tune the questioning/synthesis loop here without touching code:
+#   MIN_YES         yeses before the FIRST synthesis attempt        (default 5)
+#   NEW_YES         NEW yeses before each later attempt             (default 3)
+#   REPHRASE_LIMIT  rephrases per attempt after the first utterance (default 3)
+#   SYNTH_ATTEMPTS  failed attempts before dump-and-reseed          (default 2)
+#   EXPLORE_DECAY   explore prob = base^(yeses+1), base in [0,1]    (default 0.67)
+#                   (high exploration early, decaying as yeses approach synthesis)
+#   SOFT_RESET_NOS  consecutive "no"s that trigger a soft reset     (default 10)
+# A round NEVER ends on its own now — only a "yes" to a proposed utterance ends it.
+export MY20Q_MIN_YES="${MY20Q_MIN_YES:-}"
+export MY20Q_NEW_YES="${MY20Q_NEW_YES:-}"
+export MY20Q_REPHRASE_LIMIT="${MY20Q_REPHRASE_LIMIT:-}"
+export MY20Q_SYNTH_ATTEMPTS="${MY20Q_SYNTH_ATTEMPTS:-}"
+export MY20Q_EXPLORE_DECAY="${MY20Q_EXPLORE_DECAY:-}"
+export MY20Q_SOFT_RESET_NOS="${MY20Q_SOFT_RESET_NOS:-}"
 
 # Patient profile. Honor an explicit MY20Q_PROFILE if exported; otherwise fall
 # back to the standard real-patient location when that file is present. A real
@@ -72,7 +89,7 @@ start() {
     echo "Already running in tmux '$SESSION'.  logs: $0 logs   stop: $0 stop"
   else
     tmux new-session -d -s "$SESSION" -c "$REPO" \
-      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_TTS_ENGINE='${MY20Q_TTS_ENGINE:-}' MY20Q_KOKORO_MODEL='${MY20Q_KOKORO_MODEL:-}' MY20Q_KOKORO_VOICES='${MY20Q_KOKORO_VOICES:-}' MY20Q_KOKORO_VOICE='${MY20Q_KOKORO_VOICE:-}' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
+      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_TTS_ENGINE='${MY20Q_TTS_ENGINE:-}' MY20Q_KOKORO_MODEL='${MY20Q_KOKORO_MODEL:-}' MY20Q_KOKORO_VOICES='${MY20Q_KOKORO_VOICES:-}' MY20Q_KOKORO_VOICE='${MY20Q_KOKORO_VOICE:-}' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_MIN_YES='${MY20Q_MIN_YES:-}' MY20Q_NEW_YES='${MY20Q_NEW_YES:-}' MY20Q_REPHRASE_LIMIT='${MY20Q_REPHRASE_LIMIT:-}' MY20Q_SYNTH_ATTEMPTS='${MY20Q_SYNTH_ATTEMPTS:-}' MY20Q_EXPLORE_DECAY='${MY20Q_EXPLORE_DECAY:-}' MY20Q_SOFT_RESET_NOS='${MY20Q_SOFT_RESET_NOS:-}' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
     echo "API started in tmux '$SESSION' (127.0.0.1:$PORT)"
     if [ -n "${MY20Q_PROFILE:-}" ]; then
       echo "Profile:  $MY20Q_PROFILE  (real-patient => local LLM + recording on)"

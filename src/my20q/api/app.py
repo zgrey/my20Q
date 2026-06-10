@@ -257,11 +257,12 @@ def _register_routes(app: FastAPI) -> None:
             history=[
                 schemas.HistoryEntryOut(
                     kind=e["kind"],
-                    text=e["text"],
+                    text=e.get("text", ""),
                     answer=e.get("answer"),
                     rationale=e.get("rationale", ""),
                 )
                 for e in r.history
+                if e["kind"] != "reseed"  # internal belief marker — not shown
             ],
             outcome=r.outcome,
             final_utterance=r.final_utterance,

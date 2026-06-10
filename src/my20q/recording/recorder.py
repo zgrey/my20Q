@@ -61,6 +61,9 @@ def build_round_record(
     shape) — so recorded data and exported data are one uniform corpus.
     See docs/design/beta-retool.md §8.
     """
+    # Internal belief-control markers (e.g. a reseed) are not conversation — drop
+    # them from the human-facing / training record.
+    history = [h for h in history if h.get("kind") != "reseed"]
     return {
         "session_id": session_id,
         "round_id": round_id,

@@ -145,6 +145,10 @@ OUTPUT — STRICT JSON, nothing else:
   yes/kinda answer in the history and incorporate those specific details — they
   are what the person actually confirmed (e.g. yeses on "pain", "your foot",
   "your big toe" → "I have pain in my right big toe", NOT just "my foot hurts").
+- IF a prior utterance was NOT confirmed (shown below), phrase it DIFFERENTLY this
+  time — a "kinda" means you were close (keep the gist, refine the wording or a
+  detail); a "no" means that framing was wrong (try a different angle or emphasis
+  on the confirmed details). NEVER repeat a rejected utterance.
 - "utterance": ONE complete FIRST-PERSON sentence, natural and concrete, ~6-16
   words. Specific over generic.
 - No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
@@ -174,10 +178,13 @@ def _format_history(history: list[dict]) -> str:
         return "(nothing asked yet)"
     lines: list[str] = []
     for i, h in enumerate(history, start=1):
-        if h["kind"] == "context":
-            lines.append(f'{i}. [caregiver context] "{h["text"]}"')
+        kind = h["kind"]
+        if kind == "context":
+            lines.append(f'{i}. [caregiver context] "{h.get("text", "")}"')
+        elif kind == "reseed":
+            lines.append(f"{i}. [reset — earlier guesses were dumped and reseeded]")
         else:
-            lines.append(f'{i}. [{h["kind"]}] "{h["text"]}" -> {h.get("answer")}')
+            lines.append(f'{i}. [{kind}] "{h.get("text", "")}" -> {h.get("answer")}')
     return "\n".join(lines)
 
 
@@ -275,6 +282,31 @@ _EXPLORE_NOTE = (
 )
 
 
+#: Injected after a run of "no" answers (a soft reset). The warm/lukewarm guesses
+#: were wrong, so drop them and re-approach: a freshly-worded question grounded in
+#: the YES confirmations, or a brand-new on-topic avenue (new_need).
+_RESET_NOTE = (
+    "SOFT RESET — the last several questions were ALL answered 'no', so the warm "
+    "avenue you were drilling is WRONG. Forget the lukewarm ('kinda') guesses "
+    "entirely; do NOT keep narrowing them. Re-approach from scratch: either build "
+    "a FRESH, differently-worded question grounded in what the person already "
+    "said YES to (below), or strike out on a BRAND-NEW on-topic avenue you have "
+    'not tried yet (leave "yes_ids" empty and set "new_need"). It must be '
+    "genuinely different from every question already asked, and stay on topic.\n\n"
+)
+
+
+def _affirmed_block(yes_texts: list[str] | None) -> str:
+    if not yes_texts:
+        return ""
+    lines = "\n".join(f'  - "{t}"' for t in yes_texts[-5:])
+    return (
+        "CONFIRMED so far — the person said 'yes' to these. Re-ground a fresh "
+        "question in what they establish (do not reword them verbatim):\n"
+        f"{lines}\n\n"
+    )
+
+
 def _kinda_block(kinda_texts: list[str] | None) -> str:
     if not kinda_texts:
         return ""
@@ -312,14 +344,17 @@ def ask_messages(
     corrections: list[str] | None = None,
     anchored: bool = False,
     exploratory: bool = False,
+    reset: bool = False,
     kinda_texts: list[str] | None = None,
+    yes_texts: list[str] | None = None,
 ) -> list[LLMMessage]:
     """Ask for the next drilling yes/no question over ``candidates``.
 
     ``candidates`` is ``(id, need, score)`` for the live hypotheses (score =
     accumulated points). ``anchored`` restricts to the warm cluster; ``exploratory``
     drops the profile and pushes a new avenue; ``kinda_texts`` are warm questions
-    to vary (not repeat).
+    to vary (not repeat). ``reset`` (a soft reset after a run of "no") replaces the
+    warm-anchor / kinda framing with a re-grounding in ``yes_texts`` or a new avenue.
     """
     listing = "\n".join(
         f"  {hid}: {need}  [points {score:+.1f}]" for hid, need, score in candidates
@@ -333,9 +368,15 @@ def ask_messages(
     )
     if exploratory:
         instruction += _EXPLORE_NOTE
-    if anchored:
-        instruction += _ANCHOR_NOTE
-    instruction += _kinda_block(kinda_texts)
+    if reset:
+        # A soft reset replaces the warm-anchor / kinda framing entirely: dump the
+        # lukewarm trail and re-ground in the yes confirmations (or a new avenue).
+        instruction += _RESET_NOTE
+        instruction += _affirmed_block(yes_texts)
+    else:
+        if anchored:
+            instruction += _ANCHOR_NOTE
+        instruction += _kinda_block(kinda_texts)
     instruction += _asked_block(history)
     instruction += (
         "CANDIDATE needs in play (id: need [points]):\n"
@@ -370,7 +411,9 @@ def deliberate_messages(
     corrections: list[str] | None = None,
     anchored: bool = False,
     exploratory: bool = False,
+    reset: bool = False,
     kinda_texts: list[str] | None = None,
+    yes_texts: list[str] | None = None,
 ) -> list[LLMMessage]:
     """Free-form reasoning to choose the next yes/no question (no JSON).
 
@@ -378,6 +421,8 @@ def deliberate_messages(
     output comes from a separate :func:`format_question_messages` call.
     ``candidates`` is ``(id, need, score)``. ``exploratory`` drops the profile and
     pushes a new avenue; ``kinda_texts`` are warm questions to vary (not repeat).
+    ``reset`` (a soft reset after a run of "no") replaces the warm-anchor / kinda
+    framing with a re-grounding in ``yes_texts`` or a new avenue.
     """
     listing = "\n".join(
         f"  {hid}: {need}  [points {score:+.1f}]" for hid, need, score in candidates
@@ -391,9 +436,15 @@ def deliberate_messages(
     )
     if exploratory:
         instruction += _EXPLORE_NOTE
-    if anchored:
-        instruction += _ANCHOR_NOTE
-    instruction += _kinda_block(kinda_texts)
+    if reset:
+        # A soft reset replaces the warm-anchor / kinda framing entirely: dump the
+        # lukewarm trail and re-ground in the yes confirmations (or a new avenue).
+        instruction += _RESET_NOTE
+        instruction += _affirmed_block(yes_texts)
+    else:
+        if anchored:
+            instruction += _ANCHOR_NOTE
+        instruction += _kinda_block(kinda_texts)
     instruction += _asked_block(history)
     instruction += (
         "CANDIDATE needs in play (id: need [points]):\n"
@@ -468,17 +519,36 @@ def expand_messages(
     ]
 
 
+def _rejected_block(rejected: list[tuple[str, str]] | None) -> str:
+    if not rejected:
+        return ""
+    lines = "\n".join(f'  - "{u}" → {a}' for u, a in rejected if u)
+    if not lines:
+        return ""
+    return (
+        "NOT CONFIRMED — the caregiver answered these utterance attempts as shown. "
+        "Do NOT repeat any of them; phrase it DIFFERENTLY ('kinda' = close, refine "
+        "the wording; 'no' = wrong angle, re-approach from the confirmed details):\n"
+        f"{lines}\n\n"
+    )
+
+
 def synthesize_messages(
     topic_label: str,
     leading_need: str,
     history: list[dict],
     *,
+    rejected: list[tuple[str, str]] | None = None,
     seed_context: str = "",
     profile_context: str = "",
     topic_hint: str = "",
     emotional_state: dict | None = None,
 ) -> list[LLMMessage]:
-    """Ask the LLM to phrase the leading need as a confirmable utterance."""
+    """Ask the LLM to phrase the leading need as a confirmable utterance.
+
+    ``rejected`` is ``(utterance, answer)`` for this attempt's unconfirmed
+    utterances, so a rephrase comes back genuinely different.
+    """
     instruction = f"Topic for this round: {topic_label}\n\n"
     instruction += _context_block(
         profile_context=profile_context,
@@ -486,6 +556,7 @@ def synthesize_messages(
         topic_hint=topic_hint,
         emotional_state=emotional_state,
     )
+    instruction += _rejected_block(rejected)
     instruction += (
         f"LEADING candidate need: {leading_need}\n\n"
         f"History so far:\n{_format_history(history)}\n\n"
