@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>my20Q — 20 Questions: game-theory &amp; literature audit</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        --bg: #1a1a1a;
+        --card: #222;
+        --nested: #2a2a2a;
+        --ink: #bdb191;
+        --ink-soft: #8d8569;
+        --heading: #d0c2a5;
+        --accent: #6ea262;
+        --accent-soft: #2d3d28;
+        --border: #333;
+        --warn: #e0921c;
+        --err: #d24437;
+        --ok: #3f9d44;
+      }
+      [data-theme="light"] {
+        --bg: #ffffff;
+        --card: #f1f1f1;
+        --nested: #e8e8e8;
+        --ink: #1b1b1b;
+        --ink-soft: #555;
+        --heading: #0b2d71;
+        --accent: #005ea2;
+        --accent-soft: #dbeefa;
+        --border: #c9c9c9;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+        line-height: 1.55;
+        scroll-behavior: smooth;
+      }
+      header {
+        position: sticky; top: 0;
+        background: var(--card);
+        border-bottom: 1px solid var(--border);
+        padding: 14px 24px;
+        display: flex; align-items: center; gap: 16px;
+        z-index: 10;
+      }
+      header h1 { margin: 0; font-size: 18px; color: var(--accent); }
+      header .sub { color: var(--ink-soft); font-size: 13px; }
+      header .spacer { flex: 1; }
+      .theme-toggle {
+        font-size: 14px; border: 1px solid var(--border);
+        background: var(--bg); color: var(--ink);
+        border-radius: 999px; padding: 4px 12px; cursor: pointer;
+      }
+      nav {
+        position: sticky; top: 53px;
+        background: var(--bg); border-bottom: 1px solid var(--border);
+        padding: 10px 24px; display: flex; flex-wrap: wrap; gap: 10px;
+        font-size: 13px; z-index: 9;
+      }
+      nav a {
+        color: var(--ink-soft); text-decoration: none;
+        padding: 2px 10px; border-radius: 999px; border: 1px solid transparent;
+      }
+      nav a:hover { color: var(--accent); border-color: var(--border); }
+      main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+      section { margin-bottom: 36px; }
+      h2 {
+        color: var(--heading); font-size: 22px;
+        border-bottom: 2px solid var(--accent);
+        padding-bottom: 6px; margin: 28px 0 14px;
+      }
+      h3 { color: var(--heading); font-size: 16px; margin: 18px 0 8px; }
+      p { margin: 8px 0; }
+      ul, ol { margin: 6px 0 12px; padding-left: 22px; }
+      li { margin: 3px 0; }
+      a { color: var(--accent); }
+      code, kbd {
+        font-family: "Consolas", "SFMono-Regular", monospace;
+        font-size: 13px; background: var(--nested);
+        padding: 1px 6px; border-radius: 4px; color: var(--accent);
+      }
+      .card {
+        background: var(--card); border: 1px solid var(--border);
+        border-radius: 10px; padding: 16px 18px; margin-bottom: 14px;
+      }
+      .card h3 { margin-top: 0; }
+      .pill {
+        display: inline-block; font-size: 11px; font-weight: 700;
+        letter-spacing: 0.06em; text-transform: uppercase;
+        padding: 2px 9px; border-radius: 999px; margin-right: 4px;
+      }
+      .pill.ok { background: var(--accent-soft); color: var(--ok); }
+      .pill.warn { background: rgba(224, 146, 28, 0.18); color: var(--warn); }
+      .pill.err { background: rgba(210, 68, 55, 0.15); color: var(--err); }
+      .pill.neutral { background: var(--nested); color: var(--ink-soft); }
+      table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+      th, td {
+        text-align: left; padding: 8px 12px;
+        border-bottom: 1px solid var(--border); vertical-align: top;
+      }
+      th { color: var(--heading); background: var(--nested); font-weight: 600; }
+      .note {
+        border-left: 3px solid var(--warn);
+        background: rgba(224, 146, 28, 0.08);
+        padding: 10px 14px; border-radius: 0 8px 8px 0;
+        font-size: 13.5px; margin: 10px 0;
+      }
+      .invariant {
+        border-left: 3px solid var(--err);
+        background: rgba(210, 68, 55, 0.08);
+        padding: 10px 14px; border-radius: 0 8px 8px 0;
+        margin: 10px 0; font-size: 13.5px;
+      }
+      .fig {
+        background: var(--card); border: 1px solid var(--border);
+        border-radius: 10px; padding: 14px; margin: 16px 0;
+      }
+      .fig svg { width: 100%; height: auto; display: block; }
+      .fig .cap {
+        font-size: 12.5px; color: var(--ink-soft);
+        margin: 8px 4px 0; line-height: 1.45;
+      }
+      .fig .cap b { color: var(--ink); }
+      svg text { font-family: "Segoe UI", system-ui, sans-serif; }
+      /* architecture flow (HTML, not SVG, so text wraps) */
+      .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; margin: 10px 0; }
+      .flow .step {
+        flex: 1 1 150px; background: var(--nested);
+        border: 1px solid var(--border); border-radius: 8px;
+        padding: 10px 12px; font-size: 12.5px; min-width: 150px;
+      }
+      .flow .step b { display: block; font-size: 13px; color: var(--heading); margin-bottom: 3px; }
+      .flow .step .lit {
+        display: inline-block; margin-top: 7px; font-size: 10.5px;
+        font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+        color: var(--accent); background: var(--accent-soft);
+        border-radius: 999px; padding: 1px 8px;
+      }
+      .flow .arrow {
+        align-self: center; color: var(--ink-soft);
+        font-size: 20px; flex: 0 0 auto; padding: 0 2px;
+      }
+      footer {
+        color: var(--ink-soft); font-size: 12px;
+        margin: 40px 0 24px; text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>my20Q</h1>
+      <span class="sub">20 Questions — game-theory &amp; literature audit of the reasoning engine</span>
+      <span class="spacer"></span>
+      <button
+        class="theme-toggle"
+        onclick="document.documentElement.toggleAttribute('data-theme') || document.documentElement.setAttribute('data-theme','light')"
+      >☾ / ☀</button>
+    </header>
+
+    <nav>
+      <a href="#why">Why this audit</a>
+      <a href="#theory">The theory</a>
+      <a href="#mirrors">1 · What mirrors it</a>
+      <a href="#friction">2 · What gets in the way</a>
+      <a href="#gaps">3 · Remaining gaps</a>
+      <a href="#verdict">Verdict</a>
+      <a href="#sources">Sources</a>
+    </nav>
+
+    <main>
+      <!-- ============================================================ WHY -->
+      <section id="why">
+        <h2>Why this audit</h2>
+        <p>
+          my20Q is, at its core, a constrained 20-questions player: converge on
+          one specific need through yes / no / kinda / not-sure answers from a
+          person with aphasia. That game has real theory — information theory
+          fixes how fast convergence <em>can</em> go, the Rényi–Ulam line fixes
+          what noise does to it, and a recent LLM literature documents exactly
+          how language models fail at it. This audit lines the current engine
+          (the 5W1H facet controller, v2 + the opposition button, June 2026) up
+          against that theory and answers three questions:
+          <b>what mirrors the literature, what is getting in the way, and what
+          is still missing.</b>
+        </p>
+        <p>
+          The empirical backdrop — every live trial so far, queries per round:
+        </p>
+
+        <div class="fig">
+          <svg viewBox="0 0 760 360" role="img" aria-label="Queries per round across live trials">
+            <!-- gridlines + y axis -->
+            <line x1="70" y1="300" x2="730" y2="300" stroke="var(--border)" stroke-width="1.5"/>
+            <line x1="70" y1="208" x2="730" y2="208" stroke="var(--border)" stroke-dasharray="3 4"/>
+            <line x1="70" y1="116" x2="730" y2="116" stroke="var(--border)" stroke-dasharray="3 4"/>
+            <line x1="70" y1="24"  x2="730" y2="24"  stroke="var(--border)" stroke-dasharray="3 4"/>
+            <text x="60" y="304" text-anchor="end" font-size="11" fill="var(--ink-soft)">0</text>
+            <text x="60" y="212" text-anchor="end" font-size="11" fill="var(--ink-soft)">30</text>
+            <text x="60" y="120" text-anchor="end" font-size="11" fill="var(--ink-soft)">60</text>
+            <text x="60" y="28"  text-anchor="end" font-size="11" fill="var(--ink-soft)">90</text>
+            <text x="26" y="170" font-size="11" fill="var(--ink-soft)" transform="rotate(-90 26 170)">queries in the round</text>
+            <!-- era dividers -->
+            <line x1="164" y1="24" x2="164" y2="300" stroke="var(--ink-soft)" stroke-dasharray="5 5" opacity="0.5"/>
+            <line x1="541" y1="24" x2="541" y2="300" stroke="var(--ink-soft)" stroke-dasharray="5 5" opacity="0.5"/>
+            <text x="117" y="318" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">belief list + audits</text>
+            <text x="352" y="318" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">additive scoring + lifecycle overhaul</text>
+            <text x="636" y="318" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">5W1H facet board</text>
+            <!-- bars -->
+            <!-- 1: Jun 7 gemma3, easy targets, 3-16q range, ok -->
+            <rect x="89" y="250.9" width="56" height="39.9" rx="3" fill="var(--ok)" opacity="0.85"/>
+            <text x="117" y="244" text-anchor="middle" font-size="11" fill="var(--ok)" font-weight="700">3–16 ✓</text>
+            <!-- 2: Jun 9 gemma3 people 56 fail -->
+            <rect x="183" y="128.3" width="56" height="171.7" rx="3" fill="var(--err)" opacity="0.8"/>
+            <text x="211" y="121" text-anchor="middle" font-size="11" fill="var(--err)" font-weight="700">56 ✗</text>
+            <!-- 3: Jun 9 gemma4 feelings 40 ok -->
+            <rect x="278" y="177.3" width="56" height="122.7" rx="3" fill="var(--ok)" opacity="0.85"/>
+            <text x="306" y="170" text-anchor="middle" font-size="11" fill="var(--ok)" font-weight="700">40 ✓</text>
+            <!-- 4: Jun 9 gemma3 picture R1 81 fail -->
+            <rect x="372" y="51.6" width="56" height="248.4" rx="3" fill="var(--err)" opacity="0.8"/>
+            <text x="400" y="45" text-anchor="middle" font-size="11" fill="var(--err)" font-weight="700">81 ✗</text>
+            <!-- 5: Jun 9 gemma3 picture R2 58 near -->
+            <rect x="466" y="122.1" width="56" height="177.9" rx="3" fill="var(--warn)" opacity="0.85"/>
+            <text x="494" y="115" text-anchor="middle" font-size="11" fill="var(--warn)" font-weight="700">58 ≈</text>
+            <!-- 6: Jun 10 gemma4 picture 37 ok -->
+            <rect x="561" y="186.5" width="56" height="113.5" rx="3" fill="var(--ok)" opacity="0.85"/>
+            <text x="589" y="180" text-anchor="middle" font-size="11" fill="var(--ok)" font-weight="700">37 ✓</text>
+            <!-- 7: Jun 10 gemma3 kitchen 52 fail -->
+            <rect x="655" y="140.5" width="56" height="159.5" rx="3" fill="var(--err)" opacity="0.8"/>
+            <text x="683" y="134" text-anchor="middle" font-size="11" fill="var(--err)" font-weight="700">52 ✗</text>
+            <!-- x labels -->
+            <text x="117" y="335" text-anchor="middle" font-size="10.5" fill="var(--ink)">Jun 7 · g3</text>
+            <text x="117" y="349" text-anchor="middle" font-size="10" fill="var(--ink-soft)">easy targets ×4</text>
+            <text x="211" y="335" text-anchor="middle" font-size="10.5" fill="var(--ink)">Jun 9 · g3</text>
+            <text x="211" y="349" text-anchor="middle" font-size="10" fill="var(--ink-soft)">people (fallback loop)</text>
+            <text x="306" y="335" text-anchor="middle" font-size="10.5" fill="var(--ink)">Jun 9 · g4</text>
+            <text x="306" y="349" text-anchor="middle" font-size="10" fill="var(--ink-soft)">feelings</text>
+            <text x="400" y="335" text-anchor="middle" font-size="10.5" fill="var(--ink)">Jun 9 · g3</text>
+            <text x="400" y="349" text-anchor="middle" font-size="10" fill="var(--ink-soft)">picture, round 1</text>
+            <text x="494" y="335" text-anchor="middle" font-size="10.5" fill="var(--ink)">Jun 9 · g3</text>
+            <text x="494" y="349" text-anchor="middle" font-size="10" fill="var(--ink-soft)">picture, round 2</text>
+            <text x="589" y="335" text-anchor="middle" font-size="10.5" fill="var(--ink)">Jun 10 · g4</text>
+            <text x="589" y="349" text-anchor="middle" font-size="10" fill="var(--ink-soft)">picture — first ✓</text>
+            <text x="683" y="335" text-anchor="middle" font-size="10.5" fill="var(--ink)">Jun 10 · g3</text>
+            <text x="683" y="349" text-anchor="middle" font-size="10" fill="var(--ink-soft)">kitchen (→ direction layer)</text>
+          </svg>
+          <p class="cap">
+            <b>Fig 1 — Queries per round, all live trials (June 7–10, 2026).</b>
+            g3 = gemma3:12b, g4 = gemma4:e4b. Green = confirmed utterance,
+            amber = synthesized but off-target, red = failed/abandoned. Dashed
+            verticals mark engine versions. For scale: information theory says
+            a <em>noiseless</em> ideal player separates ~64 candidates in 6
+            questions (Fig 2) — the gap between 6 and these bars is the engine's
+            improvement budget. v2 + the opposition button (June 11) are not
+            yet on this chart: the kitchen target re-run is the next data point.
+          </p>
+        </div>
+      </section>
+
+      <!-- ========================================================= THEORY -->
+      <section id="theory">
+        <h2>The theory, in four results</h2>
+
+        <h3>① Optimal questioning = entropy halving (Huffman)</h3>
+        <p>
+          For a prior π over candidates, the optimal yes/no question strategy
+          is a Huffman code: expected questions sit between
+          <code>H(π)</code> and <code>H(π)+1</code>
+          (<a href="https://arxiv.org/abs/1611.01655">Twenty (simple) questions</a>,
+          STOC&nbsp;2017). The greedy version is the familiar rule: ask the
+          question whose yes-probability is closest to ½. Every question with
+          p far from ½ buys less than one bit, and the cost compounds:
+        </p>
+
+        <div class="fig">
+          <svg viewBox="0 0 720 330" role="img" aria-label="Expected questions versus question yes-probability">
+            <line x1="64" y1="276" x2="696" y2="276" stroke="var(--border)" stroke-width="1.5"/>
+            <line x1="64" y1="24" x2="64" y2="276" stroke="var(--border)" stroke-width="1.5"/>
+            <!-- y ticks: q=0,6,12,18,24,30 -> y=276,225.6,175.2,124.8,74.4,24 -->
+            <text x="54" y="280" text-anchor="end" font-size="11" fill="var(--ink-soft)">0</text>
+            <text x="54" y="229" text-anchor="end" font-size="11" fill="var(--ink-soft)">6</text>
+            <text x="54" y="179" text-anchor="end" font-size="11" fill="var(--ink-soft)">12</text>
+            <text x="54" y="129" text-anchor="end" font-size="11" fill="var(--ink-soft)">18</text>
+            <text x="54" y="78" text-anchor="end" font-size="11" fill="var(--ink-soft)">24</text>
+            <text x="54" y="28" text-anchor="end" font-size="11" fill="var(--ink-soft)">30</text>
+            <!-- x ticks p=0,.25,.5,.75,1 -->
+            <text x="64" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">0</text>
+            <text x="222" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">0.25</text>
+            <text x="380" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">0.50</text>
+            <text x="538" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">0.75</text>
+            <text x="696" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">1</text>
+            <text x="380" y="314" text-anchor="middle" font-size="11.5" fill="var(--ink)">yes-probability of each question you ask</text>
+            <text x="22" y="170" font-size="11.5" fill="var(--ink)" transform="rotate(-90 22 170)">E[questions] to find 1 of 64</text>
+            <!-- optimum guides -->
+            <line x1="64" y1="225.6" x2="380" y2="225.6" stroke="var(--ink-soft)" stroke-dasharray="3 4" opacity="0.6"/>
+            <line x1="380" y1="225.6" x2="380" y2="276" stroke="var(--ink-soft)" stroke-dasharray="3 4" opacity="0.6"/>
+            <!-- curve -->
+            <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" points="83.0,24.0 89.3,68.0 95.6,100.0 101.9,122.1 108.2,138.3 114.6,150.7 120.9,160.5 127.2,168.5 133.5,175.2 139.8,180.8 146.2,185.6 152.5,189.7 158.8,193.4 165.1,196.5 171.4,199.4 177.8,201.9 184.1,204.2 190.4,206.2 196.7,208.0 203.0,209.7 209.4,211.2 215.7,212.6 222.0,213.9 228.3,215.0 234.6,216.1 241.0,217.1 247.3,218.0 253.6,218.8 259.9,219.6 266.2,220.3 272.6,220.9 278.9,221.5 285.2,222.0 291.5,222.5 297.8,223.0 304.2,223.4 310.5,223.8 316.8,224.1 323.1,224.4 329.4,224.6 335.8,224.9 342.1,225.1 348.4,225.2 354.7,225.4 361.0,225.5 367.4,225.5 373.7,225.6 380.0,225.6 386.3,225.6 392.6,225.5 399.0,225.5 405.3,225.4 411.6,225.2 417.9,225.1 424.2,224.9 430.6,224.6 436.9,224.4 443.2,224.1 449.5,223.8 455.8,223.4 462.2,223.0 468.5,222.5 474.8,222.0 481.1,221.5 487.4,220.9 493.8,220.3 500.1,219.6 506.4,218.8 512.7,218.0 519.0,217.1 525.4,216.1 531.7,215.0 538.0,213.9 544.3,212.6 550.6,211.2 557.0,209.7 563.3,208.0 569.6,206.2 575.9,204.2 582.2,201.9 588.6,199.4 594.9,196.5 601.2,193.4 607.5,189.7 613.8,185.6 620.2,180.8 626.5,175.2 632.8,168.5 639.1,160.5 645.4,150.7 651.8,138.3 658.1,122.1 664.4,100.0 670.7,68.0 677.0,24.0"/>
+            <!-- markers -->
+            <circle cx="380" cy="225.6" r="5" fill="var(--ok)"/>
+            <text x="380" y="248" text-anchor="middle" font-size="11.5" fill="var(--ok)" font-weight="700">split-in-half: 6 q</text>
+            <circle cx="632.8" cy="168.5" r="5" fill="var(--warn)"/>
+            <text x="628" y="158" text-anchor="end" font-size="11.5" fill="var(--warn)" font-weight="700">90/10 questions: ~13 q</text>
+            <text x="668" y="48" text-anchor="end" font-size="11.5" fill="var(--err)" font-weight="700">p→1: confirmation</text>
+            <text x="668" y="62" text-anchor="end" font-size="11.5" fill="var(--err)" font-weight="700">farming (Gate 4)</text>
+          </svg>
+          <p class="cap">
+            <b>Fig 2 — Why split-in-half is the law.</b> Expected questions to
+            isolate 1 of 64 candidates = 6 / H₂(p), if every question you ask
+            has yes-probability p. Asking near-certain questions (p→1) is the
+            mathematical description of the confirmation farming our June-10
+            trial exhibited (who=Zach pumped to +7.5 on re-confirmations) —
+            each such question is worth a fraction of a bit.
+          </p>
+        </div>
+
+        <h3>② Noisy answers: never trust a single "no" (Rényi–Ulam)</h3>
+        <p>
+          The classical results assume a truthful oracle. With lies or errors —
+          the <a href="https://arxiv.org/abs/1811.02177">Rényi–Ulam "liar"
+          setting</a>, and noisy 20-questions for
+          <a href="https://arxiv.org/abs/1306.1922">target localization</a> —
+          hard elimination is catastrophic and the optimal strategies switch to
+          weighted/soft updates plus <em>repetition for verification</em>. In
+          aphasia this is not a corner case: answer reliability is a known
+          clinical limitation of yes/no questioning
+          (<a href="https://www.aphasia.com/aphasia-library/caregiver/communication-tips/using-yes-or-no-questions/">Aphasia Library</a>).
+        </p>
+
+        <div class="fig">
+          <svg viewBox="0 0 720 330" role="img" aria-label="Survival of the true answer under hard elimination versus soft scoring">
+            <line x1="64" y1="276" x2="696" y2="276" stroke="var(--border)" stroke-width="1.5"/>
+            <line x1="64" y1="24" x2="64" y2="276" stroke="var(--border)" stroke-width="1.5"/>
+            <text x="54" y="280" text-anchor="end" font-size="11" fill="var(--ink-soft)">0</text>
+            <text x="54" y="217" text-anchor="end" font-size="11" fill="var(--ink-soft)">0.25</text>
+            <text x="54" y="154" text-anchor="end" font-size="11" fill="var(--ink-soft)">0.5</text>
+            <text x="54" y="91" text-anchor="end" font-size="11" fill="var(--ink-soft)">0.75</text>
+            <text x="54" y="28" text-anchor="end" font-size="11" fill="var(--ink-soft)">1</text>
+            <text x="64" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">0</text>
+            <text x="222" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">5</text>
+            <text x="380" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">10</text>
+            <text x="538" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">15</text>
+            <text x="696" y="294" text-anchor="middle" font-size="11" fill="var(--ink-soft)">20</text>
+            <text x="380" y="314" text-anchor="middle" font-size="11.5" fill="var(--ink)">questions asked about the true value</text>
+            <text x="22" y="172" font-size="11.5" fill="var(--ink)" transform="rotate(-90 22 172)">P(truth still in play)</text>
+            <!-- soft lines (flat) -->
+            <line x1="64" y1="27.1" x2="696" y2="27.1" stroke="var(--accent)" stroke-width="2.5"/>
+            <line x1="64" y1="39.8" x2="696" y2="39.8" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 5"/>
+            <!-- hard curves -->
+            <polyline fill="none" stroke="var(--err)" stroke-width="2.5" points="64.0,24.0 95.6,49.2 127.2,71.9 158.8,92.3 190.4,110.7 222.0,127.2 253.6,142.1 285.2,155.5 316.8,167.5 348.4,178.4 380.0,188.1 411.6,196.9 443.2,204.8 474.8,211.9 506.4,218.4 538.0,224.1 569.6,229.3 601.2,234.0 632.8,238.2 664.4,242.0 696.0,245.4"/>
+            <polyline fill="none" stroke="var(--err)" stroke-width="2" stroke-dasharray="6 5" points="64.0,24.0 95.6,74.4 127.2,114.7 158.8,147.0 190.4,172.8 222.0,193.4 253.6,209.9 285.2,223.2 316.8,233.7 348.4,242.2 380.0,248.9 411.6,254.4 443.2,258.7 474.8,262.1 506.4,264.9 538.0,267.1 569.6,268.9 601.2,270.3 632.8,271.5 664.4,272.4 696.0,273.1"/>
+            <!-- labels -->
+            <text x="688" y="58" text-anchor="end" font-size="11.5" fill="var(--accent)" font-weight="700">soft scores, floor −2  (≈0.99 / 0.94)</text>
+            <text x="688" y="236" text-anchor="end" font-size="11.5" fill="var(--err)" font-weight="700">hard elimination, ε=10%  → 0.12</text>
+            <text x="560" y="268" text-anchor="end" font-size="11.5" fill="var(--err)">ε=20% → 0.01</text>
+          </svg>
+          <p class="cap">
+            <b>Fig 3 — One wrong "no" must not kill the truth.</b> If each
+            answer is wrong with probability ε, hard elimination keeps the true
+            value alive with probability (1−ε)<sup>k</sup> — at ε=10% the truth
+            is dead 88% of the time by question 20 (solid red). The engine's
+            additive scores with elimination floor −2 behave like a random walk
+            that must drift to −2 before the truth drops out; the ultimate
+            ruin probability is (ε/(1−ε))² (gambler's ruin) — ≈1% at ε=10%
+            (green). The June-7 single-no-elimination experiment sat on the red
+            curve and was rolled back the same day; the floor has been load-bearing
+            ever since.
+          </p>
+        </div>
+
+        <h3>③ LLMs cannot play this game implicitly</h3>
+        <p>
+          The LLM-era literature converges on one finding:
+          <a href="https://arxiv.org/abs/2310.01468">probing LLMs with 20-questions
+          games</a> shows weak multi-turn planning — repeated/reworded
+          questions, premature guessing, and failure to integrate negative
+          answers — and the fix across papers is to <em>externalize</em> the
+          state: track belief outside the model and score candidate questions by
+          <a href="https://arxiv.org/html/2406.17453v1">expected information
+          gain</a>, or plan over simulated answer branches (Uncertainty of
+          Thoughts). These published failure modes are not abstractions for us
+          — they are <em>literally</em> our trial autopsies: the same question
+          asked 7× (June 9), guess-enumeration down one dead avenue (June 10),
+          and a hallucinated subject accumulating score ("Aaron", June 9).
+        </p>
+
+        <h3>④ The clinical layer (SCA) bounds everything</h3>
+        <p>
+          Supported Conversation for Adults with Aphasia
+          (<a href="https://www.aphasia.ca/communication-tools-communicative-access-sca/">Aphasia
+          Institute</a>) endorses exactly this interaction: yes/no questions,
+          one at a time, progressing general → specific, with time to respond
+          and written/visual support — and it warns against relying on yes/no
+          alone, recommending verification of important answers and fixed-choice
+          questions as the step beyond yes/no
+          (<a href="https://www.flintrehab.com/yes-no-questions-for-aphasia/">Flint
+          Rehab</a>). The theory above must operate inside these constraints:
+          the optimal question is worthless if the person cannot reliably
+          answer it.
+        </p>
+      </section>
+
+      <!-- ======================================================== MIRRORS -->
+      <section id="mirrors">
+        <h2>1 · What mirrors the literature</h2>
+        <p>
+          The engine's architecture is the shape the literature recommends —
+          belief outside the model, policy in code, the LLM doing language only:
+        </p>
+
+        <div class="flow">
+          <div class="step">
+            <b>Answers + actions</b>
+            y / n / kinda / not-sure · ⇄ flip · caregiver note
+            <span class="lit">SCA: graded yes/no + support channel</span>
+          </div>
+          <div class="arrow">→</div>
+          <div class="step">
+            <b>5W1H consensus board</b>
+            additive ±points per (slot, value) · floor −2 · text-anchored credit
+            <span class="lit">externalized belief state (UoT / DST)</span>
+          </div>
+          <div class="arrow">→</div>
+          <div class="step">
+            <b>Focus policy</b>
+            pin → probe → split → drill · rotation guard · futility ban
+            <span class="lit">lowest-confidence slot · bisection</span>
+          </div>
+          <div class="arrow">→</div>
+          <div class="step">
+            <b>LLM ask</b>
+            deliberate → format · 4 hard gates (form, repeat, anchor, zero-info)
+            <span class="lit">EDA failure modes, gated in code</span>
+          </div>
+          <div class="arrow">→</div>
+          <div class="step">
+            <b>Synthesis</b>
+            informative yeses OR board-ready → confirm utterance · restart recovery
+            <span class="lit">explicit confirmation turn · SCA verify</span>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr><th>Engine mechanism</th><th>Literature anchor</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Belief lives in code (<code>facets.py</code> board), recomputed from history; the model sees a scoreboard each turn</td>
+              <td>UoT / 20Q-probing: LLMs cannot track belief implicitly; POMDP-style dialogue state tracking</td>
+              <td><span class="pill ok">strong match</span></td>
+            </tr>
+            <tr>
+              <td>Additive soft scores, no renormalization, elimination floor −2; a rejected utterance is rephrased, never eliminated</td>
+              <td>Rényi–Ulam / noisy-oracle 20Q: weighted updates, never hard-eliminate on one answer (Fig 3)</td>
+              <td><span class="pill ok">strong match</span></td>
+            </tr>
+            <tr>
+              <td><code>split</code> directive when top-two contenders tie (<code>facet_split_margin</code>)</td>
+              <td>Entropy halving: ask where p≈½ (Fig 2)</td>
+              <td><span class="pill ok">match</span> <span class="pill neutral">narrow trigger</span></td>
+            </tr>
+            <tr>
+              <td><code>probe</code> an unestablished core slot first (<code>_pick_focus</code> priority 1)</td>
+              <td>Slot-filling dialogue: ask the lowest-confidence slot; coverage before refinement</td>
+              <td><span class="pill ok">match</span></td>
+            </tr>
+            <tr>
+              <td><code>drill</code> a confirmed-but-vague leader toward specificity; kinda = "warm"</td>
+              <td>SCA general→specific laddering; coarse→fine search</td>
+              <td><span class="pill ok">match in spirit</span> <span class="pill warn">no explicit tree (gap 4)</span></td>
+            </tr>
+            <tr>
+              <td>Synthesis = propose one woven utterance, end only on a confirmed "yes"; informative-yes + board-readiness gates</td>
+              <td>Explicit confirmation turns; sequential-testing flavor (confirm when evidence crosses a threshold)</td>
+              <td><span class="pill ok">match</span> <span class="pill warn">gate is a count, not a posterior (friction 1)</span></td>
+            </tr>
+            <tr>
+              <td>Hard repeat gate (normalized / similarity ≥0.85 / stem-tolerant content overlap ≥0.8)</td>
+              <td>The #1 documented LLM failure in 20Q probing is repetition; prompt nudges demonstrably fail</td>
+              <td><span class="pill ok">match</span> <span class="pill warn">over-corrects vs noise theory (friction 4)</span></td>
+            </tr>
+            <tr>
+              <td>Gate 4 re-prompts questions whose every asserted pair is already confident; only an <em>informative</em> yes advances synthesis</td>
+              <td>EIG &gt; 0 requirement — a p≈1 question buys ~0 bits (Fig 2, right edge)</td>
+              <td><span class="pill ok">match</span> <span class="pill neutral">post-hoc form (gap 1 is the principled version)</span></td>
+            </tr>
+            <tr>
+              <td>Direction layer: four intent buckets credited only by a code classifier; a "no" with a confirmed who-anchor nudges the <em>mirror</em> bucket +0.5</td>
+              <td>On a binary attribute, evidence against one pole is evidence for the complement (Bayes); discounted to kinda-strength for noise</td>
+              <td><span class="pill ok">match</span> <span class="pill neutral">novel composite — untrialed</span></td>
+            </tr>
+            <tr>
+              <td>⇄ Opposition button: caregiver flips the pending question's connotation as an action</td>
+              <td>Mixed-initiative repair: the human supplies the one bit the policy cannot see ("right content, wrong direction")</td>
+              <td><span class="pill ok">match</span> <span class="pill neutral">untrialed</span></td>
+            </tr>
+            <tr>
+              <td>Asymmetric "no" crediting: only the lowest-scoring tagged pair takes the hit</td>
+              <td>Blame the marginal hypothesis, protect accumulated consensus — a heuristic stand-in for explaining-away</td>
+              <td><span class="pill ok">directionally right</span> <span class="pill warn">heuristic (gap 3)</span></td>
+            </tr>
+            <tr>
+              <td>Caregiver context channel (+2 boost, note-anchored) and the kinda button</td>
+              <td>SCA: don't rely on yes/no alone — multimodal support; graded answers</td>
+              <td><span class="pill ok">match</span></td>
+            </tr>
+            <tr>
+              <td>Restart recovery (dump no/kinda influence, keep yeses + context, re-probe broadly), 4 triggers</td>
+              <td>No single theorem — but consistent with robust search: when the model of the world is wrong, restart from verified evidence</td>
+              <td><span class="pill ok">sound engineering</span></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="fig">
+          <svg viewBox="0 0 480 240" role="img" aria-label="Direction buckets and the mirror sign flip">
+            <!-- boxes -->
+            <rect x="36" y="36" width="170" height="52" rx="8" fill="var(--nested)" stroke="var(--border)"/>
+            <text x="121" y="58" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">me_for_them</text>
+            <text x="121" y="76" text-anchor="middle" font-size="11" fill="var(--ink-soft)">"do something for them"</text>
+            <rect x="274" y="36" width="170" height="52" rx="8" fill="var(--nested)" stroke="var(--border)"/>
+            <text x="359" y="58" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">them_for_me</text>
+            <text x="359" y="76" text-anchor="middle" font-size="11" fill="var(--ink-soft)">"have them do it for me"</text>
+            <rect x="36" y="140" width="170" height="52" rx="8" fill="var(--nested)" stroke="var(--border)"/>
+            <text x="121" y="162" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">tell_them</text>
+            <text x="121" y="180" text-anchor="middle" font-size="11" fill="var(--ink-soft)">"tell them something"</text>
+            <rect x="274" y="140" width="170" height="52" rx="8" fill="var(--nested)" stroke="var(--border)"/>
+            <text x="359" y="162" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">ask_them</text>
+            <text x="359" y="180" text-anchor="middle" font-size="11" fill="var(--ink-soft)">"ask them something"</text>
+            <!-- mirror arrows -->
+            <line x1="210" y1="62" x2="270" y2="62" stroke="var(--accent)" stroke-width="2"/>
+            <polygon points="270,62 261,57 261,67" fill="var(--accent)"/>
+            <polygon points="210,62 219,57 219,67" fill="var(--accent)"/>
+            <line x1="210" y1="166" x2="270" y2="166" stroke="var(--accent)" stroke-width="2"/>
+            <polygon points="270,166 261,161 261,171" fill="var(--accent)"/>
+            <polygon points="210,166 219,161 219,171" fill="var(--accent)"/>
+            <text x="240" y="50" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-weight="700">MIRROR</text>
+            <text x="240" y="154" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-weight="700">MIRROR</text>
+            <!-- sign flip annotation -->
+            <text x="240" y="118" text-anchor="middle" font-size="11.5" fill="var(--warn)" font-weight="700">"no" + confirmed who-anchor ⇒ +0.5 to the mirror</text>
+            <text x="240" y="222" text-anchor="middle" font-size="11" fill="var(--ink-soft)">⇄ Opposite re-asks the same question across the mirror — the caregiver's manual sign flip</text>
+          </svg>
+          <p class="cap">
+            <b>Fig 4 — The direction layer.</b> 25+ of the kitchen-trial noes
+            were mirror-image questions — right person, wrong direction — that
+            the scorer read as "wrong content". The buckets make direction a
+            first-class binary attribute, so a no on one pole becomes soft
+            evidence for the other, and ⇄ Opposite lets the caregiver collapse
+            it in one tap.
+          </p>
+        </div>
+      </section>
+
+      <!-- ======================================================= FRICTION -->
+      <section id="friction">
+        <h2>2 · What is getting in the way</h2>
+        <p>
+          Six places where the current mechanics fight the theory. None are
+          fatal; most are magnitude problems (counts and absolute thresholds
+          standing in for evidence measures) rather than shape problems.
+        </p>
+
+        <div class="card">
+          <h3>F1 · Counting confirmations is not weighing evidence
+            <span class="pill warn">conflict</span></h3>
+          <p>
+            Synthesis needs <code>min_yes_for_synthesis=5</code> yeses (then 3
+            new ones per retry). Sequential testing says: stop when the
+            <em>posterior odds</em> cross a threshold, not when a tally fills —
+            five low-information yeses (the farming trial) and two decisive
+            splits are worlds apart, yet the count treats them alike. The
+            informative-yes patch and the board-readiness path are both
+            implicit admissions of this. <b>Direction:</b> let board-readiness
+            (a margin condition — already evidence-shaped) lead, and demote the
+            yes-count to a safety floor.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>F2 · Absolute thresholds on a growing scale
+            <span class="pill warn">conflict</span></h3>
+          <p>
+            <code>facet_ready_points=2.0</code>, <code>split_margin=1.0</code>,
+            floor −2 are fixed while total board mass grows every turn. A +2
+            lead after 6 answers is strong evidence; after 50 answers it is
+            noise — but the engine reads both as "determined". Bayesian scoring
+            normalizes by construction; ours deliberately doesn't (that
+            simplicity is worth keeping), so the thresholds should at least
+            scale with answered-query count or the slot's total absolute mass.
+            This also touches the deliberate volatile-layer choice: every round
+            starts from a uniform zero prior — correct for privacy and for the
+            "today ≠ last week" rule, but it means the engine cannot encode
+            even <em>structural</em> priors (e.g. "when matters less than how"
+            for people topics) except through the focus policy.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>F3 · The question itself is chosen blind to information gain
+            <span class="pill warn">conflict</span></h3>
+          <p>
+            Code picks the <em>slot</em>; the LLM freely picks <em>which
+            contender and phrasing</em> — precisely the choice EIG methods
+            score and ours doesn't. Gate 4 rejects only the degenerate case
+            (zero gain) after generation, and the exploration coin
+            (<code>explore_decay^(yeses+1)</code>, below) injects randomness
+            that is blind to the board: it can force a fresh probe at the exact
+            moment a split would be decisive.
+          </p>
+          <div class="fig">
+            <svg viewBox="0 0 440 230" role="img" aria-label="Exploration probability decay">
+              <line x1="48" y1="196" x2="400" y2="196" stroke="var(--border)" stroke-width="1.5"/>
+              <line x1="48" y1="24" x2="48" y2="196" stroke="var(--border)" stroke-width="1.5"/>
+              <text x="40" y="200" text-anchor="end" font-size="10.5" fill="var(--ink-soft)">0</text>
+              <text x="40" y="116" text-anchor="end" font-size="10.5" fill="var(--ink-soft)">.35</text>
+              <text x="40" y="32" text-anchor="end" font-size="10.5" fill="var(--ink-soft)">.70</text>
+              <polyline fill="none" stroke="var(--warn)" stroke-width="2.5" points="48.0,32.2 92.0,86.8 136.0,123.2 180.0,147.5 224.0,163.6 268.0,174.4 312.0,181.6 356.0,186.4 400.0,189.6"/>
+              <circle cx="48" cy="32.2" r="4" fill="var(--warn)"/>
+              <text x="224" y="218" text-anchor="middle" font-size="11" fill="var(--ink)">informative yeses since last synthesis attempt</text>
+              <text x="230" y="100" font-size="11" fill="var(--ink-soft)">P(explore) = (2/3)^(yeses+1)</text>
+            </svg>
+            <p class="cap">
+              <b>Fig 5 — The exploration schedule.</b> A reasonable bandit-style
+              ε-decay — but it consults only the yes-count, never the board.
+              An EIG-scored candidate set (gap&nbsp;1) would subsume it: true
+              exploration is just "the highest-gain question happens to probe
+              something new".
+            </p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>F4 · The repeat gate outlaws verification
+            <span class="pill err">conflict with noise theory</span></h3>
+          <p>
+            Rényi–Ulam strategies <em>repeat questions on purpose</em> — under
+            noise, re-asking is how you verify — and SCA practice re-checks
+            important answers. Our gate bans every reword for the whole round;
+            the only verification the engine ever does is the synthesis
+            proposal itself, where a wrong load-bearing yes is expensive to
+            unwind (it takes a failed utterance + a pin cycle). The Dice-0.8
+            overlap can also block legitimate <em>drills</em> that share an
+            anchor: "Will Zach come over <em>today</em>?" after "Will Zach come
+            over?" scores 6/7 ≈ 0.86 → rejected as a repeat, even though it
+            asks a new slot (when). Fix shape: a code-initiated, gate-exempt
+            <b>verify turn</b> ("Just to double-check —") for a pair about to
+            be woven into an utterance, plus letting a question through when it
+            asserts a slot the prior question didn't.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>F5 · The rotation guard can break drill ladders
+            <span class="pill warn">conflict</span></h3>
+          <p>
+            <code>MAX_CATEGORY_RUN=2</code> cured why-hammering, but taxonomy
+            descent — the engine's own best win (body → leg → foot → toe,
+            June 8) — needs 3+ consecutive same-slot questions. Today that
+            ladder would be interrupted after two rungs and forced lateral;
+            the pin directive yields to the same guard. Fix shape: exempt
+            <code>drill</code>/<code>pin</code> from rotation while the focused
+            slot's leader score is <em>rising</em> — rotate on stall, not on
+            count.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>F6 · Either/or is banned; the clinic recommends it
+            <span class="pill neutral">deliberate divergence</span></h3>
+          <p>
+            Gate 1 rejects either/or questions because the answer surface is
+            four buttons — an either/or can't be answered with yes/no. But SCA
+            guidance places fixed-choice questions as the natural step
+            <em>after</em> yes/no, and information theory agrees: a two-option
+            forced choice is a guaranteed split-in-half (Fig 2's optimum, by
+            construction). Worth keeping the ban for now — and revisiting when
+            the patient-facing surface exists: two tappable pictogram cards
+            <em>are</em> an either/or, and the engine could emit
+            <code>choice</code>-kind queries for exactly the split directive.
+          </p>
+        </div>
+      </section>
+
+      <!-- =========================================================== GAPS -->
+      <section id="gaps">
+        <h2>3 · Remaining gaps</h2>
+        <p>Ranked by expected payoff per unit of engineering.</p>
+
+        <div class="card">
+          <h3>G1 · True EIG question selection <span class="pill err">the big one</span></h3>
+          <p>
+            We pick the slot; the literature picks the <em>question</em>.
+            UoT-style: generate candidate questions, estimate each one's
+            yes-probability against the board, ask the one closest to a half
+            split (or max expected entropy drop). <b>Cheap version that fits
+            our latency budget:</b> the format pass already returns JSON — have
+            it emit <em>2–3 candidate questions</em> with their asserted slots
+            in the same single call, then code picks the candidate whose
+            asserted pair sits nearest the slot's score median (a proxy for
+            p≈½), preferring candidates that assert an unestablished pair.
+            Zero extra LLM calls; the gates run on the chosen one as today.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>G2 · An answer-noise model + per-patient calibration
+            <span class="pill err">high value</span></h3>
+          <p>
+            Points (+1 / +0.5 / −1 / 0) encode noise implicitly. A small
+            confusion model — P(button | true state of the asserted pair) —
+            would let the same four buttons update the board as
+            log-likelihood ratios, make the floor and thresholds principled,
+            and (this is the unique part) be <b>calibrated per patient from
+            the recorded dataset</b>: the 3-tier recordings already capture
+            every (question, answer, eventual outcome) triple needed to
+            estimate this person's yes-reliability. That is squarely inside
+            the privacy invariant — the dataset is local, and the calibration
+            is the stable layer informing <em>how</em> evidence is weighed,
+            never <em>what</em> is guessed.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>G3 · Verification turns <span class="pill warn">pairs with F4</span></h3>
+          <p>
+            One deliberate, repeat-gate-exempt re-ask of each load-bearing pair
+            before it is woven into an utterance ("Just to double-check — is it
+            Zach you want to come over?"). Rényi–Ulam says re-ask under noise;
+            SCA says verify what matters; the engine currently has no path to
+            do either except burning a whole synthesis attempt. Budget: at most
+            one verify per pair per round, only for pairs entering a proposal,
+            skipped when the pair was confirmed twice already.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>G4 · A coarse→fine ladder inside each slot
+            <span class="pill warn">structural</span></h3>
+          <p>
+            "a picture" and "the large picture in the hall" currently compete
+            as flat rivals in the same slot — the fine value must out-score the
+            coarse one it refines. A parent link (fine value → the coarse
+            contender it specializes) would let leaders be subtree sums,
+            drills descend the tree explicitly (Huffman-flavored), and the
+            06-09 near-miss ("who/what surfaced only at q~55") become
+            structurally impossible: confirming the coarse node early is
+            recorded progress, not a rival to beat.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>G5 · A noisy-answerer regression bench
+            <span class="pill ok">cheap, do soon</span></h3>
+          <p>
+            <code>scripts/bench_reasoning.py</code> already replays both trial
+            targets. Add an ε-noise wrapper around the simulated answerer
+            (flip yes↔no with ε ∈ {0, 5%, 10%, 20%}) and report
+            queries-to-converge distributions per engine version. Fig 1 then
+            stops being hand-collected: every engine change gets a curve, and
+            claims like "the direction layer helps" become measured instead of
+            vibed. (Per the gemma4 lesson, the simulator must be a strong
+            model — a weak simulated oracle is itself a noisy oracle with
+            unknown ε.)
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>G6 · Fatigue-aware stopping <span class="pill neutral">clinical</span></h3>
+          <p>
+            "Never self-end" is the right safety posture, but the literature's
+            cost-sensitive variants suggest a softer middle: once core slots
+            are determined, each further modifier question should have to
+            justify itself (expected gain vs. fatigue cost) — concretely, stop
+            enriching when/where/why and go to synthesis once the expected
+            utterance no longer changes. Aphasia fatigue is real; a 50-question
+            round is a failure even when it converges.
+          </p>
+        </div>
+      </section>
+
+      <!-- ======================================================== VERDICT -->
+      <section id="verdict">
+        <h2>Verdict</h2>
+        <div class="invariant">
+          <b>The architecture is the one the literature recommends</b> —
+          externalized belief, code-side policy, soft noise-tolerant scoring,
+          hard anti-repetition, explicit confirmation, clinical SCA framing.
+          Nothing structural needs to be torn up. The friction is concentrated
+          in <b>magnitudes</b> (counts and absolute thresholds standing in for
+          evidence measures: F1, F2) and in <b>two missing behaviors</b> —
+          information-gain question choice (G1) and verification under noise
+          (F4/G3). The direction layer and ⇄ Opposite are theory-consistent
+          and novel; they are also untrialed, and the kitchen-target re-run is
+          the experiment that judges them.
+        </div>
+        <h3>Watch in the next trial</h3>
+        <ul>
+          <li>Does the sign-flip nudge surface <em>them-for-me</em> within ~10
+            questions on the kitchen target (vs. never in 52)?</li>
+          <li>Does the caregiver reach for ⇄ Opposite unprompted, and does the
+            flipped question read naturally aloud?</li>
+          <li>Do the F4/F5 frictions bite visibly — a blocked legitimate drill
+            (watch for diagnostics after gate rejections), or a rotation-forced
+            lateral mid-ladder?</li>
+          <li>Round length vs Fig 2's bound: with ~5 live contenders per slot
+            and 2 core slots, a clean run should converge in well under 20
+            questions. Over 30 means F1–F3 are costing real bits.</li>
+        </ul>
+      </section>
+
+      <!-- ======================================================== SOURCES -->
+      <section id="sources">
+        <h2>Sources</h2>
+        <p style="font-size:13px;color:var(--ink-soft)">
+          Retrieved during the June 10 research pass (session log); synthesis
+          first recorded in <code>docs/design/reasoning-retro.md</code> §8.
+        </p>
+        <h3>Information theory &amp; game theory</h3>
+        <ul>
+          <li><a href="https://arxiv.org/abs/1611.01655">Dagan, Filmus, Gabizon, Moran — “Twenty (simple) questions” (STOC 2017)</a> — Huffman-code optimality; H(π) ≤ E[#questions] &lt; H(π)+1; restricted question sets.</li>
+          <li><a href="https://arxiv.org/abs/1811.02177">Dagan, Filmus, Kane, Moran — “The entropy of lies: playing twenty questions with a liar”</a> — the Rényi–Ulam setting; the price of unreliable answers.</li>
+          <li><a href="https://arxiv.org/abs/1306.1922">Tsiligkaridis, Sadler, Hero — “Collaborative 20 Questions for Target Localization”</a> — noisy 20Q; bisection-style policies under answer noise.</li>
+          <li><a href="https://arxiv.org/abs/2106.01737">“Optimal sets of questions for Twenty Questions”</a> — structured/limited question families.</li>
+        </ul>
+        <h3>LLM question-asking</h3>
+        <ul>
+          <li><a href="https://arxiv.org/abs/2310.01468">“Probing the Multi-turn Planning Capabilities of LLMs via 20 Question Games”</a> — the entity-deduction testbed; repetition / premature guessing / weak use of negative answers.</li>
+          <li><a href="https://arxiv.org/html/2406.17453v1">“Learning to Ask Informative Questions: Enhancing LLMs with Preference Optimization and Expected Information Gain”</a> — EIG-scored candidate questions; binary questions are best when they split the space in half.</li>
+          <li>Hu et al. — “Uncertainty of Thoughts” (UoT) — uncertainty-aware planning for information seeking: simulate answer branches, pick the question with maximal expected uncertainty reduction; the source of the “LLMs cannot track belief implicitly — externalize it” design rule cited in retro §8.</li>
+          <li><a href="https://arxiv.org/pdf/2603.05909">“InfoGatherer: Principled Information Seeking via Evidence Retrieval and Strategic Questioning”</a> — two-stage uncertainty objective (reduce ambiguity, then discriminate competitors) — cf. our probe-then-split ordering.</li>
+          <li><a href="https://arxiv.org/html/2509.19593">“GuessingGame: Measuring the Informativeness of Open-Ended Questions in LLMs”</a>, <a href="https://arxiv.org/html/2511.08798v1">“Structured Uncertainty guided Clarification for LLM Agents”</a>, <a href="https://arxiv.org/pdf/2502.04485">“Active Task Disambiguation with LLMs”</a> — further reading on uncertainty-guided clarification.</li>
+        </ul>
+        <h3>Clinical (aphasia / AAC)</h3>
+        <ul>
+          <li><a href="https://www.aphasia.ca/communication-tools-communicative-access-sca/">Aphasia Institute — Supported Conversation for Adults with Aphasia (SCA™)</a> — the interaction frame the whole tool operates in.</li>
+          <li><a href="https://www.aphasia.com/aphasia-library/caregiver/communication-tips/using-yes-or-no-questions/">The Aphasia Library — Using yes/no questions</a> — one question at a time; time to respond; verify; don't rely on yes/no alone.</li>
+          <li><a href="https://www.flintrehab.com/yes-no-questions-for-aphasia/">Flint Rehab — Yes-no questions for aphasia</a> — general→specific progression; fixed-choice as the step beyond yes/no.</li>
+          <li><a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC6337868/">Supported conversation with familial caregivers (pilot, PMC6337868)</a> — caregivers rate yes/no questions, written keywords, shared floor, and response time as the most helpful strategies.</li>
+          <li><a href="https://www.expressable.com/learning-center/adults/12-ways-to-communicate-with-someone-with-aphasia">Expressable — 12 ways to communicate with someone with aphasia</a>.</li>
+        </ul>
+      </section>
+
+      <footer>
+        my20Q · 20-questions literature &amp; game-theory audit · compiled
+        2026-06-11 against engine v2 (5W1H facet controller + direction layer +
+        opposition button) · figures are inline SVG, no external assets
+      </footer>
+    </main>
+  </body>
+</html>

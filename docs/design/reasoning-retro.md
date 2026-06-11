@@ -22,6 +22,19 @@ near-duplicate of its source by design. Failure is soft: audit reject /
 unreachable model leaves the pending question untouched (409 in the
 cockpit). 176 tests pass.
 
+**Literature audit (same day).** The June-10 research notes (20Q game
+theory, LLM question-asking, SCA practice) are now a standalone illustrated
+review + audit of this engine:
+[`20q-research-audit.html`](20q-research-audit.html). Conclusions in brief —
+architecture matches the literature (externalized belief, soft noise-tolerant
+scoring, split directive, confirmation turns); the frictions are count-based
+synthesis gates vs posterior-style stopping, absolute thresholds on an
+unnormalized scale, no EIG at question level, a repeat gate that also outlaws
+*verification* re-asks, and the rotation guard cutting drill ladders; the
+ranked gaps are EIG candidate selection, an answer-noise model calibrated
+per patient from the recorded dataset, verify turns, a coarse→fine ladder
+within slots, a noisy-answerer bench, and fatigue-aware stopping.
+
 ### 8. The 5W1H facet rebuild — consensus boards, restart recovery, no more banks (2026-06-10)
 
 Two more live trials against the target *"I need Zach to help move a large

@@ -59,7 +59,10 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
   turn; and the cockpit gains the **⇄ Opposite button** (key `o`) — re-render
   the pending question in its opposite connotation, an action, not an answer.
   Every knob is env-tunable. Mechanism + known risks: `tool-summary.html`
-  (local) and `docs/design/reasoning-retro.md` §8–§9.
+  (local) and `docs/design/reasoning-retro.md` §8–§9. How the engine measures
+  against actual 20-questions game theory (entropy bounds, Rényi–Ulam noise,
+  LLM question-asking research, SCA practice):
+  [`docs/design/20q-research-audit.html`](docs/design/20q-research-audit.html).
 - **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
   graph write path).
 
