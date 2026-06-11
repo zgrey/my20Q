@@ -136,18 +136,40 @@ fluent when present. Three root causes found in the slot data, and the plan:
    down <slot>"); reject rephrases that near-dup a rejected utterance.
 
 *P1 (the strategy gap gemma3 exposed)*
-4. **Coarse-before-fine ladder** — 52 questions never tested the my_people
-   bucket "they do something for me"; gemma3 enumerated remind-contents
-   (dinner→memory→appointment→medicine→BP…) instead of splitting action
-   types. Fix: per-topic `seed_slots` in topics.yaml guarantee the four
-   bucket values exist as "how" contenders; probe directive prefers the
-   broadest contender when the slot has no positive.
+4. **The DIRECTION layer — coarse buckets + the "opposite" sign flip**
+   (owner-directed, 2026-06-10). 52 questions never tested "Rob does
+   something for ME": ≥25 of the noes were mirror-image questions (Paula
+   doing/telling something FOR Rob) that were perfect for a flipped target —
+   the engine read each as "wrong content" when the signal was "right
+   person, wrong DIRECTION". Design:
+   - my_people gets `direction: true`; the four intent buckets become
+     standing "how" contenders with a code-level MIRROR map (I-do-for-them ↔
+     they-do-for-me; tell-them ↔ ask-them).
+   - A deterministic CODE classifier labels each question's direction from
+     its text + the tagged who-name ("do you want ROB to…" = them-for-me;
+     "do you want to bring ROB…" = me-for-them; none when ambiguous) —
+     buckets are credited exclusively by the classifier, never by model tags
+     (bucket phrases are stopword-heavy; mention-anchoring can't see them).
+   - Crediting: yes/kinda also credit the matching bucket; a **no whose
+     who-anchor is positive adds a +0.5 nudge to the MIRROR bucket** (the
+     sign flip — a no on one pole of a binary attribute is soft evidence for
+     the other pole; noisy-oracle discount keeps it at kinda-strength). The
+     asserted bucket takes no collateral damage (P0-1 protects it).
+   - **Caregiver prior, hardcoded as ASK-ORDER not score**: profile gains a
+     `caregivers:` list; when the who-leader is a caregiver and no bucket is
+     positive, the FIRST how-probe tests "they do something for me" (prompt
+     note: caregivers offer care as tasks — test that direction first, do
+     NOT assume it). No unearned points → the honest tile stays honest, and
+     genuine concern ABOUT a caregiver (why/what contenders, e.g. "worried
+     about Rob") is never suppressed — one no on the care-task probe and the
+     flip evidence redirects normally.
 5. **Stalled-progress restart** — sparse kindas kept resetting the 10-no
    streak (runs of 9/10/12). Add: restart when no pair has crossed +1 in the
    last N≈8 answered queries.
 6. **Futility guard** — K≈4 consecutive noes on questions sharing one anchor
    pair ⇒ next directive bans that contender for a turn ("stop guessing
-   remind-contents; test a different action type").
+   remind-contents; test a different action type"). With the flip nudges the
+   redirect has a destination: the mirror bucket is already rising.
 
 *P2 (observability + regression)* — record seed values, restart snapshots,
 and the final board in the round record; bench scenarios for both trial
