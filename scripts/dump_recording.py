@@ -32,14 +32,18 @@ def dump(path: str) -> None:
                     print(f"             preface: {q['preface']!r}")
                 if q.get("rationale"):
                     print(f"             rationale: {q['rationale']!r}")
+                if q.get("slots"):
+                    extra = f"  focus={q['focus']}" if q.get("focus") else ""
+                    print(f"             slots: {q['slots']}{extra}")
+                elif q.get("focus"):
+                    print(f"             slots: (none){'  focus=' + q['focus']}")
+                # legacy fields (pre-2026-06-10 recordings)
                 if q.get("yes_ids"):
                     print(f"             yes_ids: {q['yes_ids']}")
                 if q.get("new_need"):
                     print(f"             new_need: {q['new_need']!r}")
                 if q.get("seeds"):
                     print(f"             seeds: {[s.get('need') for s in q['seeds']]}")
-                if q.get("added"):
-                    print(f"             added: {q['added']}")
                 if q.get("hypotheses"):
                     top = [
                         f"{h.get('need')}={h.get('weight')}"

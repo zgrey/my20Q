@@ -102,6 +102,58 @@ cockpit builds. **Watch in the next trial:** does the board's what-slot fill
 early on the picture target; do diagnostics ever appear in normal operation
 (they should be rare); does gemma4:e4b's preface now read as one sentence.
 
+**First facet-engine trials (2026-06-10 evening) + the v2 plan.** gemma4:e4b
+**synthesized the picture target** ("I need Zach to come over later today so he
+can help me move and hang up some of my artwork…", 37 q — first success on
+this target). gemma3:12b failed "I need Rob to clean the kitchen" (52 q, 46
+no / 2 yes / 4 kinda, ZERO synthesis proposals, abandoned). What worked: slot
+tagging on 52/52 and 37/37 queries, no phantom subjects (anchoring held), no
+canned questions, the fail-loop restart recovered gemma3 mid-round, prefaces
+fluent when present. Three root causes found in the slot data, and the plan:
+
+*P0 (fix the observed loops)*
+1. **Collateral no-damage** — gemma3 tagged "Rob" on 29 NO answers (vs 4
+   positives): every "tell/remind Rob about X?"→no subtracted from the
+   CONFIRMED who anchor as well as the guessed content; Rob/spouse/remind all
+   got buried → scorched-earth board → rudderless enumeration. Fix:
+   asymmetric crediting — yes/kinda credit all tagged pairs; a **no subtracts
+   only from the lowest-scoring tagged pair** (positives protected unless
+   solely tagged). (Noisy-oracle 20Q: blame the marginal hypothesis, never
+   destroy accumulated consensus on one answer.)
+2. **what/how category confusion + confirmation farming** — gemma4 put
+   actions in "what" ("help with tasks" +6 in WHAT) so "how" never
+   established → the policy probed how 17× while the vague what-leader fueled
+   the kinda-loop; Zach reached +7.5 on re-confirmations and zero-info yeses
+   kept satisfying the resynthesis gate. Fix: slot one-liners in the FORMAT
+   prompt + code re-map of verb-led "what" values to "how"; a yes only counts
+   toward the synthesis gates if it was INFORMATIVE (credited pair below
+   ready_points before); ask Gate-4 rejects questions whose every tagged pair
+   is already a confident leader; is_repeat adds content-token Jaccard ≥0.8.
+3. **Kinda-utterance loop** — 16 near-identical kinda utterances across 5
+   attempts; the caregiver again had to type "FOCUS on WHAT". Fix: kinda ⇒ at
+   most ONE rephrase, then back to questioning with focus FORCED to the
+   weakest slot used in the rejected utterance (+ prompt note "close — pin
+   down <slot>"); reject rephrases that near-dup a rejected utterance.
+
+*P1 (the strategy gap gemma3 exposed)*
+4. **Coarse-before-fine ladder** — 52 questions never tested the my_people
+   bucket "they do something for me"; gemma3 enumerated remind-contents
+   (dinner→memory→appointment→medicine→BP…) instead of splitting action
+   types. Fix: per-topic `seed_slots` in topics.yaml guarantee the four
+   bucket values exist as "how" contenders; probe directive prefers the
+   broadest contender when the slot has no positive.
+5. **Stalled-progress restart** — sparse kindas kept resetting the 10-no
+   streak (runs of 9/10/12). Add: restart when no pair has crossed +1 in the
+   last N≈8 answered queries.
+6. **Futility guard** — K≈4 consecutive noes on questions sharing one anchor
+   pair ⇒ next directive bans that contender for a turn ("stop guessing
+   remind-contents; test a different action type").
+
+*P2 (observability + regression)* — record seed values, restart snapshots,
+and the final board in the round record; bench scenarios for both trial
+targets; rationale jargon nudge. `scripts/dump_recording.py` now prints
+slots/focus.
+
 ### 7. Trial autopsy + simplification — restoring gemma3 (2026-06-09)
 
 Two live trials: **feelings/gemma4 succeeded** (40 q, 8 yes → synthesized; allowed
