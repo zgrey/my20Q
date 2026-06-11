@@ -41,15 +41,25 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
   **repeat gate** (no reworded re-asks, ever), and slot anchoring. Synthesis
   **weaves the slot leaders into one natural sentence** (placeholders for
   unknown slots) once the yes-gate or board-readiness clears; a rejected
-  utterance is **rephrased**, and repeated misses / a long "no" streak / a
-  reasoner fail-loop all trigger the **restart recovery** — dump every
-  no/kinda influence, keep caregiver context + this round's confirmed yeses
-  (round-specific by construction), add fresh broad probes. There are **no
-  canned fallback questions**: a turn that still can't produce a question
-  surfaces a **diagnostic card** (reason + Retry) instead. The only model-side
-  terminator is a **"yes" to a proposed utterance**. Every knob is env-tunable.
-  Mechanism + known risks: `tool-summary.html` (local) and
-  `docs/design/reasoning-retro.md` §8.
+  utterance is **rephrased**, and repeated misses / a long "no" streak /
+  stalled board progress / a reasoner fail-loop all trigger the **restart
+  recovery** — dump every no/kinda influence, keep caregiver context + this
+  round's confirmed yeses (round-specific by construction), add fresh broad
+  probes. There are **no canned fallback questions**: a turn that still can't
+  produce a question surfaces a **diagnostic card** (reason + Retry) instead.
+  The only model-side terminator is a **"yes" to a proposed utterance**. The
+  v2 layer (June 2026): crediting is **asymmetric** (a "no" hits only the
+  lowest-scoring tagged pair — confirmed anchors survive wrong guesses); only
+  an **informative yes** advances the synthesis gates (no confirmation
+  farming); a "kinda" on an utterance gets ONE rephrase, then focus **pins**
+  to its weakest slot; person topics get a **direction layer** — four intent
+  buckets (do-for-them / them-for-me / tell / ask) credited by a code
+  classifier, where a "no" with a confirmed who-anchor nudges the **mirror
+  bucket** (the sign flip); a **futility guard** bans a 4-no avenue for a
+  turn; and the cockpit gains the **⇄ Opposite button** (key `o`) — re-render
+  the pending question in its opposite connotation, an action, not an answer.
+  Every knob is env-tunable. Mechanism + known risks: `tool-summary.html`
+  (local) and `docs/design/reasoning-retro.md` §8–§9.
 - **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
   graph write path).
 
@@ -139,6 +149,10 @@ and CLI):
 - **kinda** — warmer; close to the target
 - **not sure** — no information; try a different axis
 
+Plus one *action* (not an answer): **⇄ Opposite** re-renders the pending
+question with its connotation reversed — who-does-for-whom mirrored, or the
+key detail flipped — and waits for an answer to *that*.
+
 ## Environment
 
 | Env var | Default | Purpose |
@@ -156,6 +170,7 @@ and CLI):
 | `MY20Q_SYNTH_ATTEMPTS` | `2` | failed synthesis attempts before the restart recovery |
 | `MY20Q_EXPLORE_DECAY` | `0.67` | exploration probability = base^(yeses+1) |
 | `MY20Q_SOFT_RESET_NOS` | `10` | consecutive "no"s that trigger the restart recovery |
+| `MY20Q_STALL_WINDOW` | `8` | answered queries with zero board progress → restart (0 = off) |
 | `MY20Q_FACET_READY` | `2.0` | points a slot leader needs to count as determined |
 | `MY20Q_SPLIT_MARGIN` | `1.0` | top-two contenders closer than this are tied → split question |
 | `MY20Q_MODE` | training | Dialogue mode |

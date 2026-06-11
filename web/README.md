@@ -46,7 +46,7 @@ not just in the reasoning tile).
 │ │   transcript + live  │ │   consensus board + │ │
 │ │   query / synthesis  │ │   SSE + sliders     │ │
 │ ├──────────────────────┤ │                     │ │
-│ │ 3 Input  y/n/k/s/u/q │ │                     │ │
+│ │ 3 Input y/n/k/s·⇄o·u/q│ │                    │ │
 │ └──────────────────────┘ └─────────────────────┘ │
 └────────────────────────────────────────────────────┘
 ```
@@ -62,6 +62,12 @@ renders one row per slot: contender chips with raw points (leader bolded,
 negatives dimmed), the currently-targeted slot pulsing (from `event.facets`).
 When reasoning fails, the conversation tile shows a **diagnostic card** with
 the failure reason and a **Retry** button — never a canned question.
+
+**⇄ Opposite** (in the input tile's action row): re-renders the pending
+question in its opposite connotation — who-does-for-whom mirrored, or the key
+detail reversed — and keeps waiting. An *action*, not an answer: nothing is
+recorded until the flipped question is answered, and a failed flip leaves the
+question untouched.
 
 **Emotion sliders** (in the reasoning tile): ten opposed-emotion pairs, each a
 coarse 5-detent scale (strong/mild each side + neutral) with large pole labels.
@@ -82,8 +88,9 @@ highlighted and auto-scrolls into view, descending one pair at a time:
 
 ## Keyboard shortcuts
 
-`Y` yes · `N` no · `K` kinda · `S` not sure · `U` undo · `Q` new round.
-Ignored while the caregiver-context field is focused, and in Review mode.
+`Y` yes · `N` no · `K` kinda · `S` not sure · `O` opposite (flip) · `U` undo ·
+`Q` new round. Ignored while the caregiver-context field is focused, and in
+Review mode.
 
 ## Backend down?
 
