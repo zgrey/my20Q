@@ -1,0 +1,422 @@
+# Convergence Plan (v3) — closing the gap between 95 questions and ~20
+
+Owner-directed plan, 2026-06-11. Successor to the v2 plan (retro §8 tail);
+grounded in the [20Q literature audit](20q-research-audit.html) and the
+**June 11, 9:25 AM dishes round** — the first live round on the v2 engine.
+
+> **Protocol.** Proposals are iterated **one at a time with the owner before
+> any implementation**. Each carries a `Status:` line that moves
+> `PROPOSED → AGREED (date, amendments) → IMPLEMENTED (commit) → VALIDATED
+> (trial/bench)`. Nothing below is built until its status says AGREED.
+> Exception: W1-A codifies a decision the owner already made and announced.
+
+---
+
+## 1. Evidence — autopsy of the 06-11 dishes round
+
+`my_people`, gemma4:e4b, target ≈ *"remind Rob to do the dishes"*. Outcome:
+**synthesized** — *"I need to tell Rob that we really need to make a reminder
+about doing the dishes around our home later."* Cost: **95 queries**,
+9 proposed utterances across 7 synthesis attempts, **8 restarts**
+(5 fail-loop, 2 stalled, 1 synthesis-exhausted), 1 diagnostic card,
+5 ⇄ flips. Answer mix: 43 yes / 32 no / 18 kinda / 2 not-sure.
+
+What *worked* (the v2 machinery held):
+
+- Direction layer labeled questions correctly (`tell_them` dominated — the
+  target was in fact a tell/remind); the ⇄ button was used five times and
+  every flip rendered, re-anchored, and re-classified cleanly.
+- The informative-yes flag correctly marked **11 farming yeses** as
+  zero-information — they earned points but never advanced the gates.
+- Slot anchoring held: no phantom subjects; the final board is sane
+  (who: Rob +25.5; how: "tell them something" +11).
+- It **converged**, where the 06-10 kitchen round (52 q) never proposed at all.
+
+What burned the 95 queries — six named pathologies:
+
+**A1 · The stale weave (coarse→fine failure — audit G4).** The what-slot
+leader was *"something related to keeping our house tidy"* (+6) from q14
+onward. Every more specific value confirmed later — "a task" (+3), "new
+supplies for cleaning" (+2), "something we need to clean up" (+2), "a
+specific cleanup task" (+1.5), and finally **"dishes" (+1)** — entered as a
+flat *rival* that had to out-score the coarse incumbent and never could. So
+all seven proposals wove the same vague phrase; the last **five proposals
+carried byte-identical slot sets**, and four of them were re-rejected
+("kinda") for exactly the vagueness the board already knew about. The final
+"yes" happened only because the *model's prose* said "doing the dishes"
+while the recorded slots were still the stale coarse set.
+
+**A2 · The focus metronome (audit F5/F2 + a hole the audit missed).**
+`my_people` core = who+how. After q31, focus was **never `what` again — for
+64 straight queries** — while `what` was precisely where the unknown lived.
+Mechanism: `what` is non-core (drill ranks core only), it had a positive
+leader (probe skips it), and its top-two were not tied (split skips it) —
+**a non-core slot with any positive leader is unreachable**. Same hole the
+owner observed for `where`/kitchen: `where` got exactly one focused question
+(q7) all round. Meanwhile `who` — decided at +10, ultimately **+25.5** —
+kept receiving drills (~14 in the tail, e.g. q83 "Is this reminder about
+something he usually handles?") because the rotation guard
+(`MAX_CATEGORY_RUN=2`) forces an alternation between exactly two core slots:
+`how, how, who, how, how, who, …` verbatim in the trace. **Confident slots
+never retire; non-core slots can never be drilled.**
+
+**A3 · Caregiver steering has no channel (new — F7).** Mid-round note:
+*"The 'when' does not seem important. We need to focus on specifically
+'what' she is requesting."* The engine (a) did **not** change focus — the
+next focused slots were why, how, how — and (b) `expand_slots` extracted
+`{'when': ['later']}` from the note, **crediting +2 to the very slot the
+caregiver said to ignore** ('later' ended the round at +3 mostly on the
+strength of a note that meant the opposite). This is the second consecutive
+trial in which the caregiver had to type "focus on WHAT" and the first where
+we can see the note actively backfire. Notes are treated as evidence about
+*values*; there is no path for them to carry *directives*.
+
+**A4 · Decisive answers wasted by tag choice (audit G1's cheap half).**
+q93 *"Are you talking to Rob about cleaning up dishes?"* → **yes** — the
+round-winning fact — was tagged `{who: Rob, how: cleaning up}` (both long
+established), so the yes was flagged informative=False and **"dishes" was
+never credited**. The answer had to be re-earned at q95. The formatter tags
+what it considers salient; nothing prefers *unestablished* mentioned values.
+Related fragmentation: `who` carried "Rob" +25.5 **and "him" +10** as
+separate contenders (pronouns don't fold); `when` split across
+later/today/after-dinner/by-the-end-of-the-day (+3/+1/+1/+1).
+
+**A5 · Late-round gate choking (audit F4/F1/F2).** Five fail-loop restarts
+and one diagnostic, all in the dense tail: with ~90 questions in the asked
+list and most pairs established, the intersection of "not a repeat
+(Dice ≥ 0.8)" and "not zero-information (Gate 4)" became so small the ask
+loop kept exhausting retries. Each fail-loop restart **dumps kinda/no
+influence — which repeatedly erased the +0.5-strength fine-grained signal
+(A1's challengers) while the coarse yes-built incumbent survived**, further
+entrenching the stale weave. The gates that protect a short round strangle a
+long one; thresholds are absolute while the round grows (F2).
+
+**A6 · Synthesis re-proposals with nothing new (audit F1).** Attempts 4–7
+re-proposed without the weave changing (see A1). A count of new yeses
+(`new_yes_for_resynthesis=3`) permits re-proposal even when every new yes
+landed on already-woven pairs — the gate measures *answers collected*, not
+*utterance changed*.
+
+Waste accounting (conservative): ~14 who-re-drills + 11 uninformative-yes
+questions + ~6 when-farming + 4 stale re-proposals with their rephrase/pin
+cycles + fail-loop churn ≈ **35–45 of 95 queries were policy waste**, before
+counting second-order effects (every wasted query also grows the asked-list
+that feeds A5). A Wave-1-only engine plausibly runs this round in ≤ 40; the
+literature bound (Fig 2 of the audit) for ~5 live contenders × 2-3 open
+slots is high single digits.
+
+---
+
+## 2. How the queue is ordered
+
+Three sorting keys, in order:
+
+1. **Queries saved per unit risk** — measured against this autopsy, not
+   hypothetically. A2/A6 fixes are pure waste-removal with small surface
+   area; they go first.
+2. **Information before structure** — make every question and every answer
+   count (Wave 2) before changing the belief structure (Wave 3): structural
+   changes are easier to judge on top of a non-wasteful baseline, and the
+   bench (W2-G) must exist before the big rebuild lands.
+3. **Owner-visible pain first** — A3 (the ignored "focus on what" note) is
+   small, twice-observed, and corrodes trust in the tool; it outranks
+   abstractly-better items.
+
+Dependencies: W3-H (refinement links) supersedes parts of W1-B's vagueness
+ranking and W1-C's weave-change test — both are written to degrade
+gracefully into it. W2-G (bench) gates *validation* of everything after it.
+
+---
+
+## 3. The queue
+
+### W1-A · Rephrase budget default → 1 — Status: AGREED (owner, 06-11) → IMPLEMENTED
+
+Owner: multiple rephrasings of a rejected utterance are useless; one
+"minor perturbation" is the most that helps. The kinda path already caps at
+one (v2); this drops the **default** `rephrase_limit` 3 → 1 so "no" gets the
+same budget and the shipped default matches the validated setting.
+Evidence here agrees: across 9 utterances, no second-or-later rephrase of an
+attempt was ever the one confirmed. Touches: `config.py` default, README /
+tool-summary tables. Risk: none (env-overridable).
+
+### W1-B · Focus policy v3 — retire, widen, rotate-on-stall — Status: PROPOSED
+
+**Problem (A2).** Confident slots keep soaking focus; non-core slots with a
+positive leader are unreachable; the rotation guard manufactures a
+two-slot metronome.
+
+**Proposal — three coordinated rules in `_pick_focus`:**
+
+1. **Retirement.** A slot whose leader is *decisively* confident — leader ≥
+   `facet_ready_points` AND margin over runner-up ≥ 2 ×
+   `facet_split_margin` (tunable multiplier, `MY20Q_RETIRE_MARGIN_X`,
+   default 2.0) — is **retired from probe/drill/pin**. It remains
+   split-eligible (a genuine re-tie reopens it) and fully creditable;
+   restarts rebuild the board, which can naturally un-retire. In this round
+   `who` retires around q15 and `how` by ~q45 — the metronome's two
+   stations close.
+2. **Drillable = any live slot with signal.** The drill/pin candidate pool
+   becomes: non-retired slots with a positive leader, **core or not**,
+   ranked by *least confident first* (smallest margin-to-ready), core slots
+   winning ties. `what` (+6 but vague) and `where` (+2, exactly the
+   kitchen case) become drillable the moment they have signal. Probe
+   priority (coverage of empty core slots) is unchanged.
+3. **Rotate on stall, not on count.** `MAX_CATEGORY_RUN` stays as the
+   *default* rotation, but a drill/pin may extend its run while it is
+   *working*: if the last same-slot question was answered yes or kinda
+   (the leader moved), a 3rd+ consecutive turn on that slot is allowed.
+   Two misses in a row → forced rotation as today. (Restores the
+   body→leg→foot→toe ladder that `MAX_CATEGORY_RUN=2` currently cuts,
+   without re-enabling 20-question why-hammering — hammering is a *stall*,
+   and stalls rotate.)
+
+**Touches:** `dialogue._pick_focus` (+ helpers), `config.ReasoningTuning`
+(one knob), tests. No prompt changes; no board-math changes.
+
+**Risks.** Early mis-retirement of a wrongly-confident slot → mitigated by
+the 2× margin, split-eligibility, and restarts. Widened drill pool could
+chase modifier slots too early → mitigated by "core wins ties" and
+probe-first priority. Interaction with W3-H: rule 2's "least confident
+first" later refines into "shallowest frontier first" — forward-compatible.
+
+**Acceptance.** Unit: focus-sequence replays (retired slot never focused;
+what drillable in the A2 scenario; ladder of 3 allowed while rising). Trial:
+no focused question on a slot whose leader is ≥ 2×-confident; `what`/`where`
+receive drills in a people round.
+
+### W1-C · Synthesize only when the weave changes — Status: PROPOSED
+
+**Problem (A6/A1).** Five byte-identical proposals; four needless
+rejections. The resynthesis gate counts new yeses; it never asks whether
+the *utterance would differ*.
+
+**Proposal.** `_propose_synthesis` computes the weave slots (leaders) before
+calling the LLM; if they are **identical to the last rejected attempt's
+weave** (same category→value map), skip synthesis and keep questioning —
+exactly like the existing "rephrase near-dups a rejected utterance" bail.
+The yes-count gate stays as a *floor*; this adds a *change* requirement on
+top. One escape: if board-readiness holds AND the last rejection was ≥ N≈8
+answered queries ago, allow one re-proposal anyway (the caregiver may have
+mis-tapped the rejection; do not lock synthesis out forever).
+
+**Touches:** `dialogue._advance`/`_propose_synthesis` (one comparison + the
+escape), tests. **Risks:** with W3-H not yet landed, the weave can stay
+stale for a while (A1's root cause is untreated) — this proposal converts
+that staleness from "re-propose the same sentence" into "keep questioning",
+which is strictly better but highlights H's urgency. **Acceptance:** replay
+of this round produces ≤ 3 proposals; no two consecutive proposals with
+identical weaves.
+
+### W1-D · Caregiver directive channel — Status: PROPOSED
+
+**Problem (A3).** "Focus on X / ignore Y" notes neither steer focus nor are
+protected from being mis-read as evidence (the `when:'later'` +2 credit from
+a note saying when doesn't matter).
+
+**Proposal.** In `Round.add_context`, before `expand_slots`:
+
+1. **Deterministic directive parse** (code, no LLM): detect slot mentions
+   (who/what/when/where/why/how + obvious synonyms: "person", "timing",
+   "place", "reason") combined with a small verb set —
+   *focus on / zero in on / ask about / pin down* → `forced_focus = (slot,
+   ttl=3 focused turns)`; *ignore / skip / doesn't matter / not important* →
+   `muted.add(slot)`. Muted slots: excluded from probe/drill/pin AND from
+   synthesis placeholders (omitted, not "someone/soon"); mute persists for
+   the round, cleared if the caregiver later directs focus there.
+2. **Directive notes do not become evidence.** If the note parses as a
+   directive and contains no concrete value outside the directive clause,
+   skip `expand_slots` entirely (no +2 credits from meta-instructions). A
+   mixed note ("ignore when — it's about the kitchen") still extracts
+   values from the non-directive remainder.
+3. `_pick_focus` honors `forced_focus` ahead of priority 0 (pin) while ttl
+   lasts; each focused turn decrements ttl. The reasoning tile note: the
+   forced slot renders with the existing focus pulse (no UI change needed).
+
+**Touches:** `dialogue` (parse + two fields + `_pick_focus` head), tests.
+Prompt: one line in the deliberate context noting the caregiver directed
+focus (so the model doesn't fight it). **Risks:** false-positive directive
+detection on ordinary notes — the verb set is strict and a slot word must
+co-occur; worst case a note that *also* carried values loses its +2 (the
+values still surface through subsequent questioning). **Acceptance:**
+replaying A3's note yields forced what-focus for 3 turns, `when` muted, no
+`when` credit; an ordinary note ("she pointed at the kitchen") behaves as
+today.
+
+### W2-E · Candidate selection + tag rescue + pronoun folding — Status: PROPOSED
+
+**Problem (A4, audit G1-cheap).** The single formatted question wastes
+turns; model tag choices can squander decisive answers (q93's dishes);
+pronouns fragment the who-slot.
+
+**Proposal.**
+
+1. **3-candidate format.** The FORMAT pass returns up to three candidate
+   questions (same JSON, `candidates: [...]`), one call. Code picks: prefer
+   candidates asserting ≥ 1 unestablished pair; among those, the candidate
+   whose asserted pair's current score is closest to the slot's live median
+   score (the cheap p≈½ proxy from the audit); run the four gates on the
+   winner only; fall back to the next candidate on gate rejection (saving
+   re-prompt round-trips — today's corrections loop becomes the fallback,
+   not the first resort).
+2. **Tag rescue.** After `_anchored_slots`, if every kept pair is
+   established but the question text *mentions* an unestablished board value
+   (or a novel content noun in the focus slot), swap the weakest established
+   tag for that pair. q93 then credits `what: dishes` and its yes is
+   informative.
+3. **Pronoun folding.** A who-value in the pronoun set folds onto the
+   positive who-leader when exactly one exists ("him" → Rob; ambiguous
+   boards don't fold).
+
+**Touches:** `prompts.FORMAT_SYSTEM` (+candidates), `reasoner.ask`
+(selection + rescue), `facets.canonical_value` (pronouns), tests.
+**Risks:** candidate JSON adds tokens (cap 3, short); median proxy is crude
+(monotone toward even splits — good enough until true EIG); pronoun folding
+wrong in multi-person rounds (guarded: only with a unique positive leader).
+**Acceptance:** bench shows fewer gate re-prompts per query; a q93-style
+replay credits the unestablished mention; "him/he" no longer appear as
+who-contenders alongside a named leader.
+
+### W2-F · Verify turns + slot-aware repeat exemption — Status: PROPOSED
+
+**Problem (audit F4/G3; A5 contributes).** No verification path exists under
+noise; the Dice channel also blocks legitimate new-slot drills that share an
+anchor ("Will Zach come over **today**?" ≈ 0.86 vs "Will Zach come over?").
+
+**Proposal.**
+
+1. **Verify turn.** Before a pair with own score in [1, 2) is woven into a
+   proposal, the round may issue ONE gate-exempt verify question for it
+   (reasoner one-shot, like flip: "Just to double-check — …?"), marked
+   `verify: true` in history; budget ≤ 2 per round; never re-verify a pair
+   answered yes twice. A "no" on verify halves the pair's score (it does
+   not eliminate — noise cuts both ways).
+2. **Repeat-gate slot exemption.** A candidate matched ONLY by the Dice
+   channel (not normalized/ratio) passes when it asserts a slot category
+   absent from the matched prior's asserted slots. Narrow by construction;
+   the 7×-verbatim pathology stays blocked (normalized/ratio channels are
+   untouched).
+
+**Touches:** `dialogue` (pre-synthesis verify hook), `reasoner` (verify
+one-shot), `auditor.is_repeat` (exemption parameter), tests.
+**Risks:** verify turns cost queries (bounded: 2); exemption could readmit
+near-dups that swap one slot word — acceptable: they assert *new* slots.
+**Acceptance:** weaves built only from pairs with ≥ 2 confirmations or a
+passed verify; the "come over today" case passes the gate in unit tests.
+
+### W2-G · Noise bench — Status: PROPOSED
+
+**Problem (audit G5).** Every claim above is currently judged by single live
+trials. The autopsy in §1 was hand-made; it should be a script output.
+
+**Proposal.** Extend `scripts/bench_reasoning.py`: (a) ε-noise wrapper on
+the simulated answerer (flip yes↔no with ε ∈ {0, 0.05, 0.1, 0.2}; kinda
+unaffected); (b) fixture targets = the picture round, the kitchen round, the
+dishes round (from their recordings); (c) report per run: queries to
+converge, proposals, restarts, informative-yes ratio, focused-slot
+histogram, wasted-query estimate (the §1 metrics, automated); (d) a
+`--compare` mode diffing two engine revisions. Strong simulator only
+(gemma4-class or Anthropic on synthetic personas, per the privacy
+invariant).
+
+**Touches:** scripts only. **Risks:** none to the engine. **Acceptance:**
+one command reproduces §1's table for any recording or simulated run; W1
+fixes show a measured Δ on the dishes fixture.
+
+### W3-H · Refinement links — coarse→fine inside a slot — Status: PROPOSED
+
+**Problem (A1, audit G4 — the single biggest cost in this round).** Fine
+values fight the coarse value they refine; the weave stays vague; restarts
+erase the fine challengers' kinda-signal while the coarse incumbent
+survives.
+
+**Proposal sketch (to be detailed when its turn comes; key decisions
+flagged for iteration):**
+
+- Per-slot edge map `refines[child] = parent`, derived deterministically at
+  the moment a value first enters the board during replay (so undo stays
+  pop-and-recompute): child mentions ≥ 1 content token of parent, or the
+  formatter tags `refines` explicitly; ties broken toward the
+  highest-scored candidate parent; depth capped (≤ 3).
+- **Scoring stays additive and flat** (the honest tile unchanged); what
+  changes is *reading* the board: a slot's confidence = its best *subtree*
+  mass; the **weave value = the deepest descendant with own score ≥ 1**
+  (the frontier), not the root. The dishes round then weaves "a specific
+  cleanup task" by attempt 4 and "the dishes" at q93/q95.
+- Drill directive descends explicitly: "the confirmed idea is ⟨parent⟩;
+  test a more specific version like ⟨known children⟩ or a new one."
+- Restart keeps the *subtree structure* of yes-confirmed nodes (fixes the
+  erase-the-challengers effect, A5).
+- Open question for iteration: does a child's yes propagate a fraction
+  upward (subtree mass already covers reading; propagation would also
+  shield parents from W1-B retirement edge cases)?
+
+**Touches:** `facets` (edges, frontier, subtree reads), `reasoner`
+(formatter tag + drill prompt), `dialogue` (weave + restart), recorder
+(edges in board record), web reasoning tile (render frontier chain),
+tests — the largest item in the queue. **Risks:** wrong parentage
+(mitigation: edges affect reading, never scoring; a mis-parented child
+still wins on its own score); complexity. **Acceptance:** dishes-round
+replay weaves a specific value by the 3rd proposal; bench convergence Δ on
+all three fixtures; no honest-tile regression.
+
+### W3-I · Mass-scaled confidence checks — Status: PROPOSED
+
+**Problem (audit F1/F2; A5).** Absolute thresholds (ready 2.0 / margin 1.0 /
+floor −2) silently change meaning as the round grows.
+
+**Proposal.** Keep raw scores everywhere visible; change only the *checks*:
+`confident()`/`tied_top()`/retirement compare the leader's **lead fraction**
+(margin ÷ slot's total absolute mass, floored) against thresholds, with the
+old absolute behavior as the small-mass regime. Calibrate the two regimes so
+every existing unit test still passes on short rounds (back-compat by
+construction), then let the bench pick defaults for long rounds.
+
+**Touches:** `facets` checks + `config`, tests. **Risks:** subtle — gated on
+W2-G existing so the change is measured, not vibed. **Acceptance:** bench:
+fewer late-round fail-loops at unchanged early-round behavior.
+
+### W4-J · Fatigue-aware stopping — Status: PROPOSED
+
+**Problem (audit G6).** "Never self-end" is right, but the engine happily
+asks 95 questions; fatigue is a clinical cost the policy never sees.
+
+**Proposal.** Once every non-retired core slot is confident and the weave is
+stable (W1-C's comparison), modifier questions must justify themselves: stop
+probing/drilling modifiers whose answers cannot change the weave (their
+leader already woven, or muted via W1-D); surface a gentle cockpit cue
+("ready to propose") so the caregiver chooses proposal timing. No hard stop;
+the cap stays the only terminator.
+
+**Touches:** `dialogue` + one cockpit cue. **Risks:** premature proposals —
+mitigated: it's a cue, not a stop. **Acceptance:** simulated long rounds
+propose within ≤ 5 queries of weave-stability instead of farming modifiers.
+
+---
+
+## 4. Parked (explicitly not in this queue)
+
+- **Choice cards (either/or input)** — patient-surface phase; engine emits
+  `choice` queries then (audit F6 — a forced half-split, theory-optimal).
+- **Per-patient answer-noise calibration (full G2)** — needs more recorded
+  rounds; the dishes round alone added 95 labeled answers. Revisit after
+  W2-G exists and ~5 more rounds accumulate. The likelihood-ratio update
+  machinery rides in with W3-I when it comes.
+- **Full UoT-style EIG (answer simulation)** — W2-E's selection is the
+  cheap version; escalate only if the bench says question quality is still
+  the binding constraint after Waves 1–3.
+
+## 5. Status board
+
+| ID | Title | Status |
+|----|-------|--------|
+| W1-A | Rephrase default → 1 | **IMPLEMENTED** (owner-decided 06-11) |
+| W1-B | Focus v3: retire/widen/rotate-on-stall | PROPOSED |
+| W1-C | Synthesize only on a changed weave | PROPOSED |
+| W1-D | Caregiver directive channel | PROPOSED |
+| W2-E | Candidates + tag rescue + pronoun fold | PROPOSED |
+| W2-F | Verify turns + repeat exemption | PROPOSED |
+| W2-G | Noise bench | PROPOSED |
+| W3-H | Refinement links (coarse→fine) | PROPOSED |
+| W3-I | Mass-scaled confidence | PROPOSED |
+| W4-J | Fatigue-aware stopping | PROPOSED |

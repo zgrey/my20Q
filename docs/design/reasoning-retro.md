@@ -35,6 +35,21 @@ ranked gaps are EIG candidate selection, an answer-noise model calibrated
 per patient from the recorded dataset, verify turns, a coarse→fine ladder
 within slots, a noisy-answerer bench, and fatigue-aware stopping.
 
+**First v2 live round + the v3 queue (2026-06-11, 9:25 AM).** gemma4:e4b
+**synthesized** the dishes target on `my_people` — but in 95 queries, 7
+synthesis attempts, 8 restarts. Full autopsy + the prioritized,
+owner-iterated fix queue: [`convergence-plan.md`](convergence-plan.md).
+Headlines: the what-slot's coarse leader ("keeping our house tidy" +6)
+could never be displaced by its own refinements down to "dishes" (+1), so
+five proposals wove byte-identical vague slot sets; focus never returned to
+`what` after q31 (non-core + positive leader = unreachable) while `who`
+(+25.5) kept absorbing drills; the caregiver's "focus on WHAT, when doesn't
+matter" note steered nothing and was itself mis-credited as `when: later`
++2; q93's decisive "dishes" yes was tagged onto established pairs and
+wasted. The direction layer, ⇄ flips (used 5×), informative-yes flags, and
+anchoring all behaved. W1-A (rephrase_limit default → 1) implemented per
+the owner's same-day decision.
+
 ### 8. The 5W1H facet rebuild — consensus boards, restart recovery, no more banks (2026-06-10)
 
 Two more live trials against the target *"I need Zach to help move a large

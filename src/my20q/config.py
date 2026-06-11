@@ -29,7 +29,10 @@ class ReasoningTuning:
     new_yes_for_resynthesis: int = 3
     #: Rephrased utterances offered after the initial proposal within one synthesis
     #: attempt (so an attempt shows up to ``1 + rephrase_limit`` utterances).
-    rephrase_limit: int = 3
+    #: Default 1 (owner-validated 2026-06-11): when a proposal is close, ONE
+    #: minor perturbation is all that ever helps — further rephrases were
+    #: observed to be useless across trials.
+    rephrase_limit: int = 1
     #: Failed synthesis attempts (each = initial + rephrases, all rejected)
     #: tolerated before the round RESTARTS (dumps the no/kinda influence and
     #: rebuilds the board from caregiver context + this round's yeses).
@@ -71,7 +74,7 @@ class ReasoningTuning:
         return cls(
             min_yes_for_synthesis=_int("MY20Q_MIN_YES", 5, minimum=1),
             new_yes_for_resynthesis=_int("MY20Q_NEW_YES", 3, minimum=1),
-            rephrase_limit=_int("MY20Q_REPHRASE_LIMIT", 3, minimum=0),
+            rephrase_limit=_int("MY20Q_REPHRASE_LIMIT", 1, minimum=0),
             synth_attempts_before_restart=_int("MY20Q_SYNTH_ATTEMPTS", 2, minimum=1),
             explore_decay=_float("MY20Q_EXPLORE_DECAY", 2 / 3, lo=0.0, hi=1.0),
             soft_reset_no_streak=_int("MY20Q_SOFT_RESET_NOS", 10, minimum=1),

@@ -63,6 +63,9 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
   against actual 20-questions game theory (entropy bounds, Rényi–Ulam noise,
   LLM question-asking research, SCA practice):
   [`docs/design/20q-research-audit.html`](docs/design/20q-research-audit.html).
+  The prioritized fix queue derived from it (and from the 06-11 dishes-round
+  autopsy) is [`docs/design/convergence-plan.md`](docs/design/convergence-plan.md)
+  — proposals are iterated with the owner one at a time before implementation.
 - **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
   graph write path).
 
@@ -169,7 +172,7 @@ key detail flipped — and waits for an answer to *that*.
 | `MY20Q_MAX_QUERIES` | `0` | `0` = unlimited; positive = hard safety ceiling (same as `--max-queries`) |
 | `MY20Q_MIN_YES` | `5` | "yes" answers before the first synthesis |
 | `MY20Q_NEW_YES` | `3` | new yeses before each later synthesis attempt |
-| `MY20Q_REPHRASE_LIMIT` | `3` | rephrases per synthesis attempt |
+| `MY20Q_REPHRASE_LIMIT` | `1` | rephrases per synthesis attempt (one perturbation is all that helps) |
 | `MY20Q_SYNTH_ATTEMPTS` | `2` | failed synthesis attempts before the restart recovery |
 | `MY20Q_EXPLORE_DECAY` | `0.67` | exploration probability = base^(yeses+1) |
 | `MY20Q_SOFT_RESET_NOS` | `10` | consecutive "no"s that trigger the restart recovery |
