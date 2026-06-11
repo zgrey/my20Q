@@ -57,6 +57,11 @@
   # The person (who) and the intent toward them (how) define the need; "what"
   # (the object involved) usually emerges while drilling.
   core_facets: [who, how]
+  # Drill tie-breaker ONLY — evidence always dominates. In a caregiving
+  # context "where" is usually implied, so it ranks last among equals; "what"
+  # usually holds the unknown, so it leads the modifiers. A round genuinely
+  # about placing a thing somewhere specific still drills "where" on merit.
+  facet_priority: [who, how, what, why, when, where]
   # Track intent DIRECTION: the four buckets below become standing "how"
   # contenders, credited by the code classifier, with the sign-flip rule and
   # the caregiver ask-order prior (see profile `caregivers:`).

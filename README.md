@@ -179,6 +179,7 @@ key detail flipped — and waits for an answer to *that*.
 | `MY20Q_STALL_WINDOW` | `8` | answered queries with zero board progress → restart (0 = off) |
 | `MY20Q_FACET_READY` | `2.0` | points a slot leader needs to count as determined |
 | `MY20Q_SPLIT_MARGIN` | `1.0` | top-two contenders closer than this are tied → split question |
+| `MY20Q_RETIRE_X` | `3.0` | slot retires from drilling once its leader ≥ this × ready points with the runner-up ≤ half |
 | `MY20Q_MODE` | training | Dialogue mode |
 | `MY20Q_PROFILE` | — | Patient/persona profile to load |
 | `MY20Q_TOPICS` | bundled | Override the topics data path |

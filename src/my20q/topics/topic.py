@@ -47,6 +47,17 @@ class Topic(BaseModel):
             "who/what/when/where/why/how."
         ),
     )
+    facet_priority: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional drill-order TIE-BREAKER for this topic: when two slots "
+            "are equally unconfident, the one listed earlier is drilled "
+            "first. Evidence always dominates — this never overrides a "
+            "less-confident slot. Unlisted slots rank after listed ones, in "
+            "who/what/when/where/why/how order. Editable data, not engine "
+            "logic."
+        ),
+    )
     direction: bool = Field(
         default=False,
         description=(
@@ -62,7 +73,7 @@ class Topic(BaseModel):
         description="Optional curated pictogram override for the topic itself.",
     )
 
-    @field_validator("core_facets")
+    @field_validator("core_facets", "facet_priority")
     @classmethod
     def _known_facets(cls, v: list[str]) -> list[str]:
         unknown = [c for c in v if c not in _FACETS]

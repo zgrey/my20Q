@@ -241,6 +241,152 @@ def test_focus_enriches_modifiers_once_core_is_confident(topics: list[Topic]) ->
     assert directive == "probe"
 
 
+# ------------------------------------- focus policy v3 (W1-B): retirement
+
+
+def test_retired_requires_dominance_not_margin() -> None:
+    # Ratio rule: who at +25.5/+10 (the 06-11 metronome) retires; the vague
+    # what-leader at +6/+4 — two clean yeses ahead — must STAY drillable.
+    rnd = Round(Topic(id="t", label="T"), llm=MockBackend())
+    board = facets.empty_board()
+    board["who"].update({"Rob": 25.5, "him": 10.0})
+    board["what"].update({"keeping the house tidy": 6.0, "something": 4.0})
+    board["when"].update({"later": 5.0, "today": 1.0})
+    board["how"].update({"bring it": 8.0, "warm it": 4.5})
+    assert rnd._retired(board, "who") is True  # dominant — settled
+    assert rnd._retired(board, "what") is False  # margin 2, ratio weak
+    assert rnd._retired(board, "when") is False  # leader below 3x ready
+    assert rnd._retired(board, "how") is False  # runner above half
+    assert rnd._retired(board, "where") is False  # empty slot never retires
+
+
+def test_focus_skips_a_retired_slot(topics: list[Topic]) -> None:
+    # what dominates (retired) even though it is the WEAKEST core leader —
+    # the old policy would re-drill it; now the live core slot gets the turn.
+    rnd = _policy_round(topics)  # physical_health, core what+how
+    rnd._seed_values = {"what": ["a drink", "a snack"],
+                        "how": ["bring it", "warm it"],
+                        "who": ["my son"], "when": ["today"],
+                        "where": ["my room"], "why": ["thirsty"]}
+    rnd._history = (
+        [{"kind": "query", "text": f"w{i}", "answer": "yes",
+          "slots": {"what": "a drink"}} for i in range(6)]
+        + [{"kind": "query", "text": "w6", "answer": "kinda",
+            "slots": {"what": "a drink"}}]
+        + [{"kind": "query", "text": f"h{i}", "answer": "yes",
+            "slots": {"how": "bring it"}} for i in range(8)]
+        # runner above half the leader keeps "how" un-retired (8 vs 4.5)
+        + [{"kind": "query", "text": f"h8{i}", "answer": "yes",
+            "slots": {"how": "warm it"}} for i in range(4)]
+        + [{"kind": "query", "text": "h9", "answer": "kinda",
+            "slots": {"how": "warm it"}}]
+        # close the modifier slots so priority 3 does not fire
+        + [{"kind": "context", "text": "ctx", "answer": None,
+            "slots": {"who": ["my son"], "when": ["today"],
+                      "where": ["my room"], "why": ["thirsty"]}}]
+    )
+    board = rnd._replay_board()
+    # what: 6.5 vs 0 -> retired; how: 8 vs ... live runner keeps it in play
+    assert rnd._retired(board, "what") is True
+    assert rnd._retired(board, "how") is False
+    focus, directive, _ = rnd._pick_focus(board, [])
+    assert directive == "drill"
+    assert focus == "how"  # the retired-but-weakest "what" is skipped
+
+
+def test_focus_drills_established_modifiers_by_topic_priority(
+    topics: list[Topic],
+) -> None:
+    # The 06-11 hole: with who/how settled, "what" (vague, established) must
+    # be drillable for a people topic — and outrank when/where by the topic's
+    # facet_priority, not by raw score.
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend(),
+                rng=_FixedRandom(0.99))
+    rnd._seed_values = {"who": ["Rob", "him"], "how": ["tell them something"],
+                        "what": ["keeping the house tidy", "a routine"],
+                        "when": ["later"], "where": ["our home"],
+                        "why": ["I need help"]}
+    rnd._history = (
+        [{"kind": "query", "text": f"r{i}", "answer": "yes",
+          "slots": {"who": "Rob"}} for i in range(8)]
+        + [{"kind": "query", "text": "r8", "answer": "yes",
+            "slots": {"who": "him"}}]
+        + [{"kind": "query", "text": f"t{i}", "answer": "yes",
+            "slots": {"how": "tell them something"}} for i in range(9)]
+        + [{"kind": "query", "text": f"x{i}", "answer": "yes",
+            "slots": {"what": "keeping the house tidy"}} for i in range(6)]
+        # the real 06-11 shape: 6 vs 4 — vague leader with a live rival,
+        # NOT dominant, must stay drillable
+        + [{"kind": "query", "text": f"x6{i}", "answer": "yes",
+            "slots": {"what": "a routine"}} for i in range(4)]
+        + [{"kind": "query", "text": f"m{i}", "answer": "yes", "slots": s}
+           for i, s in enumerate([{"when": "later"}, {"when": "later"},
+                                  {"when": "later"},
+                                  {"where": "our home"}, {"where": "our home"},
+                                  {"why": "I need help"}, {"why": "I need help"},
+                                  {"why": "I need help"}])]
+    )
+    board = rnd._replay_board()
+    assert rnd._retired(board, "who") is True  # 8 vs 1 — settled
+    assert rnd._retired(board, "how") is True  # 9 vs 0 — settled
+    focus, directive, _ = rnd._pick_focus(board, [])
+    assert directive == "drill"
+    # All live slots are established; my_people facet_priority ranks what
+    # ahead of why/when/where regardless of raw scores (what +6 > when +3).
+    assert focus == "what"
+
+
+def test_focus_ladder_extends_while_working(topics: list[Topic]) -> None:
+    # Two consecutive what-focused hits (yes/kinda) — the run may extend past
+    # MAX_CATEGORY_RUN (the body→leg→foot→toe ladder); contrast with the
+    # no/no rotation in test_focus_never_hammers_one_category.
+    rnd = _policy_round(topics)
+    seg = [
+        {"kind": "query", "text": "q1", "answer": "yes",
+         "slots": {"what": "a drink"}, "focus": "what"},
+        {"kind": "query", "text": "q2", "answer": "kinda",
+         "slots": {"what": "a drink"}, "focus": "what"},
+        {"kind": "query", "text": "q3", "answer": "yes",
+         "slots": {"how": "bring it"}},  # closes the how slot (no focus)
+    ]
+    # Make the tail query of the run the what-focused kinda: reorder so the
+    # run is the tail.
+    seg = [seg[2], seg[0], seg[1]]
+    rnd._history = list(seg)
+    board = rnd._replay_board()
+    focus, directive, _ = rnd._pick_focus(board, seg)
+    assert focus == "what"  # run of 2, but WORKING — allowed to extend
+    assert directive == "drill"
+
+
+def test_focus_retired_slot_reopens_on_a_tie(topics: list[Topic]) -> None:
+    # Retirement never blocks a split: dominance and tie are mutually
+    # exclusive, so scores re-converging reopen the slot by themselves.
+    rnd = _policy_round(topics)
+    rnd._seed_values = {"what": ["a drink", "a snack"], "how": ["bring it"]}
+    rnd._history = (
+        [{"kind": "query", "text": f"d{i}", "answer": "yes",
+          "slots": {"what": "a drink"}} for i in range(8)]
+        + [{"kind": "query", "text": f"s{i}", "answer": "yes",
+            "slots": {"what": "a snack"}} for i in range(8)]
+        + [{"kind": "query", "text": "h", "answer": "yes",
+            "slots": {"how": "bring it"}}]
+    )
+    board = rnd._replay_board()
+    assert rnd._retired(board, "what") is False  # runner caught up — reopened
+    focus, directive, pair = rnd._pick_focus(board, [])
+    assert focus == "what" and directive == "split"
+    assert set(pair) == {"a drink", "a snack"}
+
+
+def test_topic_facet_priority_loaded_and_validated(topics: list[Topic]) -> None:
+    people = _topic(topics, "my_people")
+    assert people.facet_priority[0] == "who"
+    assert people.facet_priority[-1] == "where"  # implied in caregiving
+    with pytest.raises(ValueError):
+        Topic(id="x", label="X", facet_priority=["whom"])
+
+
 # --------------------------------------------------- reasoning round flow
 
 

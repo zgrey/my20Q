@@ -140,7 +140,26 @@ Evidence here agrees: across 9 utterances, no second-or-later rephrase of an
 attempt was ever the one confirmed. Touches: `config.py` default, README /
 tool-summary tables. Risk: none (env-overridable).
 
-### W1-B · Focus policy v3 — retire, widen, rotate-on-stall — Status: PROPOSED
+### W1-B · Focus policy v3 — retire, widen, rotate-on-stall — Status: IMPLEMENTED
+
+> **AGREED 06-11 with owner amendments; implemented same day.**
+> (1) Owner approved retirement, with trials to tune. **Amended in
+> implementation (disclosed):** the agreed *margin* rule (≥ 2× split-margin)
+> retires the 06-11 round's vague what-leader (+6 vs +4, margin exactly 2.0)
+> at the moment it most needs drilling — margins grow with round length
+> (audit F2). Implemented as a **dominance ratio** instead: retire when
+> leader ≥ `retire_ready_x`(3.0) × ready AND runner ≤ half the leader.
+> Replay: who (+25.5/+10) retires by ~q30 ✓, what (+6/+4) stays live ✓.
+> Env: `MY20Q_RETIRE_X`.
+> (2) Owner: "where" ranks behind "what" in caregiving — but NOT hard-coded
+> (a placing-something round must still drill where). Implemented as
+> per-topic `facet_priority` in topics.yaml (data, editable) applied
+> *within* a confidence band: drill ranks core block → unestablished before
+> established (coverage first — evidence dominates) → facet_priority →
+> weakest leader. my_people: `[who, how, what, why, when, where]`.
+> (3) Ladder extension ends on the FIRST miss (no/not-sure) past the default
+> run — slightly stricter than the drafted "two misses".
+> 6 new tests; 182 pass.
 
 **Problem (A2).** Confident slots keep soaking focus; non-core slots with a
 positive leader are unreachable; the rotation guard manufactures a
@@ -411,7 +430,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | ID | Title | Status |
 |----|-------|--------|
 | W1-A | Rephrase default → 1 | **IMPLEMENTED** (owner-decided 06-11) |
-| W1-B | Focus v3: retire/widen/rotate-on-stall | PROPOSED |
+| W1-B | Focus v3: retire/widen/rotate-on-stall | **IMPLEMENTED** (06-11, amended: ratio retirement, banded priority) |
 | W1-C | Synthesize only on a changed weave | PROPOSED |
 | W1-D | Caregiver directive channel | PROPOSED |
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED |

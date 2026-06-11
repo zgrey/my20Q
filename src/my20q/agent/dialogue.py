@@ -648,11 +648,26 @@ class Round:
            so synthesis is never missing its essential pieces.
         2. SPLIT a slot whose top two contenders are tied — matching scores
            carry no decision, so separate them.
-        3. DRILL the core slot with the weakest leader toward specificity; once
-           every core slot is confident, probe an empty modifier slot instead.
+        3. Every core slot confident → PROBE an empty modifier slot (fresh
+           coverage beats re-drilling).
+        4. DRILL a LIVE slot — any slot with a positive leader, core or not,
+           that has not RETIRED. Core slots outrank modifiers; unestablished
+           leaders outrank established ones (coverage first); then the
+           topic's ``facet_priority`` order (data, not logic — e.g. my_people
+           ranks "where" last: usually implied in caregiving), then weakest
+           leader.
 
-        A category is never focused more than MAX_CATEGORY_RUN turns in a row
-        when an alternative exists (the "why"-hammering guard).
+        RETIREMENT (the 06-11 metronome fix — ~14 tail drills on who at
+        +25.5): a slot whose leader DOMINATES (>= retire_ready_x * ready
+        points with the runner-up at <= half the leader) leaves the
+        probe/drill/pin pool. It stays split-eligible — dominance and tie are
+        mutually exclusive, so scores re-converging reopens it by themselves —
+        and restarts rebuild the board, which can un-retire.
+
+        ROTATION: a category is never focused more than MAX_CATEGORY_RUN
+        turns in a row — unless the run is WORKING (its latest question got a
+        yes/kinda): a rising drill-ladder (tidy → cleanup task → dishes) may
+        extend, and ends on the first miss.
         """
         T = self.tuning
         core = [c for c in (self.topic.core_facets or []) if c in facets.CATEGORIES]
@@ -665,9 +680,14 @@ class Round:
             if h.get("kind") == "query" and h.get("focus")
         ][-MAX_CATEGORY_RUN:]
 
+        def fresh(cat: str) -> bool:
+            if recent.count(cat) < MAX_CATEGORY_RUN:
+                return True
+            return self._run_working(seg, cat)
+
         def first_fresh(cands: list[str]) -> str | None:
             for c in cands:
-                if recent.count(c) < MAX_CATEGORY_RUN:
+                if fresh(c):
                     return c
             return None
 
@@ -695,7 +715,7 @@ class Round:
                     margin=T.facet_split_margin,
                 ):
                     continue
-                if recent.count(cat) < MAX_CATEGORY_RUN:
+                if fresh(cat):
                     return cat, "pin", None
 
         # 1. Unestablished core slots — no contender confirmed above zero yet.
@@ -711,11 +731,10 @@ class Round:
         # 2. Tied top contenders anywhere (core first) — split them.
         for cat in core + others:
             pair = facets.tied_top(board, cat, margin=T.facet_split_margin)
-            if pair is not None and recent.count(cat) < MAX_CATEGORY_RUN:
+            if pair is not None and fresh(cat):
                 return cat, "split", (pair[0][0], pair[1][0])
 
-        # 3. Every core slot is confident → enrich an empty modifier slot;
-        #    otherwise drill the weakest core leader toward specificity.
+        # 3. Every core slot is confident → enrich an empty modifier slot.
         if all(
             facets.confident(
                 board, c, ready_points=T.facet_ready_points, margin=T.facet_split_margin
@@ -730,11 +749,78 @@ class Round:
             alt = first_fresh(open_other)
             if alt is not None:
                 return alt, "probe", None
+
+        # 4. Drill a live slot (core or not; retired slots are out —
+        #    re-drilling a settled answer is the metronome). Rank: core block
+        #    first; within a block, UNESTABLISHED leaders (below ready) before
+        #    established ones (coverage is information; refinement can wait);
+        #    within a band, the topic's facet_priority order — so for people
+        #    topics a vague established "what" outranks an established "when"/
+        #    "where" — and weakest leader last as the final tie-break.
+        order = {c: i for i, c in enumerate(self._facet_order())}
+        pool = [
+            c
+            for c in facets.CATEGORIES
+            if not self._retired(board, c)
+            and (top := facets.leader(board, c)) is not None
+            and top[1] > 0
+        ]
+        pool.sort(
+            key=lambda c: (
+                c not in core,
+                (facets.leader(board, c) or ("", 0.0))[1] >= T.facet_ready_points,
+                order.get(c, len(order)),
+                (facets.leader(board, c) or ("", 0.0))[1],
+            )
+        )
+        cat = first_fresh(pool)
+        if cat is not None:
+            return cat, "drill", None
+        # Nothing live and fresh — fall back to the weakest core leader so a
+        # turn always has a focus (board-ready synthesis usually fires first).
         ranked_core = sorted(
             core, key=lambda c: (facets.leader(board, c) or ("", 0.0))[1]
         )
         cat = first_fresh(ranked_core) or ranked_core[0]
         return cat, "drill", None
+
+    def _retired(self, board: facets.Board, cat: str) -> bool:
+        """Whether `cat`'s leader DOMINATES — excluded from probe/drill/pin.
+
+        Dominance ratio, not margin: leader >= retire_ready_x * ready points
+        AND runner-up <= half the leader. (A margin rule retires whatever is
+        two clean yeses ahead — which mid-round is usually the vague leader
+        that most needs drilling; a ratio targets settled slots like who=Rob
+        at +25.5 vs +10 while leaving what at +6 vs +4 live.)
+        """
+        T = self.tuning
+        ranked = facets.live(board, cat)
+        if not ranked or ranked[0][1] < T.retire_ready_x * T.facet_ready_points:
+            return False
+        runner = ranked[1][1] if len(ranked) > 1 else 0.0
+        return runner <= ranked[0][1] / 2
+
+    def _facet_order(self) -> list[str]:
+        """Drill tie-break order: the topic's facet_priority, then the rest."""
+        listed = [
+            c for c in (self.topic.facet_priority or []) if c in facets.CATEGORIES
+        ]
+        return listed + [c for c in facets.CATEGORIES if c not in listed]
+
+    @staticmethod
+    def _run_working(seg: list[dict], cat: str) -> bool:
+        """Whether `cat`'s current focus run is producing — last answer yes/kinda.
+
+        Lets a working drill-ladder extend past MAX_CATEGORY_RUN; the first
+        miss (no / not-sure) ends the extension and rotation applies again.
+        """
+        for h in reversed(seg):
+            if h.get("kind") != "query":
+                continue
+            if h.get("focus") != cat:
+                return False  # the tail run belongs to another slot
+            return h.get("answer") in (Answer.YES.value, Answer.KINDA.value)
+        return False
 
     def _board_ready(self, board: facets.Board) -> bool:
         """Whether every core slot has a clear, confirmed leader.

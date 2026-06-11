@@ -60,6 +60,14 @@ class ReasoningTuning:
     #: controller schedules a splitting question; a leader needs at least this
     #: margin over the runner-up to count as determined.
     facet_split_margin: float = 1.0
+    #: A slot RETIRES from probe/drill/pin once its leader DOMINATES: leader
+    #: >= retire_ready_x * facet_ready_points AND runner-up <= half the
+    #: leader. A dominance RATIO, not a margin — margins grow with round
+    #: length, and a fixed margin would retire a vague-but-leading value at
+    #: exactly the moment it needs drilling (the 06-11 round's what-slot).
+    #: Retired slots stay split-eligible (a genuine re-tie reopens them) and
+    #: still earn credit; restarts rebuild the board and can un-retire.
+    retire_ready_x: float = 3.0
 
     @classmethod
     def from_env(cls) -> ReasoningTuning:
@@ -81,6 +89,7 @@ class ReasoningTuning:
             stall_window=_int("MY20Q_STALL_WINDOW", 8, minimum=0),
             facet_ready_points=_float("MY20Q_FACET_READY", 2.0, lo=0.5, hi=1e9),
             facet_split_margin=_float("MY20Q_SPLIT_MARGIN", 1.0, lo=0.0, hi=1e9),
+            retire_ready_x=_float("MY20Q_RETIRE_X", 3.0, lo=1.0, hi=1e9),
         )
 
 
