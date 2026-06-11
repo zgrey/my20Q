@@ -102,6 +102,50 @@ async def test_slot_values_fold_onto_existing_contenders() -> None:
     assert action.slots["what"] == "a picture"  # folded onto the contender
 
 
+async def test_action_values_tagged_what_are_refiled_to_how() -> None:
+    # The gemma4 trial filed "help with tasks" under WHAT (+6) while HOW never
+    # established, jamming the focus policy — verb-led values re-file to how.
+    mistagged = {
+        "question": "Do you need help with tasks at the house?",
+        "slots": {"what": "help with tasks"},
+        "preface": "",
+        "rationale": "x",
+    }
+    action = await _ask(MockBackend(responder=_format_responder([mistagged])))
+    assert "what" not in action.slots
+    assert action.slots["how"] == "help with tasks"
+
+
+async def test_gate4_rejects_zero_information_questions() -> None:
+    # Every tagged pair already an established leader → re-prompt (the cheap
+    # expected-information-gain proxy; stops confirmation farming).
+    farming = {"question": "Do you need Zach to move it again today?",
+               "slots": {"who": "Zach", "how": "move it"}, "preface": "",
+               "rationale": "x"}
+    fresh = {"question": "Is it about the kitchen?",
+             "slots": {"where": "the kitchen"}, "preface": "", "rationale": "x"}
+    mock = MockBackend(responder=_format_responder([farming, fresh]))
+    action = await _ask(
+        mock, established={("who", "Zach"), ("how", "move it")}
+    )
+    assert action.content == "Is it about the kitchen?"
+    assert any("already confirmed" in str(m) for m in mock.calls[2])
+
+
+async def test_gate4_exempts_split_questions() -> None:
+    # Tied leaders NEED a separating question even though both are "known".
+    split_q = {"question": "Do you need Zach to move it?",
+               "slots": {"who": "Zach", "how": "move it"}, "preface": "",
+               "rationale": "x"}
+    action = await _ask(
+        MockBackend(responder=_format_responder([split_q])),
+        directive="split",
+        split_pair=("move it", "clean it"),
+        established={("who", "Zach"), ("how", "move it")},
+    )
+    assert action.content == "Do you need Zach to move it?"
+
+
 async def test_repeat_gate_rejects_and_reprompts() -> None:
     repeat = {"question": "Is it a picture?", "slots": {"what": "a picture"},
               "preface": "", "rationale": "x"}

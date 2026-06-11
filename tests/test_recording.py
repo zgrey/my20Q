@@ -173,3 +173,21 @@ def test_round_record_drops_internal_markers() -> None:
     kinds = [q["kind"] for q in record["queries"]]
     assert "restart" not in kinds  # internal board marker — not conversation
     assert "diagnostic" in kinds  # the failure the caregiver saw IS kept
+
+
+def test_round_record_carries_the_board() -> None:
+    from my20q.recording import build_round_record
+
+    record = build_round_record(
+        session_id="s",
+        round_id="r",
+        topic_id="general",
+        engine="reasoning",
+        history=[],
+        outcome=None,
+        final_utterance="",
+        model="m",
+        board={"seeds": {"what": ["a drink"]}, "final": {"what": [["a drink", 1.0]]}},
+    )
+    assert record["board"]["seeds"] == {"what": ["a drink"]}
+    assert record["board"]["final"]["what"] == [["a drink", 1.0]]

@@ -32,6 +32,15 @@ class PatientProfile(BaseModel):
         default=None,
         description="Caregiver-written basic context, threaded into reasoning as a prior.",
     )
+    caregivers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of the patient's caregivers. Drives the care-first "
+            "ask-order prior: a need involving a caregiver most often asks "
+            "them to do a care task, so that direction is tested first — "
+            "order only, never assumed."
+        ),
+    )
 
 
 def is_real_patient(profile: PatientProfile | None) -> bool:

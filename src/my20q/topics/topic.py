@@ -47,6 +47,16 @@ class Topic(BaseModel):
             "who/what/when/where/why/how."
         ),
     )
+    direction: bool = Field(
+        default=False,
+        description=(
+            "Track intent DIRECTION for this topic (person topics): the four "
+            "buckets (I-do-for-them / they-do-for-me / tell / ask) become "
+            "standing 'how' contenders, credited by a code classifier, with "
+            "the sign-flip rule (a no on one pole nudges the mirror pole) and "
+            "the caregiver ask-order prior."
+        ),
+    )
     image: str | None = Field(
         default=None,
         description="Optional curated pictogram override for the topic itself.",

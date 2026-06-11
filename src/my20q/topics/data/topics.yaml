@@ -57,6 +57,10 @@
   # The person (who) and the intent toward them (how) define the need; "what"
   # (the object involved) usually emerges while drilling.
   core_facets: [who, how]
+  # Track intent DIRECTION: the four buckets below become standing "how"
+  # contenders, credited by the code classifier, with the sign-flip rule and
+  # the caregiver ask-order prior (see profile `caregivers:`).
+  direction: true
   reasoning_hint: |
     HARD EXCLUSION: never ask about physical or descriptive attributes of
     these people — appearance, age, height, weight, build, clothing, hair,

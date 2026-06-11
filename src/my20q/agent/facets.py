@@ -110,21 +110,38 @@ def _mint(board: Board, cat: str, value: str) -> str | None:
 def update(board: Board, slots: Mapping[str, str], answer: str) -> Board:
     """Add points to the asserted (category, value) pairs; return a new board.
 
-    No normalization. A "no" subtracts from the pairs the question pointed at
-    and leaves everything else untouched. "not_sure" carries no information.
-    Unknown values are minted first (so a "no" to a fresh value records it
-    NEGATIVE — it stays known-rejected instead of vanishing).
+    No normalization. "not_sure" carries no information. Unknown values are
+    minted first (so a "no" to a fresh value records it NEGATIVE — it stays
+    known-rejected instead of vanishing).
+
+    Crediting is ASYMMETRIC: a yes/kinda credits every asserted pair, but a
+    "no" subtracts only from the LOWEST-scoring asserted pair(s) — the
+    marginal guess, not the established anchor. ("Do you want to remind Rob
+    about your blood pressure?" → no disconfirms *blood pressure*, not the
+    already-confirmed *Rob*; in one trial 29 such collateral hits buried the
+    round's only confirmed anchor.) A solely-tagged pair still takes the hit,
+    so a direct "Is it about Rob?" → no counts in full.
     """
     out = copy_board(board)
     delta = {"yes": YES_POINTS, "kinda": KINDA_POINTS, "no": -NO_POINTS}.get(answer)
     if delta is None:
         return out
+    minted: list[tuple[str, str]] = []
     for cat, value in slots.items():
         if not isinstance(value, str) or not value.strip():
             continue
         key = _mint(out, cat, value)
         if key is not None:
-            out[cat][key] += delta
+            minted.append((cat, key))
+    if not minted:
+        return out
+    if delta < 0 and len(minted) > 1:
+        low = min(out[cat][key] for cat, key in minted)
+        targets = [(cat, key) for cat, key in minted if out[cat][key] == low]
+    else:
+        targets = minted
+    for cat, key in targets:
+        out[cat][key] += delta
     return out
 
 
@@ -341,6 +358,129 @@ def canonical_value(board: Board, cat: str, value: str) -> str:
     if best is not None and best_score >= 0.5:
         return best
     return value
+
+
+# --------------------------------------------------- slot-category discipline
+
+#: Verbs that mark a value as an ACTION — it belongs in "how", not "what".
+#: (One trial filed "help with tasks" under what at +6 while how never
+#: established, jamming the focus policy on an unfillable slot.)
+_ACTION_VERBS = frozenset(
+    [
+        "help", "move", "bring", "call", "clean", "fix", "hang", "organize",
+        "organise", "visit", "take", "get", "give", "make", "carry", "lift",
+        "wash", "cook", "drive", "hold", "open", "close", "turn", "put", "set",
+        "show", "tell", "ask", "remind", "warn", "thank", "reassure", "check",
+        "buy", "send", "write", "read", "play", "walk", "come", "go", "stay",
+        "sit", "talk", "phone", "arrange", "tidy", "rearrange",
+    ]
+)
+
+
+def action_like(value: str) -> bool:
+    """Whether a slot value reads as an action (verb-led phrase)."""
+    tokens = _TOKEN_RE.findall(value.casefold())
+    return any(_stem(t) in _ACTION_VERBS or t in _ACTION_VERBS for t in tokens[:2])
+
+
+def remap_slot(cat: str, value: str) -> str:
+    """Re-file a model-tagged pair into the right category (action → how)."""
+    if cat == "what" and action_like(value):
+        return "how"
+    return cat
+
+
+# ------------------------------------------- the direction layer (sign flip)
+
+#: The four intent buckets for person-topics, as standing "how" contenders.
+#: Direction is a binary attribute once the person is fixed, so a "no" on one
+#: pole is soft evidence for the OPPOSITE pole (the caregiver's "sign flip").
+DIRECTION_BUCKETS: dict[str, str] = {
+    "me_for_them": "do something for them",
+    "them_for_me": "have them do something for me",
+    "tell_them": "tell them something",
+    "ask_them": "ask them something",
+}
+MIRROR: dict[str, str] = {
+    "me_for_them": "them_for_me",
+    "them_for_me": "me_for_them",
+    "tell_them": "ask_them",
+    "ask_them": "tell_them",
+}
+
+_PRONOUNS = r"him|her|them|he|she|they|someone|somebody|family"
+# Verbs whose me→them use means CONVEYING information (bucket: tell_them).
+_TELL_VERBS = r"tell|remind|warn|show|thank|reassure"
+_ASK_VERBS = r"ask"
+
+
+def _who_pattern(who_names: list[str]) -> str:
+    """Alternation matching any known who-name token (or a person pronoun)."""
+    tokens: set[str] = set()
+    for name in who_names:
+        for t in _TOKEN_RE.findall(name.casefold()):
+            if len(t) >= 3 and t not in _STOPWORDS:
+                tokens.add(re.escape(t))
+    parts = sorted(tokens) + [_PRONOUNS]
+    return "|".join(parts)
+
+
+#: "want / wanting / need / hoping / trying / would like …" — the desire stem.
+_WANT = r"(?:want\w*|need\w*|like|hop\w*|try\w*|wish\w*)"
+#: State verbs after "<who> to …" that signal a CONCERN, not a task request
+#: ("Do you want Rob to be okay?" is care ABOUT them — never direction).
+_STATE_VERBS = r"(?:be|feel|seem)"
+
+
+def classify_direction(question: str, who_names: list[str]) -> str | None:
+    """Which intent bucket a question asserts, from its own text — or None.
+
+    Pure code (the model never tags buckets — bucket phrases are stopword-
+    heavy, so mention-anchoring can't verify them). Conservative: returns
+    None when no pattern clearly matches, and concern-about-the-person
+    phrasings ("want Rob to be okay", "does Rob seem…") are deliberately
+    left unclassified so genuine concerns never read as task direction.
+
+    - "Do you want to tell Rob …" / "…want Rob to know…"  → tell_them
+    - "Do you want to ask Julie about …"                   → ask_them
+    - "Do you want/need Rob to clean …", "Will Zach help…" → them_for_me
+    - "Do you want to bring Rob a drink?", "…for Rob?"     → me_for_them
+    """
+    q = " ".join(question.casefold().split())
+    who = _who_pattern(who_names)
+
+    # tell/ask are checked first — syntactically a "me → them" act but
+    # semantically their own buckets.
+    if re.search(rf"\b{_WANT}\s+to\s+(?:{_TELL_VERBS})\b.*\b(?:{who})\b", q) or re.search(
+        rf"\b(?:{_TELL_VERBS})\s+(?:your\s+\w+|{who})\b", q
+    ):
+        return "tell_them"
+    if re.search(rf"\b{_WANT}\s+(?:\w+\s+){{0,2}}?(?:{who})\s+to\s+know\b", q):
+        return "tell_them"
+    if re.search(rf"\b{_WANT}\s+to\s+(?:{_ASK_VERBS})\b.*\b(?:{who})\b", q) or re.search(
+        rf"\b(?:{_ASK_VERBS})\s+(?:your\s+\w+|{who})\b", q
+    ):
+        return "ask_them"
+    if re.search(
+        rf"\bto\s+know\s+(?:if|when|where|whether|what|how)\b.*\b(?:{who})\b", q
+    ):
+        return "ask_them"
+
+    # them_for_me: "want/need <who> to <action>", "will/should/can <who> …"
+    if re.search(
+        rf"\b{_WANT}\s+(?!to\b)(?:\w+\s+){{0,2}}?(?:{who})\s+to\s+(?!{_STATE_VERBS}\b)\w+",
+        q,
+    ):
+        return "them_for_me"
+    if re.search(rf"\b(?:will|should|can|could)\s+(?:your\s+\w+|{who})\b", q):
+        return "them_for_me"
+
+    # me_for_them: "want to <verb> … <who>", "… for <who>"
+    if re.search(rf"\b{_WANT}\s+to\s+\w+\s+(?:\w+\s+){{0,3}}?(?:{who})\b", q):
+        return "me_for_them"
+    if re.search(rf"\bfor\s+(?:your\s+\w+|{who})\b", q):
+        return "me_for_them"
+    return None
 
 
 def facet_view(board: Board, focus: str = "") -> list[dict]:

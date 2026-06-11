@@ -53,6 +53,7 @@ def build_round_record(
     final_utterance: str,
     model: str,
     emotional_state: dict | None = None,
+    board: dict | None = None,
 ) -> dict:
     """The canonical per-round training record.
 
@@ -77,6 +78,9 @@ def build_round_record(
         "job_b": job_b_score(history, outcome),
         "queries": history,
         "emotional_state": emotional_state or {},
+        # Board evolution (seeds / final / restart snapshots) — so trial
+        # autopsies can read what the controller believed, not re-derive it.
+        "board": board or {},
         "model": model,
         "recorded_at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
     }
@@ -100,6 +104,7 @@ class Recorder:
         final_utterance: str,
         model: str,
         emotional_state: dict | None = None,
+        board: dict | None = None,
     ) -> None:
         """Append one finalized round to its session's JSONL file."""
         self.patient_dir.mkdir(parents=True, exist_ok=True)
@@ -113,6 +118,7 @@ class Recorder:
             final_utterance=final_utterance,
             model=model,
             emotional_state=emotional_state,
+            board=board,
         )
         path = self.patient_dir / f"{session_id}.jsonl"
         with path.open("a", encoding="utf-8") as fh:

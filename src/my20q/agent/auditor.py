@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+from my20q.agent.facets import _content_tokens, _tokens_match
+
 _WH_WORDS = {"what", "where", "when", "which", "who", "whom", "whose", "why", "how"}
 _OR_RE = re.compile(r"\bor\b", re.IGNORECASE)
 
@@ -42,6 +44,20 @@ _META_PHRASES = (
 
 #: Similarity at or above this ratio counts as a reworded repeat.
 _REPEAT_RATIO = 0.85
+#: Content-token overlap (Dice, stem/prefix-tolerant) at or above this counts
+#: as the same question in new clothes ("Will Zach help with tasks when he
+#: comes over?" vs "Do you want Zach to come over to help with tasks?" — same
+#: content, different framing; "comes"/"come" still count as the same word).
+_REPEAT_OVERLAP = 0.8
+#: Auxiliaries / framing words that restate a question without changing what
+#: it asks — excluded from the content comparison.
+_FRAMING = frozenset(
+    [
+        "will", "would", "can", "could", "should", "shall", "does", "did",
+        "when", "while", "now", "right", "really", "just", "please", "about",
+        "going", "trying", "hoping",
+    ]
+)
 
 
 @dataclass
@@ -99,6 +115,7 @@ def is_repeat(question: str, asked: list[str]) -> str | None:
     norm = _normalize(question)
     if not norm:
         return None
+    tokens = _content_tokens(question) - _FRAMING
     for prior in asked:
         prior_norm = _normalize(prior)
         if not prior_norm:
@@ -107,4 +124,19 @@ def is_repeat(question: str, asked: list[str]) -> str | None:
             return prior
         if SequenceMatcher(None, norm, prior_norm).ratio() >= _REPEAT_RATIO:
             return prior
+        prior_tokens = _content_tokens(prior) - _FRAMING
+        if tokens and prior_tokens and _overlap(tokens, prior_tokens) >= _REPEAT_OVERLAP:
+            return prior
     return None
+
+
+def _overlap(a: set[str], b: set[str]) -> float:
+    """Dice overlap of two token sets, tolerant of stemming artifacts.
+
+    Plain set intersection misses pairs the stemmer splits ("comes" → "com"
+    but "come" → "come"), so each side counts via the same prefix-tolerant
+    match the facet board uses for mention anchoring.
+    """
+    matched = sum(1 for t in a if any(_tokens_match(t, p) for p in b))
+    matched += sum(1 for p in b if any(_tokens_match(p, t) for t in a))
+    return matched / (len(a) + len(b))

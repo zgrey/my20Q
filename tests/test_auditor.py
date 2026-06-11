@@ -46,6 +46,14 @@ def test_repeat_gate_catches_high_similarity_rewords() -> None:
     assert is_repeat("Do you need help completing a specific task right now?", asked)
 
 
+def test_repeat_gate_catches_content_identical_rewords() -> None:
+    # Same content words, different framing — the gemma4 trial slipped these
+    # past the string-similarity check and farmed re-confirmations with them.
+    asked = ["Do you want Zach to come over to help with tasks?"]
+    assert is_repeat("Will Zach come over to help with tasks?", asked)
+    assert is_repeat("Will Zach help with tasks when he comes over?", asked)
+
+
 def test_repeat_gate_allows_genuinely_new_questions() -> None:
     asked = [
         "Do you want to talk to Zach about something important?",

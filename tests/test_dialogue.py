@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 
+from my20q.agent import facets
 from my20q.agent.dialogue import (
     MIN_YES_FOR_SYNTHESIS,
     SOFT_RESET_NO_STREAK,
@@ -55,19 +56,29 @@ def _topic(topics: list[Topic], topic_id: str) -> Topic:
     return t
 
 
+#: Distinct water-themed utterances so rephrases never trip the utterance
+#: dup-check (every variant keeps "water" for the final-utterance asserts).
+_UTTERANCES = [
+    "I would like a glass of water.",
+    "Could you bring me some water to drink?",
+    "Please get me a cool glass of water now.",
+    "Water would be lovely, may I have some?",
+]
+
+
 def _controller_backend(
     *,
     seed: dict[str, list[str]] | None = None,
-    utterance: str = "I would like a glass of water.",
     expand: dict[str, list[str]] | None = None,
     slot_cat: str = "what",
 ) -> MockBackend:
     """A MockBackend that plays the seed/deliberate/format/expand/synth protocol.
 
     Each formatted question uses a fresh subject (tagged into ``slot_cat``), so
-    the repeat gate and the slot-anchoring gate both pass indefinitely.
+    the repeat gate and the slot-anchoring gate both pass indefinitely; each
+    synthesize call cycles a fresh phrasing.
     """
-    state = {"q": 0}
+    state = {"q": 0, "s": 0}
 
     def responder(messages: list) -> str:
         system = messages[0]["content"]
@@ -84,7 +95,9 @@ def _controller_backend(
             )
         if "pin down the ONE specific" in system:  # deliberate
             return "thinking it through..."
-        return json.dumps({"utterance": utterance})  # synthesize
+        utterance = _UTTERANCES[state["s"] % len(_UTTERANCES)]  # synthesize
+        state["s"] += 1
+        return json.dumps({"utterance": utterance})
 
     return MockBackend(responder=responder)
 
@@ -353,8 +366,11 @@ async def test_restart_keeps_yes_signal_and_dumps_no(topics: list[Topic]) -> Non
 
 
 async def test_no_streak_triggers_restart(topics: list[Topic]) -> None:
+    # stall_window=0 isolates the streak trigger (the stall trigger would
+    # otherwise fire first on a pure-no run — see the stall test below).
+    tuning = ReasoningTuning(stall_window=0)
     rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
-                rng=_FixedRandom(0.99))
+                tuning=tuning, rng=_FixedRandom(0.99))
     await rnd.open()
     for _ in range(SOFT_RESET_NO_STREAK):  # exactly the threshold — no restart
         await rnd.answer(Answer.NO)
@@ -362,6 +378,21 @@ async def test_no_streak_triggers_restart(topics: list[Topic]) -> None:
     await rnd.answer(Answer.NO)  # one MORE -> the restart recovery fires
     assert any(h["kind"] == "restart" for h in rnd.history)
     assert rnd.engine == "reasoning"  # stayed in reasoning throughout
+
+
+async def test_stalled_progress_triggers_restart(topics: list[Topic]) -> None:
+    # Sparse kindas break the no-streak but NOT the stall trigger: 8 answered
+    # queries with no pair reaching a confirmed score is a dead-end round.
+    tuning = ReasoningTuning(stall_window=8, soft_reset_no_streak=99)
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                tuning=tuning, rng=_FixedRandom(0.99))
+    await rnd.open()
+    pattern = [Answer.NO, Answer.NO, Answer.NO, Answer.KINDA] * 2
+    for a in pattern[:-1]:
+        await rnd.answer(a)
+    assert not any(h["kind"] == "restart" for h in rnd.history)
+    await rnd.answer(pattern[-1])  # 8th answered query, zero progress -> restart
+    assert any(h["kind"] == "restart" for h in rnd.history)
 
 
 async def test_round_records_yes_into_memory(topics: list[Topic]) -> None:
@@ -525,6 +556,268 @@ async def test_persistent_failure_surfaces_diagnostic_and_retry_works(
     state["stuck"] = False  # the model comes back
     ev = await rnd.retry()
     assert ev.kind == "query" and ev.text == "Is it about the radio?"
+
+
+# ---------------------------------------- anti-farming, kinda-loop, pinning
+
+
+async def test_farming_yeses_do_not_advance_the_synthesis_gate(
+    topics: list[Topic],
+) -> None:
+    # Re-confirming an established pair earns points but NOT gate progress —
+    # one trial satisfied the resynthesis gate with zero-information yeses and
+    # looped 16 near-identical utterances.
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    rnd._history = [
+        {"kind": "query", "text": f"q{i}", "answer": "yes",
+         "slots": {"what": "a drink"}, "informative": i == 0}
+        for i in range(4)
+    ]
+    # 4 yeses on the board, but only the first carried information.
+    assert rnd._yes_since_last_synth(rnd._segment()) == 1
+
+
+async def test_kinda_rejection_allows_only_one_rephrase(topics: list[Topic]) -> None:
+    # kinda = a content gap; wording shuffles can't fill it. One rephrase,
+    # then back to questioning (a "no" keeps the full rephrase budget).
+    tuning = ReasoningTuning(min_yes_for_synthesis=1, new_yes_for_resynthesis=1,
+                             rephrase_limit=3, stall_window=0)
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                tuning=tuning, rng=_FixedRandom(0.99))
+    await rnd.open()
+    ev = await rnd.answer(Answer.YES)  # 1 informative yes -> synthesis
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.KINDA)  # close -> ONE rephrase allowed
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.KINDA)  # still kinda -> back to questioning
+    assert ev.kind == "query"
+
+
+async def test_pin_focus_targets_weakest_slot_after_rejection(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink"], "how": ["bring it"]}
+    rnd._history = [
+        {"kind": "query", "text": "drink?", "answer": "yes",
+         "slots": {"what": "a drink"}},
+        {"kind": "query", "text": "more drink?", "answer": "yes",
+         "slots": {"what": "a drink"}},
+        {"kind": "query", "text": "bring?", "answer": "kinda",
+         "slots": {"how": "bring it"}},
+        {"kind": "synthesis", "text": "Bring me a drink.", "answer": "kinda",
+         "slots": {"what": "a drink", "how": "bring it"}},
+    ]
+    focus, directive, _ = rnd._pick_focus(rnd._replay_board(), rnd._history)
+    # what is confident (2.0); how (0.5) is the utterance's weak detail.
+    assert (focus, directive) == ("how", "pin")
+
+
+async def test_duplicate_rephrase_bails_to_questioning(topics: list[Topic]) -> None:
+    # A rephrase that near-dups a rejected utterance would earn the same
+    # rejection — the round re-questions instead of re-proposing it.
+    state = {"q": 0}
+
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "starting GUESSES" in system:
+            return json.dumps(SEED_SLOTS)
+        if "Convert a drafted question" in system:
+            word = _SUBJECTS[state["q"] % len(_SUBJECTS)]
+            state["q"] += 1
+            return json.dumps(
+                {"question": f"Is it about {word}?", "slots": {"what": word},
+                 "preface": "", "rationale": "x"}
+            )
+        if "pin down the ONE specific" in system:
+            return "thinking"
+        return json.dumps({"utterance": "I would like a glass of water."})
+
+    tuning = ReasoningTuning(min_yes_for_synthesis=1, new_yes_for_resynthesis=1,
+                             rephrase_limit=3, stall_window=0)
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=MockBackend(responder=responder), tuning=tuning,
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    ev = await rnd.answer(Answer.YES)
+    assert ev.kind == "synthesis"
+    ev = await rnd.answer(Answer.NO)  # rephrase would repeat verbatim -> question
+    assert ev.kind == "query"
+
+
+# ------------------------------------------------------- the direction layer
+
+
+def _people_backend() -> MockBackend:
+    """my_people mock whose questions are direction-classifiable."""
+    questions = [
+        ("Do you want to bring Rob a drink?", {"who": "Rob", "what": "a drink"}),
+        ("Do you want to tell Rob some news?", {"who": "Rob", "what": "news"}),
+        ("Do you want Rob to clean the kitchen?",
+         {"who": "Rob", "how": "clean the kitchen"}),
+        ("Do you want Rob to bring you a blanket?",
+         {"who": "Rob", "how": "bring a blanket"}),
+        ("Do you want to visit Rob soon?", {"who": "Rob", "when": "soon"}),
+        ("Do you want Rob to fix the radio?", {"who": "Rob", "how": "fix the radio"}),
+    ]
+    state = {"q": 0}
+
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "starting GUESSES" in system:
+            return json.dumps(
+                {"who": ["Rob", "Julie"], "what": ["a visit", "a phone call"],
+                 "how": ["call them"], "why": ["missing them"]}
+            )
+        if "Convert a drafted question" in system:
+            q, slots = questions[state["q"] % len(questions)]
+            state["q"] += 1
+            return json.dumps(
+                {"question": q, "slots": slots, "preface": "", "rationale": "x"}
+            )
+        if "pin down the ONE specific" in system:
+            return "thinking"
+        return json.dumps({"utterance": "I need Rob to clean the kitchen."})
+
+    return MockBackend(responder=responder)
+
+
+async def test_direction_buckets_are_seeded_for_people_topics(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=_people_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    board = rnd._replay_board()
+    how_values = {v.casefold() for v in board["how"]}
+    for bucket in facets.DIRECTION_BUCKETS.values():
+        assert bucket.casefold() in how_values
+
+
+async def test_direction_is_classified_and_recorded(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=_people_backend(),
+                rng=_FixedRandom(0.99))
+    ev = await rnd.open()
+    assert ev.text == "Do you want to bring Rob a drink?"
+    await rnd.answer(Answer.NO)
+    assert rnd.history[0]["direction"] == "me_for_them"
+
+
+async def test_no_on_one_direction_nudges_the_mirror(topics: list[Topic]) -> None:
+    # The sign flip: with the who-anchor positive, a "no" on a me-for-them
+    # question is soft evidence FOR them-for-me.
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend(),
+                rng=_FixedRandom(0.99))
+    rnd._seed_values = rnd._inject_direction_buckets({"who": ["Rob"]})
+    rnd._history = [
+        {"kind": "query", "text": "Is it about Rob?", "answer": "yes",
+         "slots": {"who": "Rob"}},
+        {"kind": "query", "text": "Do you want to bring Rob a drink?",
+         "answer": "no", "slots": {"who": "Rob", "what": "a drink"},
+         "direction": "me_for_them"},
+    ]
+    board = rnd._replay_board()
+    assert board["who"]["Rob"] == 1.0  # protected by asymmetric crediting
+    assert board["what"]["a drink"] == -1.0  # the guess took the hit
+    mirror = facets.DIRECTION_BUCKETS["them_for_me"]
+    assert board["how"][mirror] == 0.5  # the flip nudge
+
+
+async def test_flip_needs_a_positive_who_anchor(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend(),
+                rng=_FixedRandom(0.99))
+    rnd._seed_values = rnd._inject_direction_buckets({"who": ["Rob"]})
+    rnd._history = [
+        {"kind": "query", "text": "Do you want to bring Rob a drink?",
+         "answer": "no", "slots": {"who": "Rob", "what": "a drink"},
+         "direction": "me_for_them"},
+    ]
+    board = rnd._replay_board()
+    mirror = facets.DIRECTION_BUCKETS["them_for_me"]
+    assert board["how"][mirror] == 0.0  # who unconfirmed -> no flip license
+
+
+async def test_yes_credits_the_asserted_direction_bucket(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend(),
+                rng=_FixedRandom(0.99))
+    rnd._seed_values = rnd._inject_direction_buckets({"who": ["Rob"]})
+    rnd._history = [
+        {"kind": "query", "text": "Do you want Rob to clean the kitchen?",
+         "answer": "yes", "slots": {"who": "Rob", "how": "clean the kitchen"},
+         "direction": "them_for_me"},
+    ]
+    board = rnd._replay_board()
+    bucket = facets.DIRECTION_BUCKETS["them_for_me"]
+    assert board["how"][bucket] == 1.0
+
+
+async def test_caregiver_hint_fires_until_direction_has_evidence(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend(),
+                caregivers=["Rob"], rng=_FixedRandom(0.99))
+    rnd._seed_values = rnd._inject_direction_buckets({"who": ["Rob", "Julie"]})
+    rnd._history = [
+        {"kind": "query", "text": "Is it about Rob?", "answer": "yes",
+         "slots": {"who": "Rob"}},
+    ]
+    board = rnd._replay_board()
+    assert rnd._caregiver_hint(board) == "Rob"  # who-leader is the caregiver
+    # Once any direction bucket has positive evidence, the prior is spent.
+    rnd._history.append(
+        {"kind": "query", "text": "Do you want Rob to help you?", "answer": "kinda",
+         "slots": {"who": "Rob"}, "direction": "them_for_me"}
+    )
+    assert rnd._caregiver_hint(rnd._replay_board()) == ""
+
+
+async def test_caregiver_hint_needs_a_caregiver_match(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend(),
+                caregivers=["Rob"], rng=_FixedRandom(0.99))
+    rnd._seed_values = rnd._inject_direction_buckets({"who": ["Julie"]})
+    rnd._history = [
+        {"kind": "query", "text": "Is it about Julie?", "answer": "yes",
+         "slots": {"who": "Julie"}},
+    ]
+    assert rnd._caregiver_hint(rnd._replay_board()) == ""  # Julie isn't one
+
+
+def test_futile_pair_bans_the_drilled_value(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend())
+    seg = [
+        {"kind": "query", "text": f"q{i}", "answer": "no",
+         "slots": {"who": "Rob", "how": "remind"}}
+        for i in range(4)
+    ]
+    assert rnd._futile_pair(seg) == ("how", "remind")  # never the who-anchor
+
+
+def test_futile_direction_bans_the_bucket(topics: list[Topic]) -> None:
+    # Content guesses vary but the direction doesn't — ban the whole bucket.
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend())
+    seg = [
+        {"kind": "query", "text": f"q{i}", "answer": "no",
+         "slots": {"who": "Rob", "what": f"thing {i}"},
+         "direction": "tell_them"}
+        for i in range(4)
+    ]
+    assert rnd._futile_pair(seg) == (
+        "how", facets.DIRECTION_BUCKETS["tell_them"]
+    )
+
+
+async def test_board_record_carries_seeds_and_final(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    record = rnd.board_record()
+    assert record["seeds"] == rnd._seed_values
+    assert any(
+        score > 0 for pairs in record["final"].values() for _v, score in pairs
+    )
 
 
 # ------------------------------------------------------------ session, misc

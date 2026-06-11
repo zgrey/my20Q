@@ -79,6 +79,9 @@ class ReasonerAction:
     slots: dict[str, str] = field(default_factory=dict)
     #: The focus category the controller chose for this query.
     focus: str = ""
+    #: The intent-direction bucket the question asserts (person topics only;
+    #: classified by code from the question text — see facets.classify_direction).
+    direction: str = ""
 
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
@@ -221,6 +224,9 @@ class Reasoner:
         split_pair: tuple[str, str] | None = None,
         history: list[dict],
         asked: list[str] | None = None,
+        established: set[tuple[str, str]] | None = None,
+        banned: tuple[str, str] | None = None,
+        caregiver_hint: str = "",
         seed_context: str = "",
         profile_context: str = "",
         topic_hint: str = "",
@@ -232,14 +238,16 @@ class Reasoner:
 
         Two phases for EVERY model: DELIBERATE (free-form reasoning, no JSON)
         then FORMAT (strict JSON, salvaged from the draft if the format call
-        comes up empty). Three hard gates — yes/no answerability, the repeat
-        gate, and slot anchoring (every credited value must be words the
-        question says). After the retry budget, a clean non-repeating question
-        with empty slots is accepted (it still informs the dialogue; the
-        answer just scores nothing); otherwise raises for the engine's
+        comes up empty). Four hard gates — yes/no answerability, the repeat
+        gate, slot anchoring (every credited value must be words the question
+        says), and the zero-information gate (a question asserting ONLY
+        already-established pairs re-confirms what is known and is re-prompted
+        — the cheap expected-information-gain proxy). After the retry budget,
+        the best clean question is accepted; otherwise raises for the engine's
         recovery path.
         """
         asked = list(asked or [])
+        established = established or set()
         corrections: list[str] = []
         best: ReasonerAction | None = None
         for attempt in range(MAX_AUDIT_RETRIES + 1):
@@ -260,6 +268,8 @@ class Reasoner:
                     emotional_state=emotional_state,
                     corrections=corrections,
                     exploratory=exploratory,
+                    banned=banned,
+                    caregiver_hint=caregiver_hint,
                 )
             )
             if not draft.strip():
@@ -303,6 +313,19 @@ class Reasoner:
                 corrections.append(
                     "tag 1-2 slots whose value the question itself states "
                     "(who/what/when/where/why/how)"
+                )
+                continue
+            # Gate 4 — zero information: every asserted pair is already an
+            # established leader (confirmation farming — one trial pumped
+            # who=Zach to +7.5 on re-confirmations while the real unknown
+            # starved). Splits are exempt: tied leaders NEED separating.
+            if (
+                directive != "split"
+                and all((c, v) in established for c, v in slots.items())
+            ):
+                corrections.append(
+                    "every detail in that question is already confirmed — ask "
+                    f"about something not yet established (the '{focus}' slot)"
                 )
                 continue
             return action
@@ -459,7 +482,9 @@ def _anchored_slots(
 
     This is the structural fix for the score-drift bug: a "yes" can no longer
     credit a contender (e.g. an Aaron visit) when the question never mentioned
-    it. Values are folded onto existing contenders when equivalent so points
+    it. Verb-led values tagged "what" are re-filed under "how" (actions are
+    not objects — mis-filing jammed the focus policy on an unfillable slot),
+    and values fold onto existing contenders when equivalent so points
     accumulate instead of fragmenting.
     """
     out: dict[str, str] = {}
@@ -471,6 +496,9 @@ def _anchored_slots(
         clean = sanitize_llm_text(value)[:MAX_VALUE_CHARS].strip()
         if not clean or not facets.mentions(question, clean):
             continue
+        cat = facets.remap_slot(cat, clean)
+        if cat in out:
+            continue  # a re-filed action never overwrites an explicit how-tag
         out[cat] = facets.canonical_value(board, cat, clean)
         if len(out) >= 2:
             break

@@ -112,6 +112,14 @@ SCENARIOS: list[Scenario] = [
     Scenario("lonely", "mental_health", "I feel lonely and want someone to sit with me."),
     Scenario("anxious-noise", "mental_health", "I feel anxious and want the room quieter."),
     Scenario("call-daughter", "my_people", "I want to phone my daughter."),
+    # The two June-2026 live-trial targets — canonical regressions for the
+    # direction layer (they-do-for-me requests; gemma3 failed the second live).
+    Scenario(
+        "move-picture",
+        "my_people",
+        "I need Zach to come over and help me move a large picture in the house.",
+    ),
+    Scenario("rob-kitchen", "my_people", "I need Rob to clean the kitchen."),
 ]
 
 

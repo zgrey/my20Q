@@ -23,6 +23,17 @@ def dump(path: str) -> None:
             jb = r.get("job_b")
             if isinstance(jb, dict) and jb.get("seed_context"):
                 print(f"    seed_context: {jb['seed_context']!r}")
+            board = r.get("board") or {}
+            if board.get("seeds"):
+                for cat, vals in board["seeds"].items():
+                    if vals:
+                        print(f"    seed {cat:6s}: {', '.join(vals)}")
+            if board.get("final"):
+                print("    final board:")
+                for cat, pairs in board["final"].items():
+                    ranked = sorted(pairs, key=lambda p: -p[1])[:6]
+                    line = " | ".join(f"{v} {s:+.1f}" for v, s in ranked)
+                    print(f"      {cat:6s}: {line}")
             for q in r.get("queries", []):
                 kind = q.get("kind", "?")
                 ans = q.get("answer")

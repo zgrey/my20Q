@@ -31,6 +31,30 @@ def test_update_credits_only_the_asserted_pairs() -> None:
     assert board["what"]["a picture"] == 0.0  # other categories untouched
 
 
+def test_no_hits_only_the_lowest_scoring_pair() -> None:
+    # THE collateral-damage fix: "Do you want to remind Rob about your blood
+    # pressure?" → no must disconfirm *blood pressure*, not the confirmed
+    # *Rob* (one trial buried its only anchor under 29 such hits).
+    board = _seeded()
+    board = facets.update(board, {"who": "Rob"}, "yes")
+    board = facets.update(board, {"who": "Rob"}, "yes")
+    board = facets.update(board, {"who": "Rob", "what": "blood pressure"}, "no")
+    assert board["who"]["Rob"] == 2.0  # the anchor is protected
+    assert board["what"]["blood pressure"] == -1.0  # the guess takes the hit
+
+
+def test_no_on_a_single_pair_still_counts_in_full() -> None:
+    board = facets.update(_seeded(), {"who": "Zach"}, "yes")
+    board = facets.update(board, {"who": "Zach"}, "no")  # direct "Is it Zach?"
+    assert board["who"]["Zach"] == 0.0
+
+
+def test_no_with_tied_low_pairs_hits_all_of_them() -> None:
+    board = facets.update(_seeded(), {"who": "Rob", "what": "a drink"}, "no")
+    assert board["who"]["Rob"] == -1.0  # both at 0 → both lowest → both hit
+    assert board["what"]["a drink"] == -1.0
+
+
 def test_update_answer_weights() -> None:
     board = _seeded()
     assert facets.update(board, {"who": "Zach"}, "kinda")["who"]["Zach"] == 0.5
@@ -135,6 +159,73 @@ def test_canonical_value_folds_variants() -> None:
     assert facets.canonical_value(board, "what", "the picture") == "a picture"
     assert facets.canonical_value(board, "what", "A Drink") == "a drink"
     assert facets.canonical_value(board, "what", "a warm blanket") == "a warm blanket"
+
+
+def test_action_values_refile_from_what_to_how() -> None:
+    # "help with tasks" reached +6 in WHAT in one trial while HOW never
+    # established — actions are how, objects are what.
+    assert facets.action_like("help with tasks")
+    assert facets.action_like("physically move items around")  # adverb-led
+    assert not facets.action_like("a picture")
+    assert not facets.action_like("the kitchen")
+    assert facets.remap_slot("what", "help with tasks") == "how"
+    assert facets.remap_slot("what", "a picture") == "what"
+    assert facets.remap_slot("why", "cleaning") == "why"  # only what is re-filed
+
+
+# ------------------------------------------------------- the direction layer
+
+
+def test_mirror_map_is_symmetric() -> None:
+    for a, b in facets.MIRROR.items():
+        assert facets.MIRROR[b] == a
+        assert a in facets.DIRECTION_BUCKETS and b in facets.DIRECTION_BUCKETS
+
+
+def test_classify_direction_them_for_me() -> None:
+    who = ["Rob", "Zach"]
+    assert facets.classify_direction("Do you want Rob to clean the kitchen?", who) == "them_for_me"
+    assert facets.classify_direction("Do you need Zach to bring you a drink?", who) == "them_for_me"
+    assert facets.classify_direction("Will Zach help you move it?", who) == "them_for_me"
+    assert (
+        facets.classify_direction("Do you want someone to have a visit with you?", who)
+        == "them_for_me"
+    )
+
+
+def test_classify_direction_me_for_them() -> None:
+    who = ["Rob"]
+    assert facets.classify_direction("Do you want to bring Rob a drink?", who) == "me_for_them"
+    assert facets.classify_direction("Do you want to visit Rob?", who) == "me_for_them"
+    assert (
+        facets.classify_direction("Do you want to make your space look nice for Rob?", who)
+        == "me_for_them"
+    )
+
+
+def test_classify_direction_tell_and_ask() -> None:
+    who = ["Rob", "Julie"]
+    assert (
+        facets.classify_direction("Do you want to tell Rob that you are proud of him?", who)
+        == "tell_them"
+    )
+    assert (
+        facets.classify_direction("Do you want Rob to know that you love him?", who)
+        == "tell_them"
+    )
+    assert (
+        facets.classify_direction("Are you wanting to ask Julie about something?", who)
+        == "ask_them"
+    )
+
+
+def test_classify_direction_leaves_concern_unclassified() -> None:
+    # "want Rob to be okay" is care ABOUT him, not a task request — and state
+    # questions are not direction. Genuine concerns must never read as tasks.
+    who = ["Rob", "Zach"]
+    assert facets.classify_direction("Do you want Rob to be okay?", who) is None
+    assert facets.classify_direction("Is Zach having trouble with something?", who) is None
+    assert facets.classify_direction("Are you worried about Rob?", who) is None
 
 
 def test_facet_view_shape() -> None:

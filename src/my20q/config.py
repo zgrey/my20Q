@@ -43,6 +43,11 @@ class ReasoningTuning:
     #: MORE than this many CONSECUTIVE "no" answers triggers the restart recovery
     #: (the working context is wrong — dump it). See ``Round._consec_no_streak``.
     soft_reset_no_streak: int = 10
+    #: Restart when this many answered queries pass with ZERO progress (no pair
+    #: newly reaching a confirmed score, no synthesis attempt) — sparse kindas
+    #: can otherwise shield a dead-end round from the no-streak trigger. 0
+    #: disables. See ``Round._stalled``.
+    stall_window: int = 8
     #: A facet category counts as DETERMINED once its leading contender has at
     #: least this many consensus points (and a clear margin — below). When every
     #: core category is determined, synthesis can fire early with placeholders
@@ -70,6 +75,7 @@ class ReasoningTuning:
             synth_attempts_before_restart=_int("MY20Q_SYNTH_ATTEMPTS", 2, minimum=1),
             explore_decay=_float("MY20Q_EXPLORE_DECAY", 2 / 3, lo=0.0, hi=1.0),
             soft_reset_no_streak=_int("MY20Q_SOFT_RESET_NOS", 10, minimum=1),
+            stall_window=_int("MY20Q_STALL_WINDOW", 8, minimum=0),
             facet_ready_points=_float("MY20Q_FACET_READY", 2.0, lo=0.5, hi=1e9),
             facet_split_margin=_float("MY20Q_SPLIT_MARGIN", 1.0, lo=0.0, hi=1e9),
         )

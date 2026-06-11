@@ -90,18 +90,22 @@ OUTPUT — STRICT JSON, nothing else:
 
 - "question": the single yes/no question from the draft, cleaned to one plain
   everyday sentence (no either/or, no reasoning language).
-- "slots": what the question ASSERTS, as 1-2 entries mapping a slot — one of
-  who/what/when/where/why/how — to the value the question names. Every value
-  MUST be words the question itself says (e.g. "Do you need Zach to move it?"
-  → {"who": "Zach", "how": "move it"}). NEVER tag a value the question does
-  not mention. Reuse the exact wording of a listed contender when the
-  question is about it.
+- "slots": what the question ASSERTS, as 1-2 entries mapping a slot to the
+  value the question names. The slots are: "who" = the OTHER person involved;
+  "what" = the thing or object — a NOUN (an action like "help with tasks" is
+  NEVER "what"); "when" = timing; "where" = place; "why" = the motivation;
+  "how" = the ACTION wanted (a verb phrase: "move it", "clean the kitchen").
+  Every value MUST be words the question itself says (e.g. "Do you need Zach
+  to move it?" → {"who": "Zach", "how": "move it"}). NEVER tag a value the
+  question does not mention. Reuse the exact wording of a listed contender
+  when the question is about it.
 - "preface": OPTIONAL short spoken lead-in, at most 8 words, ENDING with an em
   dash, that flows grammatically into the question when read aloud as one
   sentence (e.g. "Okay, not food then —"). It must not reuse the question's
   words and must not be a question. Use "" when nothing natural fits — empty
   beats awkward.
-- "rationale": one short sentence for the caregiver's panel; never spoken.
+- "rationale": one short sentence for the caregiver's panel, in PLAIN everyday
+  language — never mention slots, boards, contenders, or drafts; never spoken.
 No medical advice, URLs, markup, or emoji.
 """
 
@@ -279,7 +283,8 @@ _DIRECTIVE_NOTE = {
     "probe": (
         "DIRECTIVE — PROBE the focus slot: test its most plausible contender, "
         "or a fresh on-topic value the board is missing if the listed ones "
-        "look wrong."
+        "look wrong. When nothing in the slot is confirmed yet, prefer testing "
+        "a BROAD kind of value before a specific instance."
     ),
     "split": (
         "DIRECTIVE — SPLIT the tie: the two contenders below have matching "
@@ -291,11 +296,37 @@ _DIRECTIVE_NOTE = {
         "MORE SPECIFIC version of it (a concrete instance, detail, or "
         "narrower form)."
     ),
+    "pin": (
+        "DIRECTIVE — PIN DOWN the focus slot: the last proposed message was "
+        "CLOSE but not confirmed, and this slot is its weakest detail. Ask a "
+        "specific question that nails the slot's exact value (a concrete "
+        "instance — NOT a reword of the message, NOT a re-ask of details the "
+        "person already confirmed)."
+    ),
 }
 
 _EXPLORE_NOTE = (
     "EXPLORE — do NOT lean on the patient profile this turn, and prefer a "
     "BRAND-NEW plausible value for the focus slot over the listed ones.\n\n"
+)
+
+#: Injected when one contender has soaked up a run of "no" guesses — the
+#: enumeration trap (remind→dinner→memory→appointment→medicine→…).
+_EXHAUSTED_NOTE = (
+    'EXHAUSTED AVENUE — "{value}" has had several guesses in a row, all '
+    'answered "no". Do NOT build this question around "{value}" again; test a '
+    "genuinely different contender or kind of {cat}.\n\n"
+)
+
+#: Injected when the who-leader is a known caregiver and no direction is
+#: established. Caregivers offer care as tasks — test that direction FIRST,
+#: but never assume it (concern ABOUT a caregiver is also real).
+_CAREGIVER_NOTE = (
+    'NOTE — "{who}" is the patient\'s caregiver. A need involving a caregiver '
+    "is MOST OFTEN asking them to do a care task FOR the patient, so test "
+    "that direction first (does the patient need {who} to do or help with "
+    "something?). Do NOT assume it — genuine concern ABOUT {who} is also "
+    "possible; one clear answer settles the direction.\n\n"
 )
 
 
@@ -326,13 +357,17 @@ def deliberate_messages(
     emotional_state: dict | None = None,
     corrections: list[str] | None = None,
     exploratory: bool = False,
+    banned: tuple[str, str] | None = None,
+    caregiver_hint: str = "",
 ) -> list[LLMMessage]:
     """Free-form reasoning to choose the next yes/no question (no JSON).
 
     Phase 1 of the two-phase ask. ``focus`` is the slot the controller chose
-    to advance; ``directive`` is one of probe/split/drill; ``split_pair``
+    to advance; ``directive`` is one of probe/split/drill/pin; ``split_pair``
     carries the two tied values for a split. ``exploratory`` drops the profile
-    and pushes a fresh value.
+    and pushes a fresh value. ``banned`` is an (category, value) the futility
+    guard has cut off this turn; ``caregiver_hint`` names a who-leader who is
+    a known caregiver (test the care-task direction first).
     """
     instruction = f"Topic for this round: {topic_label}\n\n"
     instruction += _context_block(
@@ -343,6 +378,10 @@ def deliberate_messages(
     )
     if exploratory:
         instruction += _EXPLORE_NOTE
+    if caregiver_hint:
+        instruction += _CAREGIVER_NOTE.format(who=caregiver_hint)
+    if banned is not None:
+        instruction += _EXHAUSTED_NOTE.format(value=banned[1], cat=banned[0])
     instruction += (
         f"THE BOARD (slot: contenders [points]):\n{_board_block(board)}\n\n"
         f"FOCUS SLOT: {focus}\n"

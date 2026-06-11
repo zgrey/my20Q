@@ -115,6 +115,7 @@ def _maybe_record(state, handle: _RoundHandle) -> None:
             final_utterance=rnd.final_utterance,
             model=state.model_label,
             emotional_state=rnd.emotional_state,
+            board=rnd.board_record(),
         )
         handle.recorded = True
 
@@ -550,6 +551,7 @@ def _register_routes(app: FastAPI) -> None:
                     final_utterance=r.final_utterance,
                     model=state.model_label,
                     emotional_state=r.emotional_state,
+                    board=r.board_record(),
                 )
             )
         if format == "md":

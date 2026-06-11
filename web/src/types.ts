@@ -120,6 +120,9 @@ export interface RoundRecord {
   job_b: number;
   queries: HistoryEntry[];
   emotional_state: Record<string, number>;
+  // Board evolution (seeds / final / restart snapshots) — autopsy data; the
+  // review UI does not render it (yet).
+  board?: Record<string, unknown>;
   model: string;
   recorded_at: string;
 }
