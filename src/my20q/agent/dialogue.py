@@ -120,6 +120,9 @@ class RoundEvent:
     # For kind == "diagnostic": what failed and what was attempted, so the
     # cockpit can render a useful failure card instead of a canned question.
     diagnostic: dict | None = None
+    # The question this one replaced via the opposition button — lets the
+    # cockpit mark a flipped question instead of presenting it as a new turn.
+    flipped_from: str = ""
 
 
 class Round:
@@ -128,9 +131,10 @@ class Round:
     Drive it: ``await open()`` once, then alternate ``await answer(a)``
     with reading each `RoundEvent`. ``add_context`` injects caregiver
     steering; ``await undo()`` rewinds the last entry; ``await retry()``
-    re-proposes after a diagnostic. The round is over once an event of
-    kind ``synthesized``, ``abandoned``, or ``emergency`` is returned
-    (also reflected by ``is_terminal``).
+    re-proposes after a diagnostic; ``await flip()`` re-renders the pending
+    question in its opposite connotation (an action, not an answer). The
+    round is over once an event of kind ``synthesized``, ``abandoned``, or
+    ``emergency`` is returned (also reflected by ``is_terminal``).
     """
 
     def __init__(
@@ -187,6 +191,10 @@ class Round:
         self._seed_values: dict[str, list[str]] | None = None
         self._history: list[dict] = []
         self._pending: ReasonerAction | None = None
+        # Questions replaced unanswered via the opposition button. They were
+        # rendered (often spoken), so the repeat gate must still span them —
+        # but they carry no answer and never enter the history/board.
+        self._superseded: list[str] = []
         self._outcome: str | None = None
         self._final_utterance = ""
         self._opened = False
@@ -260,6 +268,8 @@ class Round:
             entry["focus"] = pending.focus
         if pending.kind == "query" and pending.direction:
             entry["direction"] = pending.direction
+        if pending.kind == "query" and pending.flipped_from:
+            entry["flipped_from"] = pending.flipped_from
         # An INFORMATIVE yes moved the board (some asserted pair was not yet
         # established); a yes that merely re-confirms established leaders
         # earns its points but does NOT advance the synthesis gates —
@@ -364,6 +374,50 @@ class Round:
             raise RuntimeError("round is already terminal")
         self._pending = None
         return await self._advance()
+
+    async def flip(self) -> RoundEvent:
+        """Re-render the pending question in its opposite connotation.
+
+        The caregiver's opposition button — an ACTION, not an answer: the
+        question on screen points the wrong way (e.g. "do something for Rob"
+        when the need is Rob doing something for the patient), so it is
+        re-asked mirrored and the round keeps waiting for an answer. The
+        original was rendered (often spoken), so it still counts as asked for
+        the repeat gate; it never enters the history or the board. Failure is
+        soft: any error leaves the pending question untouched.
+        """
+        if not self._opened:
+            raise RuntimeError("flip() called before open()")
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        pending = self._pending
+        if pending is None or pending.kind != "query":
+            raise RuntimeError("no pending question to flip")
+        if self._reasoner is None:
+            raise RuntimeError("no language model is configured — cannot flip")
+
+        board = self._replay_board()
+        action = await self._reasoner.flip(
+            question=pending.content,
+            board=board,
+            focus=pending.focus,
+            direction=pending.direction,
+            mirror=facets.MIRROR.get(pending.direction, ""),
+            on_phase=self.on_phase,
+        )
+        # Reasoning demonstrably works — clear any failure streak.
+        self._consec_failures = 0
+        self.engine = "reasoning"
+        self._superseded.append(pending.content)
+        if self.topic.direction:
+            who_names = [v for v, _ in facets.live(board, "who")]
+            if action.slots.get("who"):
+                who_names.append(action.slots["who"])
+            action.direction = (
+                facets.classify_direction(action.content, who_names) or ""
+            )
+        self._pending = action
+        return self._event_for(action, facets.facet_view(board, action.focus))
 
     # -------------------------------------------------------- internal
 
@@ -549,7 +603,7 @@ class Round:
         )
         asked = [
             h["text"] for h in self._history if h.get("kind") == "query" and h.get("text")
-        ]
+        ] + self._superseded
         # Established pairs (confident leaders) — Gate 4's zero-information set.
         established: set[tuple[str, str]] = set()
         for cat in facets.CATEGORIES:
@@ -1187,6 +1241,7 @@ class Round:
             query_index=idx,
             engine=self.engine,
             facets=board_view or [],
+            flipped_from=action.flipped_from,
         )
 
 

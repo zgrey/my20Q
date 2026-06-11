@@ -80,6 +80,7 @@ def _event_out(ev: RoundEvent, catalog: list[Pictogram]) -> schemas.EventOut:
         pictogram=match.id if match else None,
         facets=[schemas.FacetOut(**f) for f in ev.facets],
         diagnostic=ev.diagnostic,
+        flipped_from=ev.flipped_from,
     )
 
 
@@ -411,6 +412,24 @@ def _register_routes(app: FastAPI) -> None:
         try:
             handle.last_event = await handle.round.retry()
         except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return _round_state(handle)
+
+    @app.post(
+        "/api/sessions/{sid}/rounds/{rid}/flip", response_model=schemas.RoundStateOut
+    )
+    async def flip(sid: str, rid: str) -> schemas.RoundStateOut:
+        """Re-render the pending question in its opposite connotation.
+
+        The opposition button — an action, not an answer: the same question
+        comes back mirrored (who-does-for-whom swapped, or the key detail
+        reversed) and the round keeps waiting for an answer. Failure is soft
+        (409): the pending question stays as it was.
+        """
+        handle = _handle(sid, rid)
+        try:
+            handle.last_event = await handle.round.flip()
+        except RuntimeError as exc:  # includes ReasonerError — pending unchanged
             raise HTTPException(409, str(exc)) from exc
         return _round_state(handle)
 

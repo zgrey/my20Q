@@ -47,6 +47,11 @@ def _controller_backend(*, utterance: str) -> MockBackend:
                 {"who": ["your son", "a friend"], "what": ["a phone call", "a visit"],
                  "how": ["call", "visit"], "why": ["missing them"]}
             )
+        if "OPPOSITE button" in system:  # the opposition button's one-shot
+            return json.dumps(
+                {"question": "Do you want your son to call you?",
+                 "slots": {"who": "your son"}}
+            )
         if "pin down the ONE specific" in system:  # deliberate
             return "thinking about who and what..."
         if "Convert a drafted question" in system:  # format
@@ -170,6 +175,38 @@ def test_reasoning_round_via_injected_backend() -> None:
         ).json()
     assert state["event"]["kind"] == "synthesis"
     assert "son" in state["event"]["text"]
+
+
+def test_flip_endpoint_replaces_the_pending_question() -> None:
+    # The opposition button: an action, not an answer — the same question
+    # comes back mirrored and the round keeps waiting.
+    client = _reasoning_client()
+    sid = client.post("/api/sessions").json()["session_id"]
+    state = client.post(
+        f"/api/sessions/{sid}/rounds", json={"topic_id": "my_people"}
+    ).json()
+    rid = state["round_id"]
+    first = state["event"]["text"]
+    assert first == "Do you want to call your son?"
+
+    state = client.post(f"/api/sessions/{sid}/rounds/{rid}/flip").json()
+    assert state["event"]["kind"] == "query"
+    assert state["event"]["text"] == "Do you want your son to call you?"
+    assert state["event"]["flipped_from"] == first
+    assert state["history"] == []  # nothing was answered by the flip
+    assert state["query_count"] == 0
+
+
+def test_flip_without_a_pending_question_409s() -> None:
+    client = _no_llm_client()
+    sid = client.post("/api/sessions").json()["session_id"]
+    rid = client.post(
+        f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
+    ).json()["round_id"]
+    # The no-LLM round shows a diagnostic — there is no question to flip,
+    # and the failure is soft (409), never a crash or a changed round.
+    resp = client.post(f"/api/sessions/{sid}/rounds/{rid}/flip")
+    assert resp.status_code == 409
 
 
 # The live SSE stream is exercised by the cockpit; a TestClient cannot tear

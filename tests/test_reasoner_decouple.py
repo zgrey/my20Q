@@ -186,6 +186,71 @@ async def test_clean_question_with_no_slots_is_best_effort_accepted() -> None:
     assert action.rationale.startswith("(best-effort)")
 
 
+# --------------------------------------------------------------------- flip
+
+
+def _flip_responder(payloads: list[dict]):
+    """Respond to each flip call with the next payload (last one repeats)."""
+    state = {"n": 0}
+
+    def responder(msgs: list) -> str:
+        out = payloads[min(state["n"], len(payloads) - 1)]
+        state["n"] += 1
+        return json.dumps(out)
+
+    return responder
+
+
+async def test_flip_is_one_shot_and_carries_its_origin() -> None:
+    flipped = {"question": "Do you want Zach to move it for you?",
+               "slots": {"who": "Zach"}}
+    mock = MockBackend(responder=_flip_responder([flipped]))
+    action = await Reasoner(mock).flip(
+        question="Do you want to move it for Zach?", board=_BOARD, focus="how"
+    )
+    assert action.kind == "query"
+    assert action.content == "Do you want Zach to move it for you?"
+    assert action.flipped_from == "Do you want to move it for Zach?"
+    assert action.slots["who"] == "Zach"
+    assert len(mock.calls) == 1  # no deliberate phase — a trigger, not a turn
+    assert mock.think_args == [False]
+
+
+async def test_flip_rejects_an_unchanged_echo() -> None:
+    same = {"question": "Do you want to move it for Zach?", "slots": {"who": "Zach"}}
+    flipped = {"question": "Do you want Zach to move it for you?",
+               "slots": {"who": "Zach"}}
+    mock = MockBackend(responder=_flip_responder([same, flipped]))
+    action = await Reasoner(mock).flip(
+        question="Do you want to move it for Zach?", board=_BOARD
+    )
+    assert action.content == "Do you want Zach to move it for you?"
+    assert any("same question" in str(m) for m in mock.calls[1])
+
+
+async def test_flip_mirror_note_names_both_buckets() -> None:
+    flipped = {"question": "Do you want Zach to move it for you?",
+               "slots": {"who": "Zach"}}
+    mock = MockBackend(responder=_flip_responder([flipped]))
+    await Reasoner(mock).flip(
+        question="Do you want to move it for Zach?",
+        board=_BOARD,
+        direction="me_for_them",
+        mirror="them_for_me",
+    )
+    sent = str(mock.calls[0])
+    assert facets.DIRECTION_BUCKETS["me_for_them"] in sent
+    assert facets.DIRECTION_BUCKETS["them_for_me"] in sent
+
+
+async def test_flip_raises_when_no_usable_flip_emerges() -> None:
+    same = {"question": "Do you want to move it for Zach?", "slots": {}}
+    with pytest.raises(ReasonerError):
+        await Reasoner(MockBackend(responder=_flip_responder([same]))).flip(
+            question="Do you want to move it for Zach?", board=_BOARD
+        )
+
+
 # ------------------------------------------------------------------ preface
 
 

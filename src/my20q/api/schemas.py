@@ -82,6 +82,8 @@ class EventOut(BaseModel):
     # For kind == "diagnostic": what failed and what was attempted (reason,
     # llm_unreachable, restart_attempted, consecutive_failures).
     diagnostic: dict | None = None
+    # The question this one replaced via the opposition button ("" otherwise).
+    flipped_from: str = ""
 
 
 class HistoryEntryOut(BaseModel):

@@ -11,6 +11,8 @@ four focused calls:
 - ``synthesize_messages``— weave the per-slot leaders into one natural
   first-person utterance (placeholders for unknown slots, never a slot dump).
 - ``expand_messages``    — facet values implied by a caregiver note.
+- ``flip_messages``      — the pending question re-rendered in its opposite
+  connotation (the caregiver's opposition button).
 
 See docs/design/beta-retool.md §7 and docs/design/reasoning-retro.md §8.
 """
@@ -131,6 +133,29 @@ OUTPUT — STRICT JSON, nothing else:
   detail); a "no" means that framing was wrong (change the angle). NEVER
   repeat a rejected utterance.
 - No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
+"""
+
+FLIP_SYSTEM = """\
+The caregiver pressed the OPPOSITE button: the on-screen yes/no question points
+the wrong way, and they want the SAME question asked again with its direction
+or connotation REVERSED — not a new question.
+
+OUTPUT — STRICT JSON, nothing else:
+{"question": "...", "slots": {"who": "Rob"}}
+
+How to flip:
+- When the question involves the person AND someone else, swap WHO DOES the
+  thing FOR WHOM: "Do you want to bring Rob a drink?" → "Do you want Rob to
+  bring you a drink?". Telling someone ↔ asking/hearing from them.
+- Otherwise reverse the question's key detail: "Is it too hot…?" → "Is it too
+  cold…?", "…right now?" → "…later?".
+- KEEP everything else the same — same people, same subject words, same plain
+  everyday tone. ONE yes/no question; no either/or; no new guesses; never a
+  bare negation ("Do you NOT want…").
+- "slots": 1-2 entries naming what the FLIPPED question asserts ("who" =
+  the other person, "what" = the thing, "when"/"where"/"why", "how" = the
+  action). Every value MUST be words the flipped question itself says.
+No medical advice, URLs, markup, or emoji.
 """
 
 EXPAND_SYSTEM = """\
@@ -420,6 +445,32 @@ def format_question_messages(
     )
     return [
         {"role": "system", "content": FORMAT_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
+def flip_messages(
+    question: str,
+    *,
+    direction_note: str = "",
+    corrections: list[str] | None = None,
+) -> list[LLMMessage]:
+    """Ask for the pending question re-rendered in its opposite connotation.
+
+    The opposition button's one-shot call — deliberately tiny (no board, no
+    history) so the flip feels like a trigger click, not a reasoning turn.
+    ``direction_note`` carries the bucket mirror when the original question
+    classified into a direction (the unambiguous flip target).
+    """
+    instruction = f'QUESTION ON SCREEN:\n  "{question}"\n\n'
+    if direction_note:
+        instruction += direction_note + "\n\n"
+    if corrections:
+        joined = "\n".join(f"  - {c}" for c in corrections)
+        instruction += f"YOUR PREVIOUS ATTEMPT WAS REJECTED:\n{joined}\n\n"
+    instruction += "Return the flipped question as strict JSON."
+    return [
+        {"role": "system", "content": FLIP_SYSTEM},
         {"role": "user", "content": instruction},
     ]
 

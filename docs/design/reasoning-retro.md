@@ -1,4 +1,27 @@
 
+### 9. v2 plan landed (P0–P2) + the opposition button (2026-06-11)
+
+The whole §8 plan is implemented and tested (asymmetric no-crediting,
+what/how re-filing, informative-yes gates, Gate-4, the kinda/pin ladder, the
+direction layer with the sign-flip nudge and the caregiver ask-order prior,
+stalled-progress restart, futility guard, board/seed/restart recording; the
+repeat gate's content-token overlap is Dice with the board's stem/prefix-
+tolerant matcher, because the naive stemmer splits "comes"/"come").
+
+**The opposition button** (owner-directed, 2026-06-11): the trial insight
+"the question is right except for its direction" becomes a caregiver ACTION,
+not an answer. `⇄ Opposite` (key `o`) re-renders the pending question with
+its connotation reversed and keeps waiting: one fast `Reasoner.flip` JSON
+call (no deliberate phase — a trigger, not a turn), primed with the bucket
+mirror when the question classified into a direction. Code re-classifies the
+flipped text, so answers credit the mirrored bucket automatically. The
+superseded question never enters history or the board but still counts as
+asked (the repeat gate spans it); an answered flip records `flipped_from`.
+The repeat gate deliberately does NOT apply to the flip itself — a flip is a
+near-duplicate of its source by design. Failure is soft: audit reject /
+unreachable model leaves the pending question untouched (409 in the
+cockpit). 176 tests pass.
+
 ### 8. The 5W1H facet rebuild — consensus boards, restart recovery, no more banks (2026-06-10)
 
 Two more live trials against the target *"I need Zach to help move a large

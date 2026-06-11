@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import random
 
+import pytest
+
 from my20q.agent import facets
 from my20q.agent.dialogue import (
     MIN_YES_FOR_SYNTHESIS,
@@ -14,6 +16,7 @@ from my20q.agent.dialogue import (
     Session,
 )
 from my20q.agent.prompts import deliberate_messages, seed_messages
+from my20q.agent.reasoner import ReasonerAction, ReasonerError
 from my20q.config import ReasoningTuning
 from my20q.llm import MockBackend
 from my20q.llm.base import LLMUnavailable
@@ -71,12 +74,14 @@ def _controller_backend(
     seed: dict[str, list[str]] | None = None,
     expand: dict[str, list[str]] | None = None,
     slot_cat: str = "what",
+    flip: dict | Exception | None = None,
 ) -> MockBackend:
     """A MockBackend that plays the seed/deliberate/format/expand/synth protocol.
 
     Each formatted question uses a fresh subject (tagged into ``slot_cat``), so
     the repeat gate and the slot-anchoring gate both pass indefinitely; each
-    synthesize call cycles a fresh phrasing.
+    synthesize call cycles a fresh phrasing. ``flip`` overrides the opposition
+    button's one-shot reply (an Exception is raised instead of returned).
     """
     state = {"q": 0, "s": 0}
 
@@ -86,6 +91,14 @@ def _controller_backend(
             return json.dumps(seed or SEED_SLOTS)
         if "HIGH-TRUST" in system:  # expand (caregiver note)
             return json.dumps({"slots": expand or {}})
+        if "OPPOSITE button" in system:  # the opposition button's one-shot
+            if isinstance(flip, Exception):
+                raise flip
+            return json.dumps(
+                flip
+                or {"question": "Do you want someone to bring it to you?",
+                    "slots": {"how": "bring it"}}
+            )
         if "Convert a drafted question" in system:  # format
             word = _SUBJECTS[state["q"] % len(_SUBJECTS)]
             state["q"] += 1
@@ -671,6 +684,11 @@ def _people_backend() -> MockBackend:
                 {"who": ["Rob", "Julie"], "what": ["a visit", "a phone call"],
                  "how": ["call them"], "why": ["missing them"]}
             )
+        if "OPPOSITE button" in system:  # mirror of the first question
+            return json.dumps(
+                {"question": "Do you want Rob to bring you a drink?",
+                 "slots": {"who": "Rob"}}
+            )
         if "Convert a drafted question" in system:
             q, slots = questions[state["q"] % len(questions)]
             state["q"] += 1
@@ -782,6 +800,101 @@ async def test_caregiver_hint_needs_a_caregiver_match(topics: list[Topic]) -> No
          "slots": {"who": "Julie"}},
     ]
     assert rnd._caregiver_hint(rnd._replay_board()) == ""  # Julie isn't one
+
+
+# ------------------------------------------ the opposition button (the flip)
+
+
+async def test_opposition_replaces_pending_as_action_not_answer(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    first = await rnd.open()
+    ev = await rnd.flip()
+    assert ev.kind == "query"
+    assert ev.text == "Do you want someone to bring it to you?"
+    assert ev.flipped_from == first.text
+    assert ev.query_index == first.query_index  # the same turn, re-rendered
+    assert rnd.query_count == 0  # nothing was answered
+    assert rnd.history == []  # an action, not an answer — no entry
+    assert rnd._superseded == [first.text]
+
+
+async def test_opposition_records_origin_when_answered(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    first = await rnd.open()
+    await rnd.flip()
+    await rnd.answer(Answer.YES)
+    entry = rnd.history[0]
+    assert entry["kind"] == "query"
+    assert entry["text"] == "Do you want someone to bring it to you?"
+    assert entry["flipped_from"] == first.text  # the dataset sees the flip
+
+
+async def test_opposition_keeps_the_original_in_the_repeat_gate(
+    topics: list[Topic],
+) -> None:
+    backend = _controller_backend()
+    rnd = Round(_topic(topics, "physical_health"), llm=backend,
+                rng=_FixedRandom(0.99))
+    first = await rnd.open()
+    await rnd.flip()
+    await rnd.answer(Answer.NO)  # answer the flipped question → next ask
+    deliberates = [
+        str(c) for c in backend.calls if "pin down the ONE specific" in str(c[0])
+    ]
+    # The superseded original was rendered (often spoken) — it still counts
+    # as asked, so the model is told not to re-ask it.
+    assert first.text in deliberates[-1]
+
+
+async def test_opposition_requires_a_pending_query(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    with pytest.raises(RuntimeError):
+        await rnd.flip()  # before open()
+    await rnd.open()
+    rnd._pending = ReasonerAction(kind="synthesis", content="I would like water.")
+    with pytest.raises(RuntimeError):
+        await rnd.flip()  # a proposal is confirmed or rejected, never flipped
+
+    bare = Round(_topic(topics, "physical_health"))  # no LLM → diagnostic
+    await bare.open()
+    with pytest.raises(RuntimeError):
+        await bare.flip()  # nothing pending to flip
+
+
+async def test_opposition_failure_leaves_the_pending_question_intact(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=_controller_backend(flip=LLMUnavailable("backend down")),
+                rng=_FixedRandom(0.99))
+    first = await rnd.open()
+    with pytest.raises(ReasonerError):
+        await rnd.flip()
+    # Soft failure: the on-screen question is untouched and still answerable.
+    assert rnd._pending is not None and rnd._pending.content == first.text
+    assert rnd._superseded == []
+    ev = await rnd.answer(Answer.NO)
+    assert ev.kind == "query"
+
+
+async def test_opposition_reverses_the_classified_direction(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=_people_backend(),
+                rng=_FixedRandom(0.99))
+    first = await rnd.open()
+    assert first.text == "Do you want to bring Rob a drink?"
+    assert rnd._pending is not None and rnd._pending.direction == "me_for_them"
+    ev = await rnd.flip()
+    assert ev.flipped_from == first.text
+    # The mirrored question re-classifies by code — answers now credit the
+    # opposite intent bucket.
+    assert rnd._pending is not None and rnd._pending.direction == "them_for_me"
 
 
 def test_futile_pair_bans_the_drilled_value(topics: list[Topic]) -> None:

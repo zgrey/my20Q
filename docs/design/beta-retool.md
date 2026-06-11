@@ -151,6 +151,11 @@ interface*, not this cockpit.
 4. **Input** — quick-answer buttons `y / n / k / s / q` (yes / no / kinda / not sure
    / quit) **and** undo `↶`, plus a free-text field with `send`. The buttons relay
    the patient's answer; the text field is the caregiver's mid-round context channel.
+   Also the **opposition button** `⇄ o` — an *action, not an answer*: it re-renders
+   the pending question in its opposite connotation (who-does-for-whom mirrored via
+   the direction buckets, or the key detail reversed) and keeps waiting. The
+   superseded question still counts as asked for the repeat gate; the answered
+   flip records its origin (`flipped_from`) in the dataset.
 
 ### 6.3 Persistent topic dropdown + recording light
 

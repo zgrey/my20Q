@@ -48,6 +48,10 @@ export const api = {
     post<RoundState>(`/sessions/${sid}/rounds/${rid}/undo`),
   retry: (sid: string, rid: string) =>
     post<RoundState>(`/sessions/${sid}/rounds/${rid}/retry`),
+  // The opposition button: re-render the pending question in its opposite
+  // connotation (an action, not an answer).
+  flip: (sid: string, rid: string) =>
+    post<RoundState>(`/sessions/${sid}/rounds/${rid}/flip`),
   eventsUrl: (sid: string, rid: string) =>
     `${BASE}/sessions/${sid}/rounds/${rid}/events`,
   exportUrl: (sid: string, format: "jsonl" | "md" = "jsonl") =>

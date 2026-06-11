@@ -562,10 +562,12 @@ export function ReasoningTile({
 interface InputProps {
   canAnswer: boolean;
   canUndo: boolean;
+  canFlip: boolean;
   terminal: boolean;
   busy: boolean;
   onAnswer: (a: Answer) => void;
   onUndo: () => void;
+  onFlip: () => void;
   onSend: (text: string) => void;
   onNewRound: () => void;
 }
@@ -577,10 +579,20 @@ const ANSWER_BUTTONS: { a: Answer; label: string; key: string }[] = [
   { a: "not_sure", label: "Not sure", key: "S" },
 ];
 
-/** Tile 4 — quick answers, undo, and the caregiver context field. */
+/** Tile 4 — quick answers, undo/opposite actions, and the caregiver context field. */
 export function InputTile(props: InputProps) {
-  const { canAnswer, canUndo, terminal, busy, onAnswer, onUndo, onSend, onNewRound } =
-    props;
+  const {
+    canAnswer,
+    canUndo,
+    canFlip,
+    terminal,
+    busy,
+    onAnswer,
+    onUndo,
+    onFlip,
+    onSend,
+    onNewRound,
+  } = props;
   const [text, setText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -610,6 +622,16 @@ export function InputTile(props: InputProps) {
         ))}
       </div>
       <div class="secondary-row">
+        {/* The opposition button — an ACTION, not an answer: re-renders the
+            pending question in its opposite connotation and keeps waiting. */}
+        <button
+          class="answer flip"
+          disabled={!canFlip}
+          onClick={onFlip}
+          title="Ask the same question the opposite way around"
+        >
+          ⇄ Opposite<kbd>O</kbd>
+        </button>
         <button class="answer undo" disabled={!canUndo} onClick={onUndo}>
           Undo<kbd>U</kbd>
         </button>

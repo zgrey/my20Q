@@ -197,6 +197,9 @@ export function App() {
     !terminal &&
     (round.event.kind === "query" || round.event.kind === "synthesis");
   const canUndo = !!round && !busy && round.history.length > 0;
+  // The opposition button works on a pending QUERY only — a proposed
+  // utterance is confirmed/rejected, not flipped.
+  const canFlip = !!round && !busy && !terminal && round.event.kind === "query";
 
   const answer = (a: Answer) => {
     if (sessionId && round && canAnswer) {
@@ -207,6 +210,13 @@ export function App() {
   const undo = () => {
     if (sessionId && round && canUndo) {
       run(() => api.undo(sessionId, round.round_id));
+    }
+  };
+  // Flip the pending question to its opposite connotation — a fast "try
+  // again the other way around" trigger, not an answer.
+  const flip = () => {
+    if (sessionId && round && canFlip) {
+      run(() => api.flip(sessionId, round.round_id));
     }
   };
   const retry = () => {
@@ -287,8 +297,8 @@ export function App() {
     });
   };
 
-  // y/n/k/s answer shortcuts, u = undo, q = new round. The handlers are
-  // re-bound each render so they close over current state.
+  // y/n/k/s answer shortcuts, u = undo, o = opposite (flip), q = new round.
+  // The handlers are re-bound each render so they close over current state.
   //
   // While a text-entry surface is focused (the caregiver context field, the
   // topic dropdown, the emotion sliders, or any contenteditable) the shortcuts
@@ -323,6 +333,9 @@ export function App() {
       } else if (key === "u") {
         e.preventDefault();
         undo();
+      } else if (key === "o") {
+        e.preventDefault();
+        flip();
       } else if (key === "q") {
         e.preventDefault();
         newRound();
@@ -379,10 +392,12 @@ export function App() {
           <InputTile
             canAnswer={canAnswer}
             canUndo={canUndo}
+            canFlip={canFlip}
             terminal={!!terminal}
             busy={busy}
             onAnswer={answer}
             onUndo={undo}
+            onFlip={flip}
             onSend={sendContext}
             onNewRound={newRound}
           />

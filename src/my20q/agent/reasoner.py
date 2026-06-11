@@ -13,6 +13,9 @@ The LLM does *language*; ``agent/facets.py`` + ``agent/dialogue.py`` do the
   ever mentioned, e.g. the hallucinated "visit with Aaron").
 - :meth:`Reasoner.expand_slots` — facet values a caregiver note implies.
 - :meth:`Reasoner.synthesize` — weave the slot leaders into an utterance.
+- :meth:`Reasoner.flip` — the pending question re-rendered in its opposite
+  connotation (the caregiver's opposition button; one fast call, no
+  deliberation, repeat gate deliberately not applied).
 
 Anything unusable raises ``ReasonerError``; the engine then runs its
 context-restart recovery and, failing that, surfaces a diagnostic to the
@@ -29,7 +32,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from my20q.agent import facets, prompts
-from my20q.agent.auditor import audit_query, is_repeat
+from my20q.agent.auditor import _normalize, audit_query, is_repeat
 from my20q.agent.safety import sanitize_llm_text, sanitize_utterance
 from my20q.llm.base import LLMBackend, LLMUnavailable
 
@@ -57,6 +60,7 @@ DELIBERATE_MAX_TOKENS = -1
 FORMAT_MAX_TOKENS = 512
 SYNTH_MAX_TOKENS = 256
 EXPAND_MAX_TOKENS = 512
+FLIP_MAX_TOKENS = 256
 
 #: Longest preface (spoken lead-in) we let through, in characters.
 MAX_PREFACE_CHARS = 64
@@ -82,6 +86,9 @@ class ReasonerAction:
     #: The intent-direction bucket the question asserts (person topics only;
     #: classified by code from the question text — see facets.classify_direction).
     direction: str = ""
+    #: The question this one replaced via the caregiver's opposition button —
+    #: recorded with the answer so the dataset shows the flip happened.
+    flipped_from: str = ""
 
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
@@ -431,6 +438,71 @@ class Reasoner:
         return ReasonerAction(
             kind="synthesis", content=cleaned, rationale=rationale, slots=dict(leaders)
         )
+
+    async def flip(
+        self,
+        *,
+        question: str,
+        board: facets.Board,
+        focus: str = "",
+        direction: str = "",
+        mirror: str = "",
+        on_phase: Callable[[str], None] | None = None,
+    ) -> ReasonerAction:
+        """Re-render a pending question with its connotation reversed.
+
+        The caregiver's opposition button: same subject, opposite direction
+        (who-does-for-whom mirrored via the intent buckets when the original
+        classified, the key attribute reversed otherwise). One fast JSON call
+        — no deliberate phase, so the flip feels like a trigger click. The
+        result is audited for yes/no form and must actually differ from the
+        original; the repeat gate deliberately does NOT apply — a flip is a
+        near-duplicate of its source by design.
+        """
+        if on_phase is not None:
+            on_phase("flipping")
+        note = ""
+        if direction in facets.DIRECTION_BUCKETS and mirror in facets.DIRECTION_BUCKETS:
+            note = (
+                f'It currently asks the person about "'
+                f'{facets.DIRECTION_BUCKETS[direction]}" — the flipped question '
+                f'must ask about "{facets.DIRECTION_BUCKETS[mirror]}" instead.'
+            )
+        corrections: list[str] = []
+        for _ in range(MAX_AUDIT_RETRIES + 1):
+            data = await self._chat_json(
+                prompts.flip_messages(
+                    question, direction_note=note, corrections=corrections
+                ),
+                max_tokens=FLIP_MAX_TOKENS,
+                think=False,
+            )
+            out = data.get("question", "")
+            cleaned = sanitize_llm_text(out) if isinstance(out, str) else ""
+            if not cleaned:
+                corrections.append("return the flipped question in the JSON")
+                continue
+            verdict = audit_query(cleaned)
+            if not verdict.ok:
+                corrections.append(verdict.reason)
+                continue
+            if _normalize(cleaned) == _normalize(question):
+                corrections.append(
+                    "that is the same question unchanged — reverse its direction"
+                )
+                continue
+            slots = _anchored_slots(data.get("slots"), cleaned, board)
+            if not slots:
+                slots = _derive_slots(cleaned, board, prefer=focus or "how")
+            return ReasonerAction(
+                kind="query",
+                content=cleaned,
+                rationale="Flipped to the opposite sense at the caregiver's request.",
+                slots=slots,
+                focus=focus,
+                flipped_from=question,
+            )
+        raise ReasonerError("flip: could not produce a flipped question")
 
     def _ask_action(
         self, question: str, slots: dict[str, str], data: dict, focus: str

@@ -55,6 +55,8 @@ export interface RoundEvent {
   pictogram: string | null;
   facets: Facet[]; // live 5W1H consensus board (honest tile)
   diagnostic: Diagnostic | null;
+  // The question this one replaced via the opposition button ("" otherwise).
+  flipped_from: string;
 }
 
 export interface HistoryEntry {
