@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 
 import pytest
 
@@ -98,6 +99,12 @@ def _controller_backend(
                 flip
                 or {"question": "Do you want someone to bring it to you?",
                     "slots": {"how": "bring it"}}
+            )
+        if "DOUBLE-CHECK" in system:  # verify-on-lock one-shot
+            m = re.search(r':\s+"(.+)"', messages[1]["content"])
+            value = m.group(1) if m else "that"
+            return json.dumps(
+                {"question": f"Can you confirm it is {value} you mean?"}
             )
         if "Convert a drafted question" in system:  # format
             word = _SUBJECTS[state["q"] % len(_SUBJECTS)]
@@ -1041,6 +1048,101 @@ async def test_opposition_reverses_the_classified_direction(
     # The mirrored question re-classifies by code — answers now credit the
     # opposite intent bucket.
     assert rnd._pending is not None and rnd._pending.direction == "them_for_me"
+
+
+# ----------------------------------------------------- verify-on-lock (W2-F)
+
+
+def test_verify_due_matrix(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink", "a snack"], "how": ["bring it"]}
+    # Two patient yeses — solidly confirmed, no double-check needed.
+    rnd._history = [
+        {"kind": "query", "text": f"q{i}", "answer": "yes",
+         "slots": {"what": "a drink"}} for i in range(2)
+    ]
+    assert rnd._verify_due(rnd._replay_board()) is None
+    # One yes + a caregiver boost locked it — double-check due.
+    rnd._history = [
+        {"kind": "query", "text": "q", "answer": "yes",
+         "slots": {"what": "a drink"}},
+        {"kind": "context", "text": "cup", "answer": None,
+         "slots": {"what": ["a drink"]}},
+    ]
+    assert rnd._verify_due(rnd._replay_board()) == ("what", "a drink")
+    # Context-only lock (the patient never confirmed at all) — due.
+    rnd._history = [
+        {"kind": "context", "text": "cup", "answer": None,
+         "slots": {"what": ["a drink"]}},
+    ]
+    assert rnd._verify_due(rnd._replay_board()) == ("what", "a drink")
+    # A spent double-check is never repeated — even when it was answered no.
+    rnd._history = [
+        {"kind": "query", "text": "q", "answer": "yes",
+         "slots": {"what": "a drink"}},
+        {"kind": "context", "text": "cup", "answer": None,
+         "slots": {"what": ["a drink"]}},
+        {"kind": "query", "text": "v", "answer": "no",
+         "slots": {"what": "a drink"}, "verify": True},
+    ]
+    assert rnd._verify_due(rnd._replay_board()) is None
+
+
+def test_verify_budget_is_capped(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink"], "how": ["bring it"],
+                        "why": ["thirsty"]}
+    rnd._history = [
+        {"kind": "query", "text": "v1", "answer": "yes",
+         "slots": {"what": "a drink"}, "verify": True},
+        {"kind": "query", "text": "v2", "answer": "yes",
+         "slots": {"how": "bring it"}, "verify": True},
+        # a fresh context-only lock that WOULD be due...
+        {"kind": "context", "text": "thirsty", "answer": None,
+         "slots": {"why": ["thirsty"]}},
+    ]
+    assert rnd._verify_due(rnd._replay_board()) is None  # budget spent
+
+
+def test_direction_credited_bucket_needs_no_verify(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend(),
+                rng=_FixedRandom(0.99))
+    rnd._seed_values = rnd._inject_direction_buckets(
+        {"who": ["Rob"], "what": ["a chore", "a meal"]}
+    )
+    rnd._history = [
+        {"kind": "query", "text": f"t{i}", "answer": "yes",
+         "slots": {"who": "Rob"}, "direction": "tell_them"} for i in range(2)
+    ]
+    board = rnd._replay_board()
+    bucket = facets.DIRECTION_BUCKETS["tell_them"]
+    assert board["how"][bucket] == 2.0  # climbed purely via direction credits
+    assert rnd._verify_due(board) is None  # those yeses count as confirmations
+
+
+async def test_context_locked_pair_gets_a_double_check(
+    topics: list[Topic],
+) -> None:
+    backend = _controller_backend(expand={"what": ["a drink"]})
+    rnd = Round(_topic(topics, "physical_health"), llm=backend,
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # "Is it about a drink?" → +1
+    # The caregiver note boosts the same value to +3 — locked on ONE yes:
+    # the very next turn must be the gate-exempt double-check.
+    ev = await rnd.add_context("she pointed at her cup")
+    assert ev.kind == "query"
+    assert rnd._pending is not None and rnd._pending.verify is True
+    assert rnd._pending.slots == {"what": "a drink"}
+    assert ev.preface.startswith("Just to double-check")
+
+    ev = await rnd.answer(Answer.NO)  # the double-check is rejected
+    entry = next(h for h in rnd.history if h.get("verify"))
+    assert entry["answer"] == "no"
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] == 2.0  # 1 + 2 − 1: normal scoring
+    # Still confident, but spent — the round moves on, no re-verification.
+    assert rnd._pending is not None and not rnd._pending.verify
 
 
 def test_futile_pair_bans_the_drilled_value(topics: list[Topic]) -> None:

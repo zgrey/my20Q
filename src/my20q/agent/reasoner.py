@@ -61,6 +61,7 @@ FORMAT_MAX_TOKENS = 512
 SYNTH_MAX_TOKENS = 256
 EXPAND_MAX_TOKENS = 512
 FLIP_MAX_TOKENS = 256
+VERIFY_MAX_TOKENS = 192
 
 #: Longest preface (spoken lead-in) we let through, in characters.
 MAX_PREFACE_CHARS = 64
@@ -89,6 +90,9 @@ class ReasonerAction:
     #: The question this one replaced via the caregiver's opposition button —
     #: recorded with the answer so the dataset shows the flip happened.
     flipped_from: str = ""
+    #: A deliberate double-check of a single locked pair (verify-on-lock) —
+    #: gate-exempt by construction, recorded so a pair is never re-verified.
+    verify: bool = False
 
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
@@ -230,7 +234,7 @@ class Reasoner:
         directive: str,
         split_pair: tuple[str, str] | None = None,
         history: list[dict],
-        asked: list[str] | None = None,
+        asked: list | None = None,
         established: set[tuple[str, str]] | None = None,
         banned: tuple[str, str] | None = None,
         caregiver_hint: str = "",
@@ -253,7 +257,14 @@ class Reasoner:
         the best clean question is accepted; otherwise raises for the engine's
         recovery path.
         """
-        asked = list(asked or [])
+        # `asked` entries are either bare texts or (text, slot-categories)
+        # pairs; the categories feed the repeat gate's slot-aware exemption
+        # (None = unknown, e.g. flip-superseded questions — never exempt).
+        asked_pairs: list[tuple[str, frozenset[str] | None]] = [
+            (a, None) if isinstance(a, str) else (a[0], a[1]) for a in (asked or [])
+        ]
+        asked_texts = [t for t, _ in asked_pairs]
+        asked_cats = [c for _, c in asked_pairs]
         established = established or set()
         corrections: list[str] = []
         best: ReasonerAction | None = None
@@ -268,7 +279,7 @@ class Reasoner:
                     focus=focus,
                     directive=directive,
                     split_pair=split_pair,
-                    asked=asked,
+                    asked=asked_texts,
                     seed_context=seed_context,
                     profile_context=profile_context,
                     topic_hint=topic_hint,
@@ -298,22 +309,31 @@ class Reasoner:
             if not verdict.ok:
                 corrections.append(verdict.reason)
                 continue
-            # Gate 2 — the hard repeat gate. Checked against every question
-            # asked this round (including dumped segments); the prompt nudge
-            # alone demonstrably failed (the same question asked 7 times).
-            dup = is_repeat(cleaned, asked)
-            if dup is not None:
-                corrections.append(
-                    f'you already asked "{dup}" — ask about something genuinely different'
-                )
-                continue
-            # Gate 3 — slot anchoring: keep only pairs whose value the question
+            # Gate 2 — slot anchoring: keep only pairs whose value the question
             # actually SAYS, folded onto existing contenders when equivalent.
+            # (Computed before the repeat gate — its exemption needs the
+            # candidate's slot categories.)
             slots = _anchored_slots(data.get("slots"), cleaned, board)
             if not slots:
                 # Recover deterministically: credit board contenders the
                 # question text itself mentions.
                 slots = _derive_slots(cleaned, board, prefer=focus)
+            # Gate 3 — the hard repeat gate. Checked against every question
+            # asked this round (including dumped segments); the prompt nudge
+            # alone demonstrably failed (the same question asked 7 times).
+            # Slot-aware: a content-overlap match asserting a NEW slot
+            # category is a drill on the same anchor, not a repeat.
+            dup = is_repeat(
+                cleaned,
+                asked_texts,
+                candidate_cats=frozenset(slots),
+                asked_cats=asked_cats,
+            )
+            if dup is not None:
+                corrections.append(
+                    f'you already asked "{dup}" — ask about something genuinely different'
+                )
+                continue
             action = self._ask_action(cleaned, slots, data, focus)
             best = action
             if not slots:
@@ -503,6 +523,60 @@ class Reasoner:
                 flipped_from=question,
             )
         raise ReasonerError("flip: could not produce a flipped question")
+
+    async def verify(
+        self,
+        *,
+        category: str,
+        value: str,
+        board: facets.Board,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> ReasonerAction:
+        """Double-check one locked pair — the verify-on-lock turn.
+
+        A deliberate, gate-exempt re-ask of a detail that turned confident on
+        the strength of a single answer (noise theory and SCA practice both
+        say re-check what you are about to build on). One fast JSON call, no
+        deliberate phase; only the yes/no-form audit and a says-the-value
+        anchor apply — the repeat gate deliberately does not (a verify is a
+        re-ask by design). The action asserts exactly the verified pair, so
+        the answer scores it and nothing else; scoring is the normal rule
+        (+1 / −1 — noise cuts both ways).
+        """
+        if on_phase is not None:
+            on_phase("double-checking")
+        corrections: list[str] = []
+        for _ in range(MAX_AUDIT_RETRIES + 1):
+            data = await self._chat_json(
+                prompts.verify_messages(category, value, corrections=corrections),
+                max_tokens=VERIFY_MAX_TOKENS,
+                think=False,
+            )
+            out = data.get("question", "")
+            cleaned = sanitize_llm_text(out) if isinstance(out, str) else ""
+            if not cleaned:
+                corrections.append("return the double-check question in the JSON")
+                continue
+            verdict = audit_query(cleaned)
+            if not verdict.ok:
+                corrections.append(verdict.reason)
+                continue
+            if not facets.mentions(cleaned, value):
+                corrections.append(
+                    f'the question must say "{value}" out loud so the person '
+                    "hears exactly what is being confirmed"
+                )
+                continue
+            return ReasonerAction(
+                kind="query",
+                content=cleaned,
+                rationale="Double-checking a key detail before building on it.",
+                preface="Just to double-check —",
+                slots={category: facets.canonical_value(board, category, value)},
+                focus=category,
+                verify=True,
+            )
+        raise ReasonerError("verify: could not produce a double-check question")
 
     def _ask_action(
         self, question: str, slots: dict[str, str], data: dict, focus: str

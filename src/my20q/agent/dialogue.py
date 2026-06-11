@@ -96,6 +96,12 @@ MAX_CATEGORY_RUN = 2
 #: down one avenue).
 FUTILE_STREAK = 4
 
+#: Double-check (verify-on-lock) turns allowed per round. A pair that turns
+#: confident on a SINGLE yes — or on a caregiver boost the patient never
+#: confirmed — gets one gate-exempt re-ask before the engine builds on it;
+#: the budget keeps verification from ever feeling like nagging.
+VERIFY_BUDGET = 2
+
 _NO_LLM_TEXT = (
     "No language model is configured, so questions cannot be generated. "
     "Start the backend with an LLM (e.g. Ollama) and retry."
@@ -270,6 +276,8 @@ class Round:
             entry["direction"] = pending.direction
         if pending.kind == "query" and pending.flipped_from:
             entry["flipped_from"] = pending.flipped_from
+        if pending.kind == "query" and pending.verify:
+            entry["verify"] = True
         # An INFORMATIVE yes moved the board (some asserted pair was not yet
         # established); a yes that merely re-confirms established leaders
         # earns its points but does NOT advance the synthesis gates —
@@ -531,7 +539,25 @@ class Round:
             if move in ("synthesize", "rephrase"):
                 action = await self._propose_synthesis(board, seg, move)
             if action is None:  # questioning — or synthesis had no leaders yet
-                action, board, focus = await self._propose_question(seg)
+                pair = self._verify_due(board)
+                if pair is not None:
+                    # Verify-on-lock: double-check a pair that turned
+                    # confident on a single answer before building on it.
+                    action = await self._reasoner.verify(
+                        category=pair[0],
+                        value=pair[1],
+                        board=board,
+                        on_phase=self.on_phase,
+                    )
+                    focus = pair[0]
+                    if self.topic.direction:
+                        who_names = [v for v, _ in facets.live(board, "who")]
+                        action.direction = (
+                            facets.classify_direction(action.content, who_names)
+                            or ""
+                        )
+                else:
+                    action, board, focus = await self._propose_question(seg)
         except ReasonerError as exc:
             return await self._handle_reason_failure(str(exc))
 
@@ -601,9 +627,14 @@ class Round:
             directive not in ("split", "pin")
             and self._rng.random() < self._explore_probability(yeses)
         )
+        # Each asked entry carries its asserted slot categories so the repeat
+        # gate can tell a same-anchor DRILL (new category) from a reword;
+        # flip-superseded questions carry None — never exempt.
         asked = [
-            h["text"] for h in self._history if h.get("kind") == "query" and h.get("text")
-        ] + self._superseded
+            (h["text"], frozenset((h.get("slots") or {}).keys()))
+            for h in self._history
+            if h.get("kind") == "query" and h.get("text")
+        ] + [(t, None) for t in self._superseded]
         # Established pairs (confident leaders) — Gate 4's zero-information set.
         established: set[tuple[str, str]] = set()
         for cat in facets.CATEGORIES:
@@ -930,6 +961,58 @@ class Round:
             direction, count = max(direction_counts.items(), key=lambda kv: kv[1])
             if count >= FUTILE_STREAK:
                 return ("how", facets.DIRECTION_BUCKETS[direction])
+        return None
+
+    def _verify_due(self, board: facets.Board) -> tuple[str, str] | None:
+        """The (category, leader) pair owed a double-check, if any.
+
+        Verify-on-lock: a slot whose leader is CONFIDENT on the strength of
+        at most one patient yes — one noisy answer, or a caregiver-context
+        boost the patient never confirmed at all — gets one gate-exempt
+        re-ask before the engine builds on it (Rényi–Ulam: re-ask under
+        noise; SCA: verify what matters). Never re-verify a pair; never
+        exceed VERIFY_BUDGET per round; >= 2 yeses never need it. Core slots
+        are checked first.
+        """
+        T = self.tuning
+        verified: set[tuple[str, str]] = set()
+        spent = 0
+        yes_counts: dict[tuple[str, str], int] = {}
+        for h in self._history:
+            if h.get("kind") != "query":
+                continue
+            if h.get("verify"):
+                spent += 1
+                for cat, val in (h.get("slots") or {}).items():
+                    verified.add((cat, val))
+            if h.get("answer") == Answer.YES.value:
+                for cat, val in (h.get("slots") or {}).items():
+                    yes_counts[(cat, val)] = yes_counts.get((cat, val), 0) + 1
+                # Direction buckets are confirmed via the `direction` label,
+                # not the slots map — count those yeses too, or a well-
+                # confirmed bucket would draw a spurious double-check.
+                d = h.get("direction")
+                if d in facets.DIRECTION_BUCKETS:
+                    pair = ("how", facets.DIRECTION_BUCKETS[d])
+                    yes_counts[pair] = yes_counts.get(pair, 0) + 1
+        if spent >= VERIFY_BUDGET:
+            return None
+        core = [c for c in (self.topic.core_facets or []) if c in facets.CATEGORIES]
+        others = [c for c in facets.CATEGORIES if c not in core]
+        for cat in core + others:
+            if not facets.confident(
+                board,
+                cat,
+                ready_points=T.facet_ready_points,
+                margin=T.facet_split_margin,
+            ):
+                continue
+            top = facets.leader(board, cat)
+            if top is None:
+                continue
+            pair = (cat, top[0])
+            if pair not in verified and yes_counts.get(pair, 0) <= 1:
+                return pair
         return None
 
     @staticmethod

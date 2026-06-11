@@ -63,6 +63,25 @@ def test_repeat_gate_allows_genuinely_new_questions() -> None:
     assert is_repeat("Do you need them to lift something heavy?", asked) is None
 
 
+def test_repeat_gate_slot_exemption_for_new_category_drills() -> None:
+    # A content-overlap match that asserts a NEW slot category is a drill on
+    # the same anchor, not a repeat ("…when he comes over?" asserts `when`).
+    asked = ["Do you want Zach to come over to help with tasks?"]
+    cats = [frozenset({"who", "how"})]
+    q = "Will Zach help with tasks when he comes over?"
+    assert is_repeat(q, asked)  # no slot info — blocked (back-compat)
+    assert is_repeat(  # same categories — still a reword
+        q, asked, candidate_cats=frozenset({"who", "how"}), asked_cats=cats
+    )
+    assert (  # new category asserted — the drill passes
+        is_repeat(q, asked, candidate_cats=frozenset({"who", "when"}), asked_cats=cats)
+        is None
+    )
+    assert is_repeat(  # unknown prior categories (flip-superseded): never exempt
+        q, asked, candidate_cats=frozenset({"who", "when"}), asked_cats=[None]
+    )
+
+
 def test_repeat_gate_distinguishes_short_subject_swaps() -> None:
     # Short questions differing in the one content word are NOT repeats.
     assert is_repeat("Is it a person?", ["Is it a picture?"]) is None

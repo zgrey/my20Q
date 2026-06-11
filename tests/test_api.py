@@ -52,6 +52,8 @@ def _controller_backend(*, utterance: str) -> MockBackend:
                 {"question": "Do you want your son to call you?",
                  "slots": {"who": "your son"}}
             )
+        if "DOUBLE-CHECK" in system:  # verify-on-lock one-shot
+            return json.dumps({"question": "Is it your son you mean?"})
         if "pin down the ONE specific" in system:  # deliberate
             return "thinking about who and what..."
         if "Convert a drafted question" in system:  # format

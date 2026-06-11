@@ -204,28 +204,65 @@ what drillable in the A2 scenario; ladder of 3 allowed while rising). Trial:
 no focused question on a slot whose leader is ≥ 2×-confident; `what`/`where`
 receive drills in a people round.
 
-### W1-C · Synthesize only when the weave changes — Status: PROPOSED
+### W1-C · The living proposal banner — Status: AGREED (owner-designed, 06-11)
 
-**Problem (A6/A1).** Five byte-identical proposals; four needless
-rejections. The resynthesis gate counts new yeses; it never asks whether
-the *utterance would differ*.
+**Superseded twice in iteration — final design is the owner's.** Instead of
+gating engine-initiated proposals (the original draft) or a bare
+propose-button, the cockpit carries a **continuously updated draft
+utterance as a top banner**, and the caregiver decides when it is spoken
+and when it is done. The synthesis *threshold* demotes from a behavioral
+gate to a display gate — wrongness there costs pixels, not turns (SPRT
+note: the human becomes the stopping policy; the engine's job is keeping
+the posterior legible).
 
-**Proposal.** `_propose_synthesis` computes the weave slots (leaders) before
-calling the LLM; if they are **identical to the last rejected attempt's
-weave** (same category→value map), skip synthesis and keep questioning —
-exactly like the existing "rephrase near-dups a rejected utterance" bail.
-The yes-count gate stays as a *floor*; this adds a *change* requirement on
-top. One escape: if board-readiness holds AND the last rejection was ≥ N≈8
-answered queries ago, allow one re-proposal anyway (the caregiver may have
-mis-tapped the rejection; do not lock synthesis out forever).
+**The banner:**
 
-**Touches:** `dialogue._advance`/`_propose_synthesis` (one comparison + the
-escape), tests. **Risks:** with W3-H not yet landed, the weave can stay
-stale for a while (A1's root cause is untreated) — this proposal converts
-that staleness from "re-propose the same sentence" into "keep questioning",
-which is strictly better but highlights H's urgency. **Acceptance:** replay
-of this round produces ≤ 3 proposals; no two consecutive proposals with
-identical weaves.
+- **Populates early with structured ambiguity.** As soon as anything
+  converges, the draft renders with ambiguous alternates for undecided
+  parts and a trailing ellipsis: *"I need/want something for/from Rob…"*.
+  The "for/from" alternate is the direction layer's uncertainty rendered as
+  text; alternates collapse as buckets/slots establish. Before any signal:
+  *"Pending synthesis…"* with a glowing vibrance. Early drafts are
+  CODE-templated from the board (deterministic, free, per-segment mapping
+  trivial); once core slots establish, the LLM weave takes over —
+  regenerated **only when the weave changes** (the original W1-C comparison
+  survives as the refresh trigger and the LLM-cost cap).
+- **Per-segment emphasis:** *locked* (slot confident) · *working* (positive,
+  thin margin — glow) · *placeholder/alternates* (faint + ellipsis).
+  Mapping via the stem-tolerant `mentions` matcher; theory mapping: margin
+  bands ≈ per-slot posterior odds; propose-ready vibrance at board-ready
+  (≈ conjunction ≥ 0.5 — the point where the proposal itself is the
+  highest-information question available).
+- **Three controls on the box:**
+  - **Speak** — TTS the current draft to/for the patient (struck text is
+    never spoken).
+  - **✓ accept** — definitively conclude: the round ends `synthesized`
+    with the current draft as the final utterance.
+  - **✗ reject-a-portion** — opens a text field NEXT TO the proposal. The
+    note is interpreted against the draft (small anchored LLM call with a
+    deterministic fallback) into **value bans** ("not supplies" — the
+    banned value renders strike-through and is excluded from leaders,
+    weave, and questioning) and/or **slot mutes** ("when doesn't matter" —
+    the slot's segment renders dimmed + struck, excluded from questioning
+    and from speech). Edits are recorded as history entries → replayable,
+    undo-able, and emphasizable (un-strike on undo).
+- **Channel separation (owner):** the X-field edits the proposal; the
+  existing context field is *guiding context* only. Value bans therefore
+  never come from parsing ordinary notes (kills W1-D's misparse risk).
+- **Engine consequences:** auto-proposals are REMOVED — no engine-initiated
+  synthesis events; the kinda-loop dies structurally. A ✗-rejection still
+  pins focus (the pin reads edit entries) and counts toward the restart
+  trigger. `min_yes`/`new_yes` count-gates retire. The CLI harness gains a
+  `p`/`✓`-equivalent flow.
+
+**Touches:** dialogue (banner state, edit entries, accept/reject/ban/mute,
+weave-change detection, pin source), reasoner (X-note interpreter), api
+(banner in RoundState + accept/reject/speak endpoints), web (banner
+component + controls + strike/dim rendering), recorder (edit entries,
+accepted proposals), CLI, tests — the largest Wave-1 item; implemented
+after W2-F. **Acceptance:** dishes-round replay shows a draft from the
+first established slot; no engine-initiated proposals; an X-note bans a
+value that then disappears from questioning and speech.
 
 ### W1-D · Caregiver directive channel — Status: PROPOSED
 
@@ -233,33 +270,27 @@ identical weaves.
 protected from being mis-read as evidence (the `when:'later'` +2 credit from
 a note saying when doesn't matter).
 
-**Proposal.** In `Round.add_context`, before `expand_slots`:
+**Scope shrunk by the W1-C banner design (owner, 06-11): bans and mutes now
+arrive through the proposal box's ✗-flow — a dedicated, explicit channel —
+so the free-text context field never needs to carry them.** What remains
+for D is the FOCUS half of A3:
 
-1. **Deterministic directive parse** (code, no LLM): detect slot mentions
-   (who/what/when/where/why/how + obvious synonyms: "person", "timing",
-   "place", "reason") combined with a small verb set —
-   *focus on / zero in on / ask about / pin down* → `forced_focus = (slot,
-   ttl=3 focused turns)`; *ignore / skip / doesn't matter / not important* →
-   `muted.add(slot)`. Muted slots: excluded from probe/drill/pin AND from
-   synthesis placeholders (omitted, not "someone/soon"); mute persists for
-   the round, cleared if the caregiver later directs focus there.
-2. **Directive notes do not become evidence.** If the note parses as a
-   directive and contains no concrete value outside the directive clause,
-   skip `expand_slots` entirely (no +2 credits from meta-instructions). A
-   mixed note ("ignore when — it's about the kitchen") still extracts
-   values from the non-directive remainder.
-3. `_pick_focus` honors `forced_focus` ahead of priority 0 (pin) while ttl
-   lasts; each focused turn decrements ttl. The reasoning tile note: the
-   forced slot renders with the existing focus pulse (no UI change needed).
+1. **Deterministic focus-directive parse** (code, no LLM) on
+   `add_context`: a slot mention (who/what/when/where/why/how + obvious
+   synonyms) with a strict verb set — *focus on / zero in on / ask about /
+   pin down* → `forced_focus = (slot, ttl=3 focused turns)`; honored at the
+   head of `_pick_focus` while ttl lasts.
+2. **Directive notes do not become evidence.** A note that parses as pure
+   directive skips `expand_slots` (the A3 mis-credit: "the 'when' does not
+   seem important" must never credit `when: later` +2). A mixed note still
+   extracts values from its non-directive remainder. "Ignore/doesn't
+   matter" phrasings in the context field map to the SAME mute mechanism
+   the ✗-flow uses (one implementation, two entry points).
 
-**Touches:** `dialogue` (parse + two fields + `_pick_focus` head), tests.
-Prompt: one line in the deliberate context noting the caregiver directed
-focus (so the model doesn't fight it). **Risks:** false-positive directive
-detection on ordinary notes — the verb set is strict and a slot word must
-co-occur; worst case a note that *also* carried values loses its +2 (the
-values still surface through subsequent questioning). **Acceptance:**
-replaying A3's note yields forced what-focus for 3 turns, `when` muted, no
-`when` credit; an ordinary note ("she pointed at the kitchen") behaves as
+**Touches:** `dialogue` (parse + forced_focus + `_pick_focus` head), tests.
+**Risks:** false-positive directive detection — strict verb set + slot word
+must co-occur. **Acceptance:** replaying A3's note yields forced what-focus
+for 3 turns and no `when` credit; "she pointed at the kitchen" behaves as
 today.
 
 ### W2-E · Candidate selection + tag rescue + pronoun folding — Status: PROPOSED
@@ -296,32 +327,35 @@ wrong in multi-person rounds (guarded: only with a unique positive leader).
 replay credits the unestablished mention; "him/he" no longer appear as
 who-contenders alongside a named leader.
 
-### W2-F · Verify turns + slot-aware repeat exemption — Status: PROPOSED
+### W2-F · Verify turns + slot-aware repeat exemption — Status: AGREED (owner, 06-11) → IMPLEMENTED
 
-**Problem (audit F4/G3; A5 contributes).** No verification path exists under
-noise; the Dice channel also blocks legitimate new-slot drills that share an
-anchor ("Will Zach come over **today**?" ≈ 0.86 vs "Will Zach come over?").
+> Owner: "Definitely verify with re-asks — very important functionality I
+> had overlooked." Hook redefined during iteration to be independent of the
+> W1-C banner (which removes engine-initiated proposals): verify fires **on
+> lock**, not on weave.
 
-**Proposal.**
+1. **Verify-on-lock.** When a slot's leader first turns *confident* on the
+   strength of a **single yes** (e.g. one yes + a caregiver-context boost),
+   the next question turn double-checks that pair: a reasoner one-shot
+   (like flip — no deliberate phase), prefaced "Just to double-check —",
+   gate-exempt by construction, `verify: true` in history. Budget ≤ 2 per
+   round; a pair is never verified twice; pairs confirmed by ≥ 2 yeses
+   never need it. **Scoring is the normal rule** — a verify-yes is +1
+   genuine confirmation, a verify-no is −1 on the asserted pair (no special
+   halving; noise cuts both ways and the asymmetric-no rule already
+   protects bystanders).
+2. **Repeat-gate slot exemption.** A candidate matched ONLY by the
+   content-overlap (Dice) channel passes when it asserts a slot category
+   absent from the matched prior's asserted slots ("Will Zach come over
+   **today**?" after "Will Zach come over?" asserts `when` — legitimate
+   drill, not a repeat). Normalized/ratio channels untouched; flip-
+   superseded questions are never exempt (their slot sets are unknown).
 
-1. **Verify turn.** Before a pair with own score in [1, 2) is woven into a
-   proposal, the round may issue ONE gate-exempt verify question for it
-   (reasoner one-shot, like flip: "Just to double-check — …?"), marked
-   `verify: true` in history; budget ≤ 2 per round; never re-verify a pair
-   answered yes twice. A "no" on verify halves the pair's score (it does
-   not eliminate — noise cuts both ways).
-2. **Repeat-gate slot exemption.** A candidate matched ONLY by the Dice
-   channel (not normalized/ratio) passes when it asserts a slot category
-   absent from the matched prior's asserted slots. Narrow by construction;
-   the 7×-verbatim pathology stays blocked (normalized/ratio channels are
-   untouched).
-
-**Touches:** `dialogue` (pre-synthesis verify hook), `reasoner` (verify
-one-shot), `auditor.is_repeat` (exemption parameter), tests.
-**Risks:** verify turns cost queries (bounded: 2); exemption could readmit
-near-dups that swap one slot word — acceptable: they assert *new* slots.
-**Acceptance:** weaves built only from pairs with ≥ 2 confirmations or a
-passed verify; the "come over today" case passes the gate in unit tests.
+**Touches:** `dialogue` (verify-due check in the question path), `reasoner`
+(`verify` one-shot), `auditor.is_repeat` (slot-aware exemption), tests.
+**Acceptance:** a single-yes lock triggers exactly one double-check; the
+"come over today" case passes the gate; verbatim/reword repeats stay
+blocked.
 
 ### W2-G · Noise bench — Status: PROPOSED
 
@@ -431,10 +465,10 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 |----|-------|--------|
 | W1-A | Rephrase default → 1 | **IMPLEMENTED** (owner-decided 06-11) |
 | W1-B | Focus v3: retire/widen/rotate-on-stall | **IMPLEMENTED** (06-11, amended: ratio retirement, banded priority) |
-| W1-C | Synthesize only on a changed weave | PROPOSED |
-| W1-D | Caregiver directive channel | PROPOSED |
+| W1-C | The living proposal banner (Speak / ✓ / ✗-edits) | **AGREED** (owner-designed; build after W2-F) |
+| W1-D | Focus directives in the context field (shrunk by C) | PROPOSED |
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED |
-| W2-F | Verify turns + repeat exemption | PROPOSED |
+| W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11) |
 | W2-G | Noise bench | PROPOSED |
 | W3-H | Refinement links (coarse→fine) | PROPOSED |
 | W3-I | Mass-scaled confidence | PROPOSED |

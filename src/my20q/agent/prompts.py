@@ -158,6 +158,59 @@ How to flip:
 No medical advice, URLs, markup, or emoji.
 """
 
+VERIFY_SYSTEM = """\
+The engine needs to DOUBLE-CHECK one detail it believes is settled — a
+single answer locked it in, and answers can be noisy. Re-ask that ONE detail
+plainly so the person can confirm or correct it.
+
+OUTPUT — STRICT JSON, nothing else:
+{"question": "..."}
+
+- ONE plain yes/no question that asks the detail directly and SAYS the value
+  out loud (e.g. who = "Rob" → "Is it Rob you want to talk to?").
+- It SHOULD restate what was asked before — this is a deliberate
+  double-check, not a new question. Short, everyday words; no either/or; no
+  reasoning language.
+No medical advice, URLs, markup, or emoji.
+"""
+
+#: Plain-language meaning of each slot, for the verify instruction.
+_SLOT_PHRASE = {
+    "who": "the other person involved",
+    "what": "the thing or subject",
+    "when": "the timing",
+    "where": "the place",
+    "why": "the reason",
+    "how": "the action wanted",
+}
+
+
+def verify_messages(
+    category: str,
+    value: str,
+    *,
+    corrections: list[str] | None = None,
+) -> list[LLMMessage]:
+    """Ask for a double-check question for one locked (category, value) pair.
+
+    The verify turn's one-shot call — tiny on purpose (no board, no history):
+    it re-asks a single settled detail, so the only inputs are the pair and
+    what the slot means.
+    """
+    instruction = (
+        f"DETAIL TO DOUBLE-CHECK:\n"
+        f'  {_SLOT_PHRASE.get(category, category)}: "{value}"\n\n'
+    )
+    if corrections:
+        joined = "\n".join(f"  - {c}" for c in corrections)
+        instruction += f"YOUR PREVIOUS ATTEMPT WAS REJECTED:\n{joined}\n\n"
+    instruction += "Return the double-check question as strict JSON."
+    return [
+        {"role": "system", "content": VERIFY_SYSTEM},
+        {"role": "user", "content": instruction},
+    ]
+
+
 EXPAND_SYSTEM = """\
 A caregiver or medical professional just added a NOTE about what the person
 with aphasia needs. Their note is HIGH-TRUST — far more reliable than any

@@ -251,6 +251,31 @@ async def test_flip_raises_when_no_usable_flip_emerges() -> None:
         )
 
 
+# ------------------------------------------------------------------- verify
+
+
+async def test_verify_is_one_shot_and_anchored() -> None:
+    good = {"question": "Is it Zach you need help from?"}
+    mock = MockBackend(responder=_flip_responder([good]))
+    action = await Reasoner(mock).verify(category="who", value="Zach", board=_BOARD)
+    assert action.kind == "query" and action.verify is True
+    assert action.content == "Is it Zach you need help from?"
+    assert action.slots == {"who": "Zach"}
+    assert action.focus == "who"
+    assert action.preface.startswith("Just to double-check")
+    assert len(mock.calls) == 1  # no deliberate phase — a check, not a turn
+    assert mock.think_args == [False]
+
+
+async def test_verify_must_say_the_value_out_loud() -> None:
+    vague = {"question": "Are you sure about that?"}
+    good = {"question": "Is it Zach you mean?"}
+    mock = MockBackend(responder=_flip_responder([vague, good]))
+    action = await Reasoner(mock).verify(category="who", value="Zach", board=_BOARD)
+    assert action.content == "Is it Zach you mean?"
+    assert any("out loud" in str(m) for m in mock.calls[1])
+
+
 # ------------------------------------------------------------------ preface
 
 

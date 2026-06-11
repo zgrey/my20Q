@@ -103,20 +103,36 @@ def _normalize(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]+", " ", text.casefold()).split())
 
 
-def is_repeat(question: str, asked: list[str]) -> str | None:
+def is_repeat(
+    question: str,
+    asked: list[str],
+    *,
+    candidate_cats: frozenset[str] | set[str] | None = None,
+    asked_cats: list[frozenset[str] | None] | None = None,
+) -> str | None:
     """The prior question `question` duplicates, or None when genuinely new.
 
-    Catches exact matches after normalization and high-similarity rewords
+    Catches exact matches after normalization, high-similarity rewords
     ("Do you need help with a specific task right now?" vs "Do you need help
-    completing a specific task right now?"). Compared against EVERY question
-    asked this round — including ones from dumped context segments, so a
-    context restart never causes the round to re-ask what it already asked.
+    completing a specific task right now?"), and content-identical rewords
+    (the stem-tolerant overlap). Compared against EVERY question asked this
+    round — including ones from dumped context segments, so a context
+    restart never causes the round to re-ask what it already asked.
+
+    Slot-aware exemption (`candidate_cats` + `asked_cats`, aligned with
+    `asked`): a match found ONLY by the content-overlap channel passes when
+    the candidate asserts a slot category absent from that prior's asserted
+    categories — "Will Zach come over today?" after "Will Zach come over?"
+    asserts `when`: a drill on the same anchor, not a repeat. The
+    normalized/similarity channels are never exempt, and a prior with
+    unknown categories (None — e.g. a flip-superseded question) never
+    grants the exemption.
     """
     norm = _normalize(question)
     if not norm:
         return None
     tokens = _content_tokens(question) - _FRAMING
-    for prior in asked:
+    for i, prior in enumerate(asked):
         prior_norm = _normalize(prior)
         if not prior_norm:
             continue
@@ -126,6 +142,14 @@ def is_repeat(question: str, asked: list[str]) -> str | None:
             return prior
         prior_tokens = _content_tokens(prior) - _FRAMING
         if tokens and prior_tokens and _overlap(tokens, prior_tokens) >= _REPEAT_OVERLAP:
+            if (
+                candidate_cats
+                and asked_cats is not None
+                and i < len(asked_cats)
+                and asked_cats[i] is not None
+                and set(candidate_cats) - asked_cats[i]
+            ):
+                continue  # same anchor, NEW slot category — a drill, not a repeat
             return prior
     return None
 
