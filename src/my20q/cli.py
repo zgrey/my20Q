@@ -77,13 +77,29 @@ def _render_emergency() -> None:
 
 def _ask_answer() -> str:
     raw = Prompt.ask(
-        "[bold]y/n/k/s[/bold] [dim](u undo · q quit)[/dim]",
-        choices=["y", "n", "k", "s", "u", "q"],
+        "[bold]y/n/k/s[/bold] [dim](p accept✓ · u undo · q quit)[/dim]",
+        choices=["y", "n", "k", "s", "p", "u", "q"],
         default="y",
     )
     if raw == "q":
         raise _Quit
     return raw
+
+
+def _render_banner(rnd) -> None:
+    """The living draft proposal — the cockpit banner's CLI sibling."""
+    banner = rnd.banner()
+    if banner["state"] != "draft":
+        console.print("[dim italic]pending synthesis…[/dim italic]")
+        return
+    mark = "[green]✓ ready[/green]" if banner["ready"] else "[dim]…working[/dim]"
+    console.print(f"[dim]draft:[/dim] [italic]“{banner['text']}”[/italic]  {mark}")
+    if banner["banned"] or banner["muted"]:
+        struck = ", ".join(
+            [f"[strike]{b['value']}[/strike]" for b in banner["banned"]]
+            + [f"[strike dim]{m}[/strike dim]" for m in banner["muted"]]
+        )
+        console.print(f"[dim]struck:[/dim] {struck}")
 
 
 async def _play_round(session: Session, topic: Topic) -> None:
@@ -104,6 +120,7 @@ async def _play_round(session: Session, topic: Topic) -> None:
             )
             return
         _render_event(event)
+        _render_banner(rnd)
         if event.kind == "diagnostic":
             raw = Prompt.ask(
                 "[bold]r retry[/bold] [dim](q quit)[/dim]",
@@ -115,6 +132,13 @@ async def _play_round(session: Session, topic: Topic) -> None:
             event = await rnd.retry()
             continue
         raw = _ask_answer()
+        if raw == "p":
+            # ✓ — accept the live draft and conclude (the only success path).
+            try:
+                event = rnd.accept()
+            except RuntimeError as exc:
+                console.print(f"[yellow]{exc}[/yellow]")
+            continue
         event = await (rnd.undo() if raw == "u" else rnd.answer(_ANSWERS[raw]))
 
 

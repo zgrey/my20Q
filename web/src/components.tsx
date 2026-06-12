@@ -1,7 +1,9 @@
+import type { ComponentChild } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 
 import type {
   Answer,
+  Banner,
   HistoryEntry,
   RecordingStatus,
   RoundEvent,
@@ -657,5 +659,159 @@ export function InputTile(props: InputProps) {
         </button>
       </div>
     </section>
+  );
+}
+
+// --------------------------------------- the living proposal banner (W1-C)
+
+/** Wrap each woven value's first occurrence in a band-classed mark. */
+function renderDraft(banner: Banner): ComponentChild[] {
+  let segs: ComponentChild[] = [banner.text];
+  for (const p of banner.parts) {
+    const next: ComponentChild[] = [];
+    for (const seg of segs) {
+      if (typeof seg !== "string") {
+        next.push(seg);
+        continue;
+      }
+      const i = seg.toLowerCase().indexOf(p.value.toLowerCase());
+      if (i < 0) {
+        next.push(seg);
+        continue;
+      }
+      next.push(seg.slice(0, i));
+      next.push(
+        <mark class={`seg ${p.band}`} title={`${p.category} — ${p.band}`}>
+          {seg.slice(i, i + p.value.length)}
+        </mark>,
+      );
+      next.push(seg.slice(i + p.value.length));
+    }
+    segs = next;
+  }
+  return segs;
+}
+
+interface BannerProps {
+  banner: Banner | null;
+  busy: boolean;
+  terminal: boolean;
+  onSpeak: () => void;
+  onAccept: () => void;
+  onEdit: (text: string) => void;
+}
+
+/**
+ * The evolving draft utterance, always on top: ambiguous alternates +
+ * ellipsis while working, per-part emphasis (locked / working), struck
+ * chips for ✗-banned values, dimmed-struck chips for muted slots.
+ * Speak reads it aloud; ✓ concludes; ✗ opens the edit note field.
+ */
+export function ProposalBanner(props: BannerProps) {
+  const { banner, busy, terminal, onSpeak, onAccept, onEdit } = props;
+  const [editing, setEditing] = useState(false);
+  const [note, setNote] = useState("");
+
+  if (!banner || terminal) return null;
+  if (banner.state === "pending") {
+    return (
+      <div class="banner pending">
+        <span class="banner-glow">Pending synthesis…</span>
+      </div>
+    );
+  }
+  const submit = () => {
+    const v = note.trim();
+    if (v && !busy) {
+      onEdit(v);
+      setNote("");
+      setEditing(false);
+    }
+  };
+  return (
+    <div class={`banner draft ${banner.ready ? "ready" : ""}`}>
+      <div class="banner-row">
+        <span class="banner-text">{renderDraft(banner)}</span>
+        <span class="banner-actions">
+          <button
+            class="banner-btn"
+            disabled={busy}
+            onClick={onSpeak}
+            title="Speak this draft aloud"
+          >
+            🔊 Speak
+          </button>
+          <button
+            class="banner-btn accept"
+            disabled={busy}
+            onClick={onAccept}
+            title="Accept — this is the message"
+          >
+            ✓
+          </button>
+          <button
+            class="banner-btn reject"
+            disabled={busy}
+            onClick={() => setEditing(!editing)}
+            title="Reject a portion — type what is wrong"
+          >
+            ✗
+          </button>
+        </span>
+      </div>
+      {(banner.banned.length > 0 || banner.muted.length > 0) && (
+        <div class="banner-chips">
+          {banner.banned.map((b) => (
+            <span class="chip banned" title={`${b.category} — struck out`}>
+              {b.value}
+            </span>
+          ))}
+          {banner.muted.map((m) => (
+            <span class="chip muted" title="slot muted — not asked, not spoken">
+              {m}
+            </span>
+          ))}
+        </div>
+      )}
+      {editing && (
+        <div class="banner-edit">
+          <input
+            type="text"
+            placeholder="What is wrong? e.g. “not the supplies” · “the when doesn't matter”"
+            value={note}
+            disabled={busy}
+            onInput={(e) => setNote((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+            }}
+          />
+          <button class="send" onClick={submit} disabled={busy || !note.trim()}>
+            Apply
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The explicit synthesis confirmation (✓): front and center over a dimmed
+ * backdrop — the final utterance, read aloud by the caller, and a single
+ * action to move on.
+ */
+export function ConclusionModal(props: {
+  utterance: string;
+  onNewRound: () => void;
+}) {
+  return (
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-title">✓ Message confirmed</div>
+        <p class="modal-utterance">“{props.utterance}”</p>
+        <button class="modal-action" onClick={props.onNewRound}>
+          New round
+        </button>
+      </div>
+    </div>
   );
 }

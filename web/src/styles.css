@@ -1465,3 +1465,165 @@ body,
     min-height: 48px;
   }
 }
+
+/* ----------------------------- the living proposal banner (W1-C) */
+.banner {
+  grid-column: 1 / -1;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 10px 16px;
+}
+.banner.pending {
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
+.banner-glow {
+  animation: bannerGlow 1.8s ease-in-out infinite;
+}
+@keyframes bannerGlow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.banner.draft.ready {
+  border-color: var(--accent);
+  box-shadow: 0 0 14px var(--accent-soft, rgba(0, 94, 162, 0.35));
+}
+.banner-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.banner-text {
+  flex: 1;
+  font-size: 17px;
+  line-height: 1.45;
+}
+.banner-text mark.seg {
+  background: transparent;
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.banner-text mark.seg.locked {
+  font-weight: 700;
+  border-bottom: 2px solid var(--accent);
+}
+.banner-text mark.seg.working {
+  border-bottom: 2px dotted var(--ink-soft);
+  animation: bannerGlow 2.2s ease-in-out infinite;
+}
+.banner-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.banner-btn {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  min-height: 38px;
+}
+.banner-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.banner-btn.accept {
+  color: #fff;
+  background: var(--yes, #2e7d32);
+  border: none;
+  min-width: 46px;
+}
+.banner-btn.reject {
+  color: #fff;
+  background: var(--no, #b3463f);
+  border: none;
+  min-width: 46px;
+}
+.banner-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.chip {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 10px;
+}
+.chip.banned {
+  text-decoration: line-through;
+  color: var(--no, #b3463f);
+}
+.chip.muted {
+  text-decoration: line-through;
+  opacity: 0.45;
+}
+.banner-edit {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.banner-edit input {
+  flex: 1;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+/* --------------------- explicit synthesis confirmation (the checkmark) */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  padding: 28px 34px;
+  max-width: 560px;
+  width: calc(100% - 48px);
+  text-align: center;
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.modal-utterance {
+  font-size: 22px;
+  line-height: 1.5;
+  margin: 0 0 22px;
+}
+.modal-action {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  padding: 12px 28px;
+  cursor: pointer;
+  min-height: 48px;
+}

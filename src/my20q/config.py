@@ -22,20 +22,14 @@ class ReasoningTuning:
     these off the active ``Round.tuning``.
     """
 
-    #: "Yes" answers required before the FIRST synthesis attempt of a round.
+    #: RETIRED (2026-06-11, the living proposal banner): the engine no longer
+    #: proposes/rephrases on its own — the caregiver accepts the banner draft —
+    #: so the synthesis count-gates below have no engine effect. Kept (with
+    #: their env vars) so existing serve scripts don't break; removed once the
+    #: banner survives a live trial.
     min_yes_for_synthesis: int = 5
-    #: NEW "yes" answers required before each *subsequent* synthesis attempt
-    #: (after a prior attempt's rephrases were all rejected).
     new_yes_for_resynthesis: int = 3
-    #: Rephrased utterances offered after the initial proposal within one synthesis
-    #: attempt (so an attempt shows up to ``1 + rephrase_limit`` utterances).
-    #: Default 1 (owner-validated 2026-06-11): when a proposal is close, ONE
-    #: minor perturbation is all that ever helps — further rephrases were
-    #: observed to be useless across trials.
     rephrase_limit: int = 1
-    #: Failed synthesis attempts (each = initial + rephrases, all rejected)
-    #: tolerated before the round RESTARTS (dumps the no/kinda influence and
-    #: rebuilds the board from caregiver context + this round's yeses).
     synth_attempts_before_restart: int = 2
     #: Exploration DECAYS as yeses accrue toward synthesis. The next question is
     #: exploratory (profile dropped, free to probe a brand-new on-topic value) with

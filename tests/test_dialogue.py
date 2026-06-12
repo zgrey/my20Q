@@ -10,7 +10,6 @@ import pytest
 
 from my20q.agent import facets
 from my20q.agent.dialogue import (
-    MIN_YES_FOR_SYNTHESIS,
     SOFT_RESET_NO_STREAK,
     Answer,
     Round,
@@ -398,7 +397,11 @@ def test_topic_facet_priority_loaded_and_validated(topics: list[Topic]) -> None:
 
 
 async def test_reasoning_round_converges_via_the_board(topics: list[Topic]) -> None:
-    backend = _controller_backend()
+    # The full banner stack: pending → draft → verify-on-lock → board-ready
+    # LLM weave → caregiver accept. The engine never proposes on its own.
+    backend = _controller_backend(
+        expand={"what": ["a drink"], "how": ["bring it"]}
+    )
     rnd = Round(_topic(topics, "physical_health"), llm=backend,
                 rng=_FixedRandom(0.99))
     ev = await rnd.open()
@@ -408,18 +411,34 @@ async def test_reasoning_round_converges_via_the_board(topics: list[Topic]) -> N
         "who", "what", "when", "where", "why", "how"
     ]
     assert any(f["focus"] for f in ev.facets)
+    assert rnd.banner()["state"] == "pending"  # seeds carry no signal yet
 
-    yeses = 0
-    while ev.kind == "query" and yeses < 12:
-        ev = await rnd.answer(Answer.YES)
-        yeses += 1
-    assert ev.kind == "synthesis"
-    # Converged via consensus-readiness or the yes-gate — never on the 1st yes.
-    assert 2 <= yeses <= MIN_YES_FOR_SYNTHESIS
+    ev = await rnd.answer(Answer.YES)  # "Is it about a drink?" → +1
+    assert rnd.banner()["state"] == "draft"  # populated EARLY, pre-readiness
+    assert not rnd.banner()["ready"]
 
-    ev = await rnd.answer(Answer.YES)
+    # A caregiver note locks both core slots → two verify-on-lock turns.
+    ev = await rnd.add_context("she pointed at her cup on the tray")
+    assert rnd._pending is not None and rnd._pending.verify
+    ev = await rnd.answer(Answer.YES)  # confirm what='a drink'
+    assert rnd._pending is not None and rnd._pending.verify
+    ev = await rnd.answer(Answer.YES)  # confirm how='bring it'
+    assert ev.kind == "query"  # still questioning — no auto-proposal
+
+    banner = rnd.banner()
+    assert banner["ready"] and banner["state"] == "draft"
+    # Board-ready → the LLM weave replaced the code template.
+    assert "water" in banner["text"]
+    assert {p["category"] for p in banner["parts"]} >= {"what", "how"}
+    assert all(p["band"] == "locked" for p in banner["parts"])
+
+    ev = rnd.accept()
     assert ev.kind == "synthesized"
+    assert rnd.outcome == "synthesized"
     assert "water" in rnd.final_utterance
+    # The accept is recorded like a confirmed synthesis (one dataset shape).
+    last = rnd.history[-1]
+    assert last["kind"] == "synthesis" and last["answer"] == "yes"
     # The query entries carry their slots/focus for replay and the dataset.
     q1 = rnd.history[0]
     assert q1["slots"] and q1["focus"]
@@ -461,55 +480,60 @@ async def test_unlimited_budget_keeps_questioning(topics: list[Topic]) -> None:
     assert ev.kind in ("query", "synthesis")
 
 
-async def test_rejected_synthesis_keeps_going(topics: list[Topic]) -> None:
-    backend = _controller_backend()
-    rnd = Round(_topic(topics, "physical_health"), llm=backend,
-                rng=_FixedRandom(0.99))
-    ev = await rnd.open()
-    yeses = 0
-    while ev.kind == "query" and yeses < 12:
-        ev = await rnd.answer(Answer.YES)
-        yeses += 1
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # rejects the proposal — round continues
-    assert rnd.outcome is None
-    assert ev.kind in ("query", "synthesis")
-
-
-async def test_round_never_ends_until_yes_rephrases_then_restarts(
+async def test_engine_never_proposes_only_accept_concludes(
     topics: list[Topic],
 ) -> None:
-    # The full synthesis loop with small thresholds: question -> synthesize ->
-    # rephrase -> requestion -> synthesize -> after 2 failed attempts, RESTART.
-    # The round NEVER ends until a "yes" to an utterance.
-    tuning = ReasoningTuning(
-        min_yes_for_synthesis=2,
-        new_yes_for_resynthesis=1,
-        rephrase_limit=1,
-        synth_attempts_before_restart=2,
-    )
+    # Auto-synthesis is gone (the living banner replaced it): any number of
+    # yeses still yields queries; accept() is the only success terminator.
     rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
-                tuning=tuning, rng=_FixedRandom(0.99))
-    await rnd.open()
-    ev = await rnd.answer(Answer.YES)  # 1 yes -> still questioning
-    assert ev.kind == "query"
-    ev = await rnd.answer(Answer.YES)  # 2 yeses -> synthesis attempt #1
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # reject -> rephrase
-    assert ev.kind == "synthesis" and rnd.outcome is None
-    ev = await rnd.answer(Answer.NO)  # reject again -> attempt #1 done -> question
+                tuning=ReasoningTuning(stall_window=0), rng=_FixedRandom(0.99))
+    ev = await rnd.open()
+    with pytest.raises(RuntimeError):
+        rnd.accept()  # nothing positive on the board — nothing to accept
+    for _ in range(8):
+        assert ev.kind == "query"
+        ev = await rnd.answer(Answer.YES)
     assert ev.kind == "query" and rnd.outcome is None
-    ev = await rnd.answer(Answer.YES)  # 1 NEW yes -> synthesis attempt #2
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # reject -> rephrase
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # reject -> attempt #2 done -> RESTART
-    assert ev.kind == "query" and rnd.outcome is None
-    assert any(h["kind"] == "restart" for h in rnd.history)  # context dumped
-    ev = await rnd.answer(Answer.YES)  # 1 yes post-restart -> synthesis
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.YES)  # YES to the utterance -> ends
+    ev = rnd.accept()
     assert ev.kind == "synthesized" and rnd.is_terminal
+    assert rnd.final_utterance.startswith("I need")  # alternates collapsed
+    assert "…" not in rnd.final_utterance
+
+
+async def test_banner_pending_until_a_core_slot_has_signal(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    assert rnd.banner()["state"] == "pending"  # before open
+    await rnd.open()
+    assert rnd.banner()["state"] == "pending"  # seeds carry no signal
+    await rnd.answer(Answer.NO)  # negative signal only — still pending
+    assert rnd.banner()["state"] == "pending"
+    await rnd.answer(Answer.YES)
+    banner = rnd.banner()
+    assert banner["state"] == "draft" and not banner["ready"]
+    assert banner["parts"] and banner["parts"][0]["band"] == "working"
+    assert banner["text"].endswith("…")  # still working — the ellipsis says so
+
+
+async def test_edit_ban_strikes_a_value_and_keeps_going(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # "Is it about a drink?" → in the weave
+    assert any(p["value"] == "a drink" for p in rnd.banner()["parts"])
+    ev = await rnd.edit("no, not a drink")
+    assert ev.kind == "query"  # the round keeps going against the edit
+    banner = rnd.banner()
+    assert {"category": "what", "value": "a drink"} in banner["banned"]
+    assert all(p["value"] != "a drink" for p in banner["parts"])
+    # Floored on the board — out of play, never re-minted, gated from asks.
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] == facets.ELIMINATE_FLOOR
+    assert ("what", "a drink") not in rnd._weave(board).items()
 
 
 async def test_restart_keeps_yes_signal_and_dumps_no(topics: list[Topic]) -> None:
@@ -745,20 +769,35 @@ async def test_farming_yeses_do_not_advance_the_synthesis_gate(
     assert rnd._yes_since_last_synth(rnd._segment()) == 1
 
 
-async def test_kinda_rejection_allows_only_one_rephrase(topics: list[Topic]) -> None:
-    # kinda = a content gap; wording shuffles can't fill it. One rephrase,
-    # then back to questioning (a "no" keeps the full rephrase budget).
-    tuning = ReasoningTuning(min_yes_for_synthesis=1, new_yes_for_resynthesis=1,
-                             rephrase_limit=3, stall_window=0)
-    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
-                tuning=tuning, rng=_FixedRandom(0.99))
-    await rnd.open()
-    ev = await rnd.answer(Answer.YES)  # 1 informative yes -> synthesis
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.KINDA)  # close -> ONE rephrase allowed
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.KINDA)  # still kinda -> back to questioning
-    assert ev.kind == "query"
+async def test_banner_template_shows_ambiguous_alternates(
+    topics: list[Topic],
+) -> None:
+    # The owner's example, verbatim: who converges quickly to Rob and the
+    # draft reads "I need/want something for/from Rob …" — the slashed
+    # alternates are the undecided dimensions, the ellipsis says "working".
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend(),
+                rng=_FixedRandom(0.99))
+    rnd._opened = True
+    rnd._seed_values = rnd._inject_direction_buckets(
+        {"who": ["Rob"], "what": ["a chore", "a meal"]}
+    )
+    rnd._history = [
+        {"kind": "query", "text": "Is this about Rob?", "answer": "yes",
+         "slots": {"who": "Rob"}},
+    ]
+    banner = rnd.banner()
+    assert banner["state"] == "draft" and not banner["ready"]
+    assert banner["text"] == "I need/want something for/from Rob …"
+    assert banner["parts"] == [
+        {"category": "who", "value": "Rob", "band": "working"}
+    ]
+    # Direction evidence collapses the for/from alternate into "to tell".
+    rnd._history += [
+        {"kind": "query", "text": f"t{i}", "answer": "yes",
+         "slots": {"who": "Rob"}, "direction": "tell_them"}
+        for i in range(2)
+    ]
+    assert rnd.banner()["text"] == "I need/want something to tell Rob …"
 
 
 async def test_pin_focus_targets_weakest_slot_after_rejection(
@@ -781,36 +820,32 @@ async def test_pin_focus_targets_weakest_slot_after_rejection(
     assert (focus, directive) == ("how", "pin")
 
 
-async def test_duplicate_rephrase_bails_to_questioning(topics: list[Topic]) -> None:
-    # A rephrase that near-dups a rejected utterance would earn the same
-    # rejection — the round re-questions instead of re-proposing it.
-    state = {"q": 0}
-
-    def responder(messages: list) -> str:
-        system = messages[0]["content"]
-        if "starting GUESSES" in system:
-            return json.dumps(SEED_SLOTS)
-        if "Convert a drafted question" in system:
-            word = _SUBJECTS[state["q"] % len(_SUBJECTS)]
-            state["q"] += 1
-            return json.dumps(
-                {"question": f"Is it about {word}?", "slots": {"what": word},
-                 "preface": "", "rationale": "x"}
-            )
-        if "pin down the ONE specific" in system:
-            return "thinking"
-        return json.dumps({"utterance": "I would like a glass of water."})
-
-    tuning = ReasoningTuning(min_yes_for_synthesis=1, new_yes_for_resynthesis=1,
-                             rephrase_limit=3, stall_window=0)
-    rnd = Round(_topic(topics, "physical_health"),
-                llm=MockBackend(responder=responder), tuning=tuning,
+async def test_edit_mute_dims_a_slot_and_redirects(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
                 rng=_FixedRandom(0.99))
     await rnd.open()
-    ev = await rnd.answer(Answer.YES)
-    assert ev.kind == "synthesis"
-    ev = await rnd.answer(Answer.NO)  # rephrase would repeat verbatim -> question
+    await rnd.answer(Answer.YES)
+    ev = await rnd.edit("the when does not matter")
     assert ev.kind == "query"
+    assert rnd.banner()["muted"] == ["when"]
+    board = rnd._replay_board()
+    assert "when" not in rnd._weave(board)  # never woven, never spoken
+    assert rnd._pick_focus(board, [])[0] != "when"  # never asked about
+
+
+async def test_edit_without_a_draft_match_becomes_context(
+    topics: list[Topic],
+) -> None:
+    # Nothing the caregiver types is dropped: an ✗-note matching neither a
+    # slot dismissal nor a woven value lands as ordinary guiding context.
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=_controller_backend(expand={"why": ["thirsty"]}),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    ev = await rnd.edit("she keeps pointing at the window")
+    assert ev.kind == "query"
+    kinds = [h["kind"] for h in rnd.history]
+    assert "context" in kinds and "edit" not in kinds
 
 
 # ------------------------------------------------------- the direction layer

@@ -248,6 +248,11 @@ async def _drive_round(
         return ev
 
     ev = await step(rnd.open())
+    # The engine never proposes on its own anymore: the banner carries the
+    # evolving draft and the caregiver accepts it. The bench plays caregiver:
+    # whenever the banner is READY and its draft changed, ask the simulator to
+    # confirm it — confirm = accept (round ends), reject = keep questioning.
+    last_draft = ""
     # Hard cap on iterations so a pathological loop can't run forever.
     for _ in range(max_queries * 2 + 4):
         if rnd.is_terminal:
@@ -256,10 +261,16 @@ async def _drive_round(
             ans = await _simulate_answer(sim, scenario.need, ev.text)
             transcript.append(f"Q{ev.query_index}: {ev.text}  → {ans.value}")
             ev = await step(rnd.answer(ans))
-        elif ev.kind == "synthesis":
-            ok = await _simulate_confirm(sim, scenario.need, ev.text)
-            transcript.append(f"SYN: “{ev.text}”  → {'confirm' if ok else 'reject'}")
-            ev = await step(rnd.answer(Answer.YES if ok else Answer.NO))
+            banner = rnd.banner()
+            if banner["ready"] and banner["text"] != last_draft:
+                last_draft = banner["text"]
+                ok = await _simulate_confirm(sim, scenario.need, banner["text"])
+                transcript.append(
+                    f"DRAFT: “{banner['text']}”  → "
+                    f"{'accept ✓' if ok else 'keep going'}"
+                )
+                if ok:
+                    ev = rnd.accept()
         elif ev.kind == "diagnostic":
             # No canned questions anymore — a failed turn surfaces a
             # diagnostic. Retry a few times (mirrors the cockpit button), then

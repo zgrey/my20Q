@@ -41,15 +41,29 @@ not just in the reasoning tile).
 
 ```
 ┌─ brand · Live|Review ── Topic ▼ ── ⬇ · ● REC · 🔊 · ☀ ─┐
-│ ┌──────────────────────┐ ┌─────────────────────┐ │
-│ │ 1 Conversation       │ │ 2 Live reasoning    │ │
-│ │   transcript + live  │ │   consensus board + │ │
-│ │   query / synthesis  │ │   SSE + sliders     │ │
-│ ├──────────────────────┤ │                     │ │
-│ │ 3 Input y/n/k/s·⇄o·u/q│ │                    │ │
-│ └──────────────────────┘ └─────────────────────┘ │
+│ ┌─ PROPOSAL BANNER — “I need/want … for/from …” 🔊✓✗ ─┐ │
+│ ├──────────────────────┬─────────────────────┤ │
+│ │ 1 Conversation       │ 2 Live reasoning    │ │
+│ │   transcript + live  │   consensus board + │ │
+│ │   query / verify     │   SSE + sliders     │ │
+│ ├──────────────────────┤                     │ │
+│ │ 3 Input y/n/k/s·⇄o·u/q│                    │ │
+│ └──────────────────────┴─────────────────────┘ │
 └────────────────────────────────────────────────────┘
 ```
+
+**Proposal banner** (top, owner-designed): the evolving draft utterance,
+populated from the first converged slot with ambiguous alternates and a
+trailing ellipsis ("I need/want something for/from Rob …"); glowing
+*Pending synthesis…* before that; accent-bordered when the board says
+propose-ready. Per-part emphasis: **locked** values underlined solid,
+*working* values dotted + pulsing. Controls: **🔊 Speak** (reads the draft;
+slashes spoken as "or"), **✓** accept — pops the explicit confirmation
+modal (dimmed backdrop, the final utterance front and center, spoken, one
+**New round** button), **✗** reject-a-portion — opens a note field next to
+the draft; the note becomes a **value ban** (struck-through chip) or a
+**slot mute** (dimmed struck chip), undoable via Undo. The engine never
+proposes on its own — the banner is the only synthesis path.
 
 > The Pictogram tile is shelved (curated retrieval mostly fell back to "?" in
 > real sessions). The component and backend retrieval are retained — re-mount

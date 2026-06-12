@@ -60,10 +60,35 @@ export interface RoundEvent {
 }
 
 export interface HistoryEntry {
-  kind: "query" | "synthesis" | "context" | "diagnostic";
+  kind: "query" | "synthesis" | "context" | "diagnostic" | "edit";
   text: string;
   answer: Answer | null;
   rationale: string;
+}
+
+// One woven slot of the live draft, with its confidence band.
+export interface BannerPart {
+  category: string;
+  value: string;
+  band: "locked" | "working";
+}
+
+// A value the caregiver struck from the proposal (✗-edit).
+export interface BannerBan {
+  category: string;
+  value: string;
+}
+
+// The living proposal banner — the evolving draft utterance. `pending`
+// renders the glowing "Pending synthesis…"; `ready` lights the
+// propose-ready vibrance (board-readiness).
+export interface Banner {
+  state: "pending" | "draft";
+  text: string;
+  ready: boolean;
+  parts: BannerPart[];
+  banned: BannerBan[];
+  muted: string[];
 }
 
 export interface RoundState {
@@ -71,6 +96,7 @@ export interface RoundState {
   round_id: string;
   topic_id: string;
   event: RoundEvent;
+  banner: Banner;
   history: HistoryEntry[];
   outcome: string | null;
   final_utterance: string;

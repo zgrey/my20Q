@@ -2,8 +2,8 @@
 
 A `Session` spans one tool process and spawns `Round`s. A `Round` is one
 convergence attempt under a single topic. A round ends ONLY when the caregiver
-confirms a synthesized utterance with "yes" (success) — that is the sole
-model-side terminator. The caregiver can still end it out-of-band (an
+ACCEPTS the live draft (the banner's ✓) — the engine never proposes or
+terminates on its own. The caregiver can still end it out-of-band (an
 emergency topic short-circuit, a topic switch, or an operator safety ceiling).
 Terminology and lifecycle: docs/design/beta-retool.md §2, §7.
 
@@ -15,15 +15,18 @@ drill the vague leader); the `Reasoner` turns that into language. Crediting is
 anchored to the question text, so an answer can never move a contender the
 question didn't mention.
 
-The synthesis loop (thresholds env-tunable — see `config.ReasoningTuning`):
-question until ``min_yes_for_synthesis`` yeses (or the board's core slots are
-confidently led) → weave the slot leaders into an utterance, placeholdering
-unknown slots → on a no/kinda, rephrase up to ``rephrase_limit`` times → if
-still unconfirmed, return to questioning for ``new_yes_for_resynthesis`` NEW
-yeses → after ``synth_attempts_before_restart`` failed attempts, RESTART.
+Synthesis is the **living proposal banner** (owner design — see
+docs/design/convergence-plan.md W1-C): an evolving draft utterance woven from
+the ban/mute-aware slot leaders, rendered from the first converged core slot
+(code template with slashed alternates + ellipsis; the LLM weave takes over
+at board-readiness, regenerated only when the weave changes). The caregiver
+concludes with ``accept()`` (✓ — the sole terminator), speaks the draft at
+whim, and edits it in real time with ``edit()`` (✗ — value bans struck
+through, slot mutes dimmed; both replayable history entries). There are no
+engine-initiated proposals, so there is no kinda-rephrase loop.
 
 A **restart** is the round's one recovery mechanism, with three triggers
-(failed synthesis attempts, a long run of "no", and the reasoner fail-loop):
+(a long run of "no", stalled board progress, and the reasoner fail-loop):
 it dumps every "no"/"kinda" influence and rebuilds the board from ONLY the
 caregiver context and this round's confirmed-yes answers (round-specific, not
 session-wide), plus fresh broad probes. Post-restart prompts hide the dumped
@@ -42,13 +45,13 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
 from my20q.agent import facets
-from my20q.agent.auditor import is_repeat
 from my20q.agent.reasoner import Reasoner, ReasonerAction, ReasonerError
 from my20q.agent.safety import EMERGENCY_SCREEN
 from my20q.config import Config, Mode, ReasoningTuning
@@ -79,10 +82,9 @@ MAX_CONSEC_REASON_FAILURES = 3
 
 #: Default behavior knobs — the single source of truth for the tuning defaults. A
 #: `Round` uses the `ReasoningTuning` it is handed (the API/CLI thread the
-#: env-configured one through `Session`); these module aliases are the defaults,
+#: env-configured one through `Session`); this module alias is the default,
 #: kept for readability and the tests. Override via MY20Q_* env vars (see config).
 _DEFAULT_TUNING = ReasoningTuning()
-MIN_YES_FOR_SYNTHESIS = _DEFAULT_TUNING.min_yes_for_synthesis
 SOFT_RESET_NO_STREAK = _DEFAULT_TUNING.soft_reset_no_streak
 
 #: Never focus the same facet category more than this many turns in a row when
@@ -138,9 +140,12 @@ class Round:
     with reading each `RoundEvent`. ``add_context`` injects caregiver
     steering; ``await undo()`` rewinds the last entry; ``await retry()``
     re-proposes after a diagnostic; ``await flip()`` re-renders the pending
-    question in its opposite connotation (an action, not an answer). The
-    round is over once an event of kind ``synthesized``, ``abandoned``, or
-    ``emergency`` is returned (also reflected by ``is_terminal``).
+    question in its opposite connotation (an action, not an answer).
+    ``banner()`` is the living draft proposal; ``accept()`` concludes the
+    round with it (the ✓ — the only way a round ends in success) and
+    ``await edit(note)`` applies a ✗-edit (value ban / slot mute / fallback
+    context). The round is over once an event of kind ``synthesized``,
+    ``abandoned``, or ``emergency`` is returned (also ``is_terminal``).
     """
 
     def __init__(
@@ -201,6 +206,11 @@ class Round:
         # rendered (often spoken), so the repeat gate must still span them —
         # but they carry no answer and never enter the history/board.
         self._superseded: list[str] = []
+        # The banner's woven draft cache: the LLM weave is regenerated only
+        # when the weave (the ban/mute-aware slot leaders) changes; below
+        # board-readiness the banner renders the code template instead.
+        self._draft_text: str = ""
+        self._draft_weave: dict[str, str] = {}
         self._outcome: str | None = None
         self._final_utterance = ""
         self._opened = False
@@ -472,92 +482,43 @@ class Round:
             if restart_reason and not self._just_restarted():
                 await self._restart(restart_reason)
 
-            # Decide the next move from the current SEGMENT (history since the
-            # last restart): question, synthesize, rephrase, or restart.
+            # The living proposal banner replaced engine-initiated synthesis
+            # (owner design — convergence-plan W1-C): the round only ever asks
+            # questions, the banner carries the evolving draft, and ONLY the
+            # caregiver concludes (``accept()``). No proposals, no rephrases,
+            # no kinda-loop — the remaining restart triggers are the
+            # no-streak / stalled checks above and the fail-loop path.
             seg = self._segment()
-            last = seg[-1] if seg else None
-            synth_runs, tail_run = self._synth_runs(seg)
-
-            if last is not None and last.get("kind") == "synthesis":
-                # Mid synthesis attempt — the last utterance was rejected (a
-                # "yes" would have ended the round). A "kinda" rejection means
-                # the CONTENT has a gap, not the wording — wording shuffles
-                # can't add the missing detail (one trial burned 16 isomorphic
-                # kinda-utterances), so a kinda gets at most ONE rephrase
-                # before returning to questioning; a "no" keeps the full
-                # budget (wrong framing genuinely needs a different angle).
-                if last.get("answer") == Answer.KINDA.value:
-                    limit = min(1, T.rephrase_limit)
-                else:
-                    limit = T.rephrase_limit
-                if tail_run <= limit:
-                    move = "rephrase"
-                elif synth_runs >= T.synth_attempts_before_restart:
-                    move = "restart"
-                else:
-                    move = "question"
-            else:
-                # Questioning — synthesize once enough yeses have accrued, or
-                # EARLY once the board's core slots are confidently led (the
-                # consensus-readiness path; placeholders cover the rest).
-                new_yes = self._yes_since_last_synth(seg)
-                ever_synthesized = any(
-                    h.get("kind") == "synthesis" for h in self._history
-                )
-                need = (
-                    T.new_yes_for_resynthesis
-                    if ever_synthesized
-                    else T.min_yes_for_synthesis
-                )
-                board = self._replay_board()
-                ready = (
-                    new_yes >= T.new_yes_for_resynthesis
-                    and self._board_ready(board)
-                )
-                move = "synthesize" if (new_yes >= need or ready) else "question"
-
-            if move == "restart":
-                await self._restart("synthesis-exhausted")
-                seg = self._segment()  # now fresh (post-marker)
-                move = "question"
 
             # Operator safety ceiling — the ONLY count-based stop, off by default
             # (<= 0). It never forces a half-baked utterance; it just abandons.
-            if (
-                move == "question"
-                and self.max_queries > 0
-                and self.query_count >= self.max_queries
-            ):
+            if self.max_queries > 0 and self.query_count >= self.max_queries:
                 self._outcome = "abandoned"
                 return RoundEvent(
                     kind="abandoned", query_index=self.query_count, engine=self.engine
                 )
 
-            action: ReasonerAction | None = None
             board = self._replay_board()
             focus = ""
-            if move in ("synthesize", "rephrase"):
-                action = await self._propose_synthesis(board, seg, move)
-            if action is None:  # questioning — or synthesis had no leaders yet
-                pair = self._verify_due(board)
-                if pair is not None:
-                    # Verify-on-lock: double-check a pair that turned
-                    # confident on a single answer before building on it.
-                    action = await self._reasoner.verify(
-                        category=pair[0],
-                        value=pair[1],
-                        board=board,
-                        on_phase=self.on_phase,
+            pair = self._verify_due(board)
+            if pair is not None:
+                # Verify-on-lock: double-check a pair that turned confident
+                # on a single answer before building on it.
+                action = await self._reasoner.verify(
+                    category=pair[0],
+                    value=pair[1],
+                    board=board,
+                    on_phase=self.on_phase,
+                )
+                focus = pair[0]
+                if self.topic.direction:
+                    who_names = [v for v, _ in facets.live(board, "who")]
+                    action.direction = (
+                        facets.classify_direction(action.content, who_names)
+                        or ""
                     )
-                    focus = pair[0]
-                    if self.topic.direction:
-                        who_names = [v for v, _ in facets.live(board, "who")]
-                        action.direction = (
-                            facets.classify_direction(action.content, who_names)
-                            or ""
-                        )
-                else:
-                    action, board, focus = await self._propose_question(seg)
+            else:
+                action, board, focus = await self._propose_question(seg)
         except ReasonerError as exc:
             return await self._handle_reason_failure(str(exc))
 
@@ -565,50 +526,306 @@ class Round:
         self._consec_failures = 0
         self.engine = "reasoning"
         self._pending = action
+        # Keep the banner's draft current (cheap: re-weaves only on change).
+        await self._refresh_draft(board)
         return self._event_for(action, facets.facet_view(board, focus))
 
-    async def _propose_synthesis(
-        self, board: facets.Board, seg: list[dict], move: str
-    ) -> ReasonerAction | None:
-        """Weave the slot leaders into an utterance (or a rephrase of one).
+    # ---------------------------------------- the living proposal banner
 
-        Returns None when no slot has a positively-confirmed leader yet — the
-        caller then keeps questioning rather than ending the round (only a
-        confirmed utterance ends a round).
+    #: Direction buckets rendered as draft connectors; unresolved direction
+    #: renders as the "for/from" alternate (the sign-flip uncertainty as text).
+    _BUCKET_CONN = {
+        "me_for_them": "for",
+        "them_for_me": "from",
+        "tell_them": "to tell",
+        "ask_them": "to ask",
+    }
+
+    def _core_facets(self) -> list[str]:
+        """The topic's core slots, minus caregiver-muted ones (never empty)."""
+        muted = self._edit_mutes()
+        core = [
+            c
+            for c in (self.topic.core_facets or [])
+            if c in facets.CATEGORIES and c not in muted
+        ]
+        if core:
+            return core
+        return [c for c in ("what", "how") if c not in muted] or ["what"]
+
+    def _weave(self, board: facets.Board) -> dict[str, str]:
+        """Ban/mute-aware positive slot leaders — what the draft is woven from.
+
+        Banned values are floored on the board (see ``_replay_board``), so
+        the next-best live contender steps up automatically.
         """
-        assert self._reasoner is not None
-        leaders: dict[str, str] = {}
+        muted = self._edit_mutes()
+        out: dict[str, str] = {}
         for cat in facets.CATEGORIES:
-            top = facets.leader(board, cat)
-            if top is not None and top[1] > 0:
-                leaders[cat] = top[0]
-        if not leaders:
-            return None
-        rejected: list[tuple[str, str]] | None = None
-        if move == "rephrase":
-            # The rejected utterances of THIS attempt (the trailing synthesis
-            # run) so the model phrases it differently — kinda = close, no =
-            # wrong angle.
-            rejected = []
-            for h in reversed(seg):
-                if h.get("kind") == "synthesis":
-                    rejected.append((h.get("text", ""), h.get("answer", "")))
-                else:
-                    break
-            rejected.reverse()
-        action = await self._reasoner.synthesize(
-            leaders=leaders,
-            history=self._history,
-            rejected=rejected,
-            **self._reasoner_ctx(),
+            if cat in muted:
+                continue
+            ranked = facets.live(board, cat)
+            if ranked and ranked[0][1] > 0:
+                out[cat] = ranked[0][0]
+        return out
+
+    def _template_draft(self, weave: dict[str, str]) -> str:
+        """Deterministic early draft — structured ambiguity, ellipsis while open.
+
+        "I need/want something for/from Rob …": slashed alternates render the
+        undecided dimensions (need-vs-want; the direction buckets) and
+        collapse as evidence arrives; the trailing ellipsis says "still
+        working". Costs nothing, so it can populate the banner the moment the
+        first core slot converges; the LLM weave takes over at readiness.
+        """
+        bits = ["I need/want", weave.get("what", "something")]
+        how = weave.get("how", "")
+        bucket = next(
+            (k for k, v in facets.DIRECTION_BUCKETS.items() if v == how), None
         )
-        # A rephrase that near-duplicates an already-rejected utterance would
-        # just earn the same rejection — bail to questioning instead (the
-        # caller treats None as "keep questioning").
-        if rejected and is_repeat(action.content, [u for u, _ in rejected if u]):
-            log.info("rephrase near-duplicates a rejected utterance — requestioning")
+        if how and bucket is None:
+            bits.append(f"— {how} —")
+        if self.topic.direction or "who" in weave:
+            conn = self._BUCKET_CONN.get(bucket or "", "for/from")
+            bits.append(f"{conn} {weave.get('who', 'someone')}")
+        if "when" in weave:
+            bits.append(f", {weave['when']}")
+        if "where" in weave:
+            bits.append(f", {weave['where']}")
+        if "why" in weave:
+            bits.append(f"because {weave['why']}")
+        return " ".join(bits).replace(" ,", ",") + " …"
+
+    async def _refresh_draft(self, board: facets.Board) -> None:
+        """Refresh the woven draft — only when the weave actually changed.
+
+        The LLM weave runs only at board-readiness and on weave change (the
+        cost cap: leader changes are rare); below readiness the banner
+        renders the code template. Never raises — a failed weave just keeps
+        the template until the next change.
+        """
+        weave = self._weave(board)
+        if weave == self._draft_weave and (
+            self._draft_text or not self._board_ready(board)
+        ):
+            return
+        self._draft_weave = dict(weave)
+        self._draft_text = ""
+        if not weave or self._reasoner is None or not self._board_ready(board):
+            return
+        try:
+            action = await self._reasoner.synthesize(
+                leaders=weave,
+                history=self._history,
+                rejected=None,
+                **self._reasoner_ctx(),
+            )
+        except ReasonerError:
+            return  # the template still shows; retried on the next change
+        self._draft_text = action.content
+
+    def banner(self) -> dict:
+        """The living proposal banner — the cockpit's evolving draft.
+
+        States: ``pending`` (no core slot has signal yet — the glowing
+        "Pending synthesis…") and ``draft`` (an utterance with per-part
+        confidence bands). ``ready`` mirrors board-readiness — the
+        propose-ready vibrance (≈ the conjunction of per-slot posteriors
+        crossing ~0.5, the point where proposing IS the best question; see
+        the research audit). Bans and mutes ride along so the cockpit can
+        strike / dim them.
+        """
+        bans = self._edit_bans()
+        base = {
+            "state": "pending",
+            "text": "",
+            "ready": False,
+            "parts": [],
+            "banned": [
+                {"category": cat, "value": v}
+                for cat in facets.CATEGORIES
+                for v in sorted(bans.get(cat, ()))
+            ],
+            "muted": sorted(self._edit_mutes()),
+        }
+        if (
+            not self._opened
+            or self._outcome == "emergency"
+            or self._seed_values is None
+        ):
+            return base
+        board = self._replay_board()
+        weave = self._weave(board)
+        if not any(c in weave for c in self._core_facets()):
+            return base  # nothing real to draft from yet
+        T = self.tuning
+        parts = [
+            {
+                "category": cat,
+                "value": val,
+                "band": (
+                    "locked"
+                    if facets.confident(
+                        board,
+                        cat,
+                        ready_points=T.facet_ready_points,
+                        margin=T.facet_split_margin,
+                    )
+                    else "working"
+                ),
+            }
+            for cat, val in weave.items()
+        ]
+        text = (
+            self._draft_text
+            if self._draft_text and self._draft_weave == weave
+            else self._template_draft(weave)
+        )
+        return {
+            **base,
+            "state": "draft",
+            "text": text,
+            "ready": self._board_ready(board),
+            "parts": parts,
+        }
+
+    def accept(self) -> RoundEvent:
+        """✓ on the banner: conclude the round with the current draft.
+
+        The caregiver is the stopping policy — the engine never proposes on
+        its own. Accept turns the live draft into the confirmed utterance,
+        recorded exactly like a confirmed synthesis so the dataset keeps one
+        shape. Template-stage accepts collapse the alternates ("need/want" →
+        "need") and close the ellipsis.
+        """
+        if not self._opened:
+            raise RuntimeError("accept() called before open()")
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        board = self._replay_board() if self._seed_values is not None else None
+        weave = self._weave(board) if board is not None else {}
+        if not weave:
+            raise RuntimeError("nothing to accept yet — no confirmed details")
+        if self._draft_text and self._draft_weave == weave:
+            text = self._draft_text
+        else:
+            text = (
+                self._template_draft(weave)
+                .replace("I need/want", "I need")
+                .replace("for/from", "for")
+                .rstrip(" …")
+                + "."
+            )
+        self._history.append(
+            {
+                "kind": "synthesis",
+                "text": text,
+                "answer": Answer.YES.value,
+                "rationale": "Accepted from the live proposal banner.",
+                "slots": dict(weave),
+            }
+        )
+        self._pending = None
+        self._outcome = "synthesized"
+        self._final_utterance = text
+        return RoundEvent(
+            kind="synthesized",
+            text=text,
+            query_index=self.query_count,
+            engine=self.engine,
+        )
+
+    #: Slot synonyms + dismissal stems for the ✗-note parser. Deterministic
+    #: and strict on purpose: a mute needs BOTH a slot word and a dismissal.
+    _SLOT_WORDS = {
+        "who": ("who", "person", "people"),
+        "what": ("what", "thing", "subject", "object"),
+        "when": ("when", "time", "timing"),
+        "where": ("where", "place", "location"),
+        "why": ("why", "reason"),
+        "how": ("how", "action"),
+    }
+    _DISMISS_STEMS = (
+        "matter",
+        "ignor",
+        "skip",
+        "important",
+        "irrelevant",
+        "forget",
+        "drop",
+    )
+
+    @classmethod
+    def _parse_mute(cls, note: str) -> str | None:
+        """The slot a note dismisses ("the when doesn't matter"), or None."""
+        lowered = note.casefold()
+        if not any(stem in lowered for stem in cls._DISMISS_STEMS):
             return None
-        return action
+        tokens = set(re.findall(r"[a-z']+", lowered))
+        for cat, words in cls._SLOT_WORDS.items():
+            if any(w in tokens for w in words):
+                return cat
+        return None
+
+    async def edit(self, note: str) -> RoundEvent:
+        """✗ on the banner: a real-time edit to the evolving proposal.
+
+        The note is interpreted against the DRAFT, not the whole world —
+        deterministically: a slot dismissal MUTES the slot (dimmed + struck;
+        excluded from questioning and speech); a note matching a woven value
+        BANS that value (strike-through; floored on the board; gated out of
+        future questions). A note matching neither becomes ordinary guiding
+        context — nothing the caregiver types is dropped. Edits are history
+        entries: replayable, undoable, recorded.
+        """
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        note = note.strip()
+        if not note:
+            if self._pending is not None:
+                return self._pending_event()
+            return await self._advance()
+        mute = self._parse_mute(note)
+        if mute is not None:
+            self._history.append(
+                {"kind": "edit", "text": note, "answer": None, "mute": mute}
+            )
+            self._pending = None
+            return await self._advance()
+        if self._seed_values is not None:
+            board = self._replay_board()
+            for cat, val in self._weave(board).items():
+                if facets.mentions(note, val):
+                    self._history.append(
+                        {
+                            "kind": "edit",
+                            "text": note,
+                            "answer": None,
+                            "ban": {"category": cat, "value": val},
+                        }
+                    )
+                    self._pending = None
+                    return await self._advance()
+        return await self.add_context(note)  # no draft match — guiding context
+
+    def _edit_mutes(self) -> set[str]:
+        """Slots the caregiver dismissed via ✗-edits (recomputed → undo-safe)."""
+        return {
+            h["mute"]
+            for h in self._history
+            if h.get("kind") == "edit" and h.get("mute") in facets.CATEGORIES
+        }
+
+    def _edit_bans(self) -> dict[str, set[str]]:
+        """Values the caregiver struck via ✗-edits, per category."""
+        out: dict[str, set[str]] = {}
+        for h in self._history:
+            if h.get("kind") == "edit" and isinstance(h.get("ban"), dict):
+                ban = h["ban"]
+                out.setdefault(ban.get("category", ""), set()).add(
+                    ban.get("value", "")
+                )
+        return out
 
     async def _propose_question(
         self, seg: list[dict]
@@ -641,6 +858,11 @@ class Round:
             top = facets.leader(board, cat)
             if top is not None and top[1] >= T.facet_ready_points:
                 established.add((cat, top[0]))
+        vetoed = {
+            (cat, val)
+            for cat, vals in self._edit_bans().items()
+            for val in vals
+        }
         action = await self._reasoner.ask(
             board=board,
             focus=focus,
@@ -650,6 +872,7 @@ class Round:
             asked=asked,
             established=established,
             banned=self._futile_pair(seg),
+            vetoed=vetoed or None,
             caregiver_hint=self._caregiver_hint(board),
             exploratory=exploratory,
             **self._reasoner_ctx(),
@@ -701,10 +924,11 @@ class Round:
         extend, and ends on the first miss.
         """
         T = self.tuning
-        core = [c for c in (self.topic.core_facets or []) if c in facets.CATEGORIES]
-        if not core:
-            core = ["what", "how"]
-        others = [c for c in facets.CATEGORIES if c not in core]
+        core = self._core_facets()
+        muted = self._edit_mutes()
+        others = [
+            c for c in facets.CATEGORIES if c not in core and c not in muted
+        ]
         recent = [
             h.get("focus")
             for h in seg
@@ -737,7 +961,7 @@ class Round:
                 key=lambda cv: board.get(cv[0], {}).get(cv[1], 0.0),
             )
             for cat, _val in ranked_used:
-                if cat not in facets.CATEGORIES:
+                if cat not in facets.CATEGORIES or cat in muted:
                     continue
                 if facets.confident(
                     board,
@@ -792,7 +1016,8 @@ class Round:
         pool = [
             c
             for c in facets.CATEGORIES
-            if not self._retired(board, c)
+            if c not in muted
+            and not self._retired(board, c)
             and (top := facets.leader(board, c)) is not None
             and top[1] > 0
         ]
@@ -856,14 +1081,12 @@ class Round:
     def _board_ready(self, board: facets.Board) -> bool:
         """Whether every core slot has a clear, confirmed leader.
 
-        The consensus-readiness path to synthesis: when the core slots are all
-        confidently led, the round can propose early (placeholders cover the
-        modifier slots) instead of grinding out the full yes-count.
+        Drives the banner's propose-ready vibrance (≈ the conjunction of
+        per-slot posteriors crossing ~0.5 — see the research audit) and the
+        LLM-weave trigger. Caregiver-muted slots are excluded.
         """
         T = self.tuning
-        core = [c for c in (self.topic.core_facets or []) if c in facets.CATEGORIES]
-        if not core:
-            core = ["what", "how"]
+        core = self._core_facets()
         return all(
             facets.confident(
                 board, c, ready_points=T.facet_ready_points, margin=T.facet_split_margin
@@ -997,8 +1220,11 @@ class Round:
                     yes_counts[pair] = yes_counts.get(pair, 0) + 1
         if spent >= VERIFY_BUDGET:
             return None
-        core = [c for c in (self.topic.core_facets or []) if c in facets.CATEGORIES]
-        others = [c for c in facets.CATEGORIES if c not in core]
+        core = self._core_facets()
+        muted = self._edit_mutes()
+        others = [
+            c for c in facets.CATEGORIES if c not in core and c not in muted
+        ]
         for cat in core + others:
             if not facets.confident(
                 board,
@@ -1105,29 +1331,6 @@ class Round:
         if len(seg) == len(self._history):  # no restart marker exists yet
             return False
         return not any(h.get("kind") == "query" and h.get("answer") for h in seg)
-
-    @staticmethod
-    def _synth_runs(seg: list[dict]) -> tuple[int, int]:
-        """``(number of synthesis attempts, length of the trailing one)``.
-
-        An "attempt" is a maximal run of consecutive synthesis entries (the
-        initial utterance plus its rephrases). ``tail_run`` is 0 unless the
-        segment ends in a synthesis run.
-        """
-        runs = 0
-        prev = None
-        for h in seg:
-            kind = h.get("kind")
-            if kind == "synthesis" and prev != "synthesis":
-                runs += 1
-            prev = kind
-        tail = 0
-        for h in reversed(seg):
-            if h.get("kind") == "synthesis":
-                tail += 1
-            else:
-                break
-        return runs, tail
 
     @staticmethod
     def _yes_since_last_synth(seg: list[dict]) -> int:
@@ -1268,6 +1471,18 @@ class Round:
                 board = facets.restore(h.get("board") or {})
             elif kind == "context" and h.get("slots"):
                 board = facets.apply_context(board, h["slots"])
+            elif kind == "edit":
+                # A caregiver ban floors the value — out of play, still on the
+                # board (never re-minted), struck through in the banner.
+                ban = h.get("ban")
+                if isinstance(ban, dict):
+                    cat = ban.get("category", "")
+                    val = ban.get("value", "")
+                    if cat in board:
+                        key = facets._find(board[cat], val)
+                        board[cat][key if key is not None else val] = (
+                            facets.ELIMINATE_FLOOR
+                        )
             elif kind == "query":
                 answer = h.get("answer")
                 slots = h.get("slots")

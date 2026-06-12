@@ -204,7 +204,21 @@ what drillable in the A2 scenario; ladder of 3 allowed while rising). Trial:
 no focused question on a slot whose leader is ≥ 2×-confident; `what`/`where`
 receive drills in a people round.
 
-### W1-C · The living proposal banner — Status: AGREED (owner-designed, 06-11)
+### W1-C · The living proposal banner — Status: IMPLEMENTED (06-11)
+
+> Final owner amendment folded in: ✓ raises an **explicit confirmation
+> modal** — front and center over a dimmed backdrop, the final utterance
+> displayed and spoken, a single "New round" action. Implementation notes:
+> early drafts are code-templated ("I need/want … for/from …" with the
+> direction buckets collapsing the connector); the LLM weave takes over at
+> board-readiness, regenerated only on weave change; ✗-notes are parsed
+> deterministically (slot word + dismissal stem ⇒ mute; a note mentioning a
+> woven value ⇒ ban, floored on the board and hard-gated out of future
+> questions; anything else falls through to guiding context); accepts are
+> recorded as a confirmed `synthesis` history entry so the dataset keeps
+> one shape; the four synthesis count-knobs (`MY20Q_MIN_YES` …) are retired.
+> CLI gained `p`-to-accept; the bench plays caregiver (confirms the draft
+> with the simulator whenever it turns ready). 193 tests pass.
 
 **Superseded twice in iteration — final design is the owner's.** Instead of
 gating engine-initiated proposals (the original draft) or a bare
@@ -465,7 +479,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 |----|-------|--------|
 | W1-A | Rephrase default → 1 | **IMPLEMENTED** (owner-decided 06-11) |
 | W1-B | Focus v3: retire/widen/rotate-on-stall | **IMPLEMENTED** (06-11, amended: ratio retirement, banded priority) |
-| W1-C | The living proposal banner (Speak / ✓ / ✗-edits) | **AGREED** (owner-designed; build after W2-F) |
+| W1-C | The living proposal banner (Speak / ✓ / ✗-edits) | **IMPLEMENTED** (06-11, owner-designed; ✓-modal incl.) |
 | W1-D | Focus directives in the context field (shrunk by C) | PROPOSED |
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED |
 | W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11) |

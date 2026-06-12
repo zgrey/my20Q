@@ -250,6 +250,11 @@ def _format_history(history: list[dict]) -> str:
         dumped = i < last_restart
         if kind == "context":
             lines.append(f'- [caregiver context] "{h.get("text", "")}"')
+        elif kind == "edit":
+            lines.append(
+                f'- [caregiver edit] "{h.get("text", "")}" — struck from the '
+                "evolving proposal"
+            )
         elif kind == "restart":
             lines.append(
                 "- [restart — earlier wrong guesses were dumped; the confirmed "
@@ -396,6 +401,12 @@ _EXHAUSTED_NOTE = (
     "genuinely different contender or kind of {cat}.\n\n"
 )
 
+#: Injected when the caregiver struck values from the proposal (✗-edits).
+_VETOED_NOTE = (
+    "RULED OUT — the caregiver explicitly struck these from the proposal; "
+    "never ask about them again:\n{lines}\n\n"
+)
+
 #: Injected when the who-leader is a known caregiver and no direction is
 #: established. Caregivers offer care as tasks — test that direction FIRST,
 #: but never assume it (concern ABOUT a caregiver is also real).
@@ -436,6 +447,7 @@ def deliberate_messages(
     corrections: list[str] | None = None,
     exploratory: bool = False,
     banned: tuple[str, str] | None = None,
+    vetoed: set[tuple[str, str]] | None = None,
     caregiver_hint: str = "",
 ) -> list[LLMMessage]:
     """Free-form reasoning to choose the next yes/no question (no JSON).
@@ -460,6 +472,9 @@ def deliberate_messages(
         instruction += _CAREGIVER_NOTE.format(who=caregiver_hint)
     if banned is not None:
         instruction += _EXHAUSTED_NOTE.format(value=banned[1], cat=banned[0])
+    if vetoed:
+        lines = "\n".join(f'  - {cat}: "{val}"' for cat, val in sorted(vetoed))
+        instruction += _VETOED_NOTE.format(lines=lines)
     instruction += (
         f"THE BOARD (slot: contenders [points]):\n{_board_block(board)}\n\n"
         f"FOCUS SLOT: {focus}\n"

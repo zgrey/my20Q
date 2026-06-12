@@ -52,6 +52,12 @@ export const api = {
   // connotation (an action, not an answer).
   flip: (sid: string, rid: string) =>
     post<RoundState>(`/sessions/${sid}/rounds/${rid}/flip`),
+  // ✓ on the banner: conclude the round with the current draft.
+  accept: (sid: string, rid: string) =>
+    post<RoundState>(`/sessions/${sid}/rounds/${rid}/accept`),
+  // ✗ on the banner: a real-time edit against the live draft (ban / mute).
+  edit: (sid: string, rid: string, text: string) =>
+    post<RoundState>(`/sessions/${sid}/rounds/${rid}/edit`, { text }),
   eventsUrl: (sid: string, rid: string) =>
     `${BASE}/sessions/${sid}/rounds/${rid}/events`,
   exportUrl: (sid: string, format: "jsonl" | "md" = "jsonl") =>

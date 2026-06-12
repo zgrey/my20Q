@@ -86,6 +86,43 @@ class EventOut(BaseModel):
     flipped_from: str = ""
 
 
+class BannerPartOut(BaseModel):
+    """One woven slot of the live draft, with its confidence band."""
+
+    category: str
+    value: str
+    band: str  # "locked" | "working"
+
+
+class BannerBanOut(BaseModel):
+    """A value the caregiver struck from the proposal (✗-edit)."""
+
+    category: str
+    value: str
+
+
+class BannerOut(BaseModel):
+    """The living proposal banner — the evolving draft utterance.
+
+    `state` is "pending" (render the glowing "Pending synthesis…") or
+    "draft"; `ready` lights the propose-ready vibrance (board-readiness).
+    `banned` values render struck through; `muted` slots dimmed + struck.
+    """
+
+    state: str = "pending"
+    text: str = ""
+    ready: bool = False
+    parts: list[BannerPartOut] = Field(default_factory=list)
+    banned: list[BannerBanOut] = Field(default_factory=list)
+    muted: list[str] = Field(default_factory=list)
+
+
+class EditIn(BaseModel):
+    """The ✗-note: a real-time edit applied against the live draft."""
+
+    text: str
+
+
 class HistoryEntryOut(BaseModel):
     kind: str
     text: str
@@ -100,6 +137,7 @@ class RoundStateOut(BaseModel):
     round_id: str
     topic_id: str
     event: EventOut
+    banner: BannerOut = Field(default_factory=BannerOut)
     history: list[HistoryEntryOut]
     outcome: str | None = None
     final_utterance: str = ""

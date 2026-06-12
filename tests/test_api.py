@@ -143,8 +143,8 @@ def test_unknown_topic_returns_400() -> None:
 
 
 def test_reasoning_round_via_injected_backend() -> None:
-    # Repeated "yes" answers build per-slot consensus AND clear the yes gate, so
-    # the round eventually proposes an utterance — never on the first yes.
+    # Yes answers build per-slot consensus; the BANNER carries the evolving
+    # draft (never an engine-initiated proposal) and accept concludes.
     backend = _controller_backend(
         utterance="I would like to call my son this afternoon.",
     )
@@ -162,21 +162,55 @@ def test_reasoning_round_via_injected_backend() -> None:
     assert any(f["focus"] for f in facets)  # the targeted slot is marked
     who = facets[0]
     assert {"value": "your son", "score": 0.0} in who["contenders"]
+    assert state["banner"]["state"] == "pending"  # no signal yet
 
-    # First yes must NOT synthesize — far short of the gate.
-    state = client.post(
-        f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"}
-    ).json()
-    assert state["event"]["kind"] == "query"
-
-    for _ in range(11):
-        if state["event"]["kind"] == "synthesis":
-            break
+    for _ in range(3):
         state = client.post(
             f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"}
         ).json()
-    assert state["event"]["kind"] == "synthesis"
-    assert "son" in state["event"]["text"]
+        assert state["event"]["kind"] == "query"  # never proposes on its own
+
+    banner = state["banner"]
+    assert banner["state"] == "draft" and banner["text"]
+    assert any(p["category"] == "who" for p in banner["parts"])
+
+    state = client.post(f"/api/sessions/{sid}/rounds/{rid}/accept").json()
+    assert state["outcome"] == "synthesized"
+    assert state["event"]["kind"] == "synthesized"
+    assert state["final_utterance"]
+
+
+def test_accept_endpoint_409s_with_nothing_to_accept() -> None:
+    client = _reasoning_client()
+    sid = client.post("/api/sessions").json()["session_id"]
+    rid = client.post(
+        f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
+    ).json()["round_id"]
+    # No positive signal yet — the ✓ has nothing to conclude with.
+    assert client.post(f"/api/sessions/{sid}/rounds/{rid}/accept").status_code == 409
+
+
+def test_edit_endpoint_bans_and_mutes() -> None:
+    client = _reasoning_client()
+    sid = client.post("/api/sessions").json()["session_id"]
+    rid = client.post(
+        f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
+    ).json()["round_id"]
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+
+    # ✗ + a note matching a woven value → strike-through ban.
+    state = client.post(
+        f"/api/sessions/{sid}/rounds/{rid}/edit", json={"text": "no, not a call"}
+    ).json()
+    assert {"category": "how", "value": "call"} in state["banner"]["banned"]
+
+    # ✗ + a slot dismissal → dim + strike mute.
+    state = client.post(
+        f"/api/sessions/{sid}/rounds/{rid}/edit",
+        json={"text": "the timing does not matter"},
+    ).json()
+    assert state["banner"]["muted"] == ["when"]
+    assert state["outcome"] is None  # edits never end the round
 
 
 def test_flip_endpoint_replaces_the_pending_question() -> None:
@@ -288,8 +322,8 @@ def test_export_session_jsonl_mirrors_recording_format() -> None:
     rid = client.post(
         f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
     ).json()["round_id"]
-    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})  # synth
-    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})  # confirm
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/accept")  # ✓ the banner draft
 
     # default format is JSONL — one round per line, recording record schema
     resp = client.get(f"/api/sessions/{sid}/export")
@@ -339,8 +373,8 @@ def test_recordings_list_and_read_for_real_profile(tmp_path) -> None:
     rid = client.post(
         f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
     ).json()["round_id"]
-    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})  # synth
-    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})  # confirm
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/accept")  # ✓ the banner draft
 
     listing = client.get("/api/recordings").json()
     assert len(listing) == 1

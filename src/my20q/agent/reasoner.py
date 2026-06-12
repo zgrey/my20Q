@@ -237,6 +237,7 @@ class Reasoner:
         asked: list | None = None,
         established: set[tuple[str, str]] | None = None,
         banned: tuple[str, str] | None = None,
+        vetoed: set[tuple[str, str]] | None = None,
         caregiver_hint: str = "",
         seed_context: str = "",
         profile_context: str = "",
@@ -287,6 +288,7 @@ class Reasoner:
                     corrections=corrections,
                     exploratory=exploratory,
                     banned=banned,
+                    vetoed=vetoed,
                     caregiver_hint=caregiver_hint,
                 )
             )
@@ -323,6 +325,13 @@ class Reasoner:
             # alone demonstrably failed (the same question asked 7 times).
             # Slot-aware: a content-overlap match asserting a NEW slot
             # category is a drill on the same anchor, not a repeat.
+            # Caregiver bans are hard: a question asserting a struck value is
+            # never asked, no matter how plausible the model finds it.
+            if vetoed and any((c, v) in vetoed for c, v in slots.items()):
+                corrections.append(
+                    "the person already ruled that out — never ask about it again"
+                )
+                continue
             dup = is_repeat(
                 cleaned,
                 asked_texts,

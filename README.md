@@ -73,11 +73,15 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 
 Three-tier scale: **Session** (one open→close) ⊃ **Round** (one convergence
 attempt under a single topic) ⊃ **Query** (one generated question). A round ends
-**only when the caregiver confirms a proposed utterance with "yes"** — it never
-self-ends on a question count or an LLM failure. Out-of-band stops only: an
-emergency topic, a caregiver topic switch, or the optional `MY20Q_MAX_QUERIES`
-safety ceiling. The first synthesis needs ≥5 "yes" confirmations (or a clearly
-dominant leader); each later attempt needs 3 new yeses.
+**only when the caregiver accepts the live proposal banner (✓)** — the engine
+never proposes or self-ends on a question count or an LLM failure. Out-of-band
+stops only: an emergency topic, a caregiver topic switch, or the optional
+`MY20Q_MAX_QUERIES` safety ceiling. The **banner** carries an evolving draft
+from the first converged slot ("I need/want something for/from Rob…" — the
+alternates collapse as evidence arrives), brightens at board-readiness, and
+offers Speak / ✓ accept (an explicit front-and-center confirmation, spoken,
+one "New round" action) / ✗ reject-a-portion (typed edits → struck-out value
+bans and dimmed slot mutes, all undoable).
 
 ## Privacy invariant
 
@@ -170,10 +174,10 @@ key detail flipped — and waits for an answer to *that*.
 | `MY20Q_OLLAMA_TIMEOUT` | `120` | Per-call timeout (s); the runaway guard for uncapped reasoning |
 | `MY20Q_ANTHROPIC_MODEL` | — | Anthropic model (synthetic personas only) |
 | `MY20Q_MAX_QUERIES` | `0` | `0` = unlimited; positive = hard safety ceiling (same as `--max-queries`) |
-| `MY20Q_MIN_YES` | `5` | "yes" answers before the first synthesis |
-| `MY20Q_NEW_YES` | `3` | new yeses before each later synthesis attempt |
-| `MY20Q_REPHRASE_LIMIT` | `1` | rephrases per synthesis attempt (one perturbation is all that helps) |
-| `MY20Q_SYNTH_ATTEMPTS` | `2` | failed synthesis attempts before the restart recovery |
+| `MY20Q_MIN_YES` | `5` | *retired* — the banner replaced engine-initiated synthesis (kept for script compat) |
+| `MY20Q_NEW_YES` | `3` | *retired* — see above |
+| `MY20Q_REPHRASE_LIMIT` | `1` | *retired* — see above |
+| `MY20Q_SYNTH_ATTEMPTS` | `2` | *retired* — see above |
 | `MY20Q_EXPLORE_DECAY` | `0.67` | exploration probability = base^(yeses+1) |
 | `MY20Q_SOFT_RESET_NOS` | `10` | consecutive "no"s that trigger the restart recovery |
 | `MY20Q_STALL_WINDOW` | `8` | answered queries with zero board progress → restart (0 = off) |

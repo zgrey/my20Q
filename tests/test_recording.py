@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 
 from my20q.agent.dialogue import Answer, Round
-from my20q.config import ReasoningTuning
 from my20q.llm import MockBackend
 from my20q.recording import Recorder, job_b_score, transcript
 from my20q.topics import Topic, find_topic
 
 
 def _reasoning_backend() -> MockBackend:
-    """A MockBackend that seeds the board, asks one question, then synthesizes."""
+    """A MockBackend that seeds the board, cycles questions, and weaves."""
+    state = {"q": 0}
 
     def responder(messages: list) -> str:
         system = messages[0]["content"]
@@ -23,8 +23,10 @@ def _reasoning_backend() -> MockBackend:
         if "pin down the ONE specific" in system:  # deliberate
             return "thinking..."
         if "Convert a drafted question" in system:  # format
+            word = ["a drink", "a rest", "bring it"][state["q"] % 3]
+            state["q"] += 1
             return json.dumps(
-                {"question": "Is it about a drink?", "slots": {"what": "a drink"},
+                {"question": f"Is it about {word}?", "slots": {"what": word},
                  "preface": "", "rationale": "x"}
             )
         return json.dumps({"utterance": "I would like a glass of water."})
@@ -49,16 +51,12 @@ def test_job_b_penalizes_an_abandoned_round() -> None:
 async def test_recorder_writes_a_round(tmp_path, topics: list[Topic]) -> None:
     topic = find_topic(topics, "physical_health")
     assert topic is not None
-    # Only a reasoning round can reach a confirmed utterance; a low yes-gate keeps
-    # the test short. (Fallback never synthesizes — see test_dialogue.)
-    rnd = Round(
-        topic,
-        llm=_reasoning_backend(),
-        tuning=ReasoningTuning(min_yes_for_synthesis=1),
-    )
+    # Only a reasoning round reaches a confirmed utterance — the caregiver
+    # accepts the live banner draft (the engine never proposes on its own).
+    rnd = Round(topic, llm=_reasoning_backend())
     await rnd.open()
-    await rnd.answer(Answer.YES)  # 1 yes clears the gate -> synthesis
-    await rnd.answer(Answer.YES)  # confirm the utterance -> synthesized
+    await rnd.answer(Answer.YES)  # signal on the board → the banner drafts
+    rnd.accept()  # ✓ — conclude with the draft
     assert rnd.outcome == "synthesized"
 
     recorder = Recorder(tmp_path, "patient_x")

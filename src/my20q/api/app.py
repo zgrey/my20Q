@@ -257,6 +257,7 @@ def _register_routes(app: FastAPI) -> None:
             round_id=h.round_id,
             topic_id=r.topic.id,
             event=_event_out(h.last_event, state.pictograms),
+            banner=schemas.BannerOut(**r.banner()),
             history=[
                 schemas.HistoryEntryOut(
                     kind=e["kind"],
@@ -411,6 +412,42 @@ def _register_routes(app: FastAPI) -> None:
         handle = _handle(sid, rid)
         try:
             handle.last_event = await handle.round.retry()
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return _round_state(handle)
+
+    @app.post(
+        "/api/sessions/{sid}/rounds/{rid}/accept", response_model=schemas.RoundStateOut
+    )
+    async def accept(sid: str, rid: str) -> schemas.RoundStateOut:
+        """✓ on the banner: conclude the round with the current draft.
+
+        The caregiver is the stopping policy — the cockpit then shows the
+        explicit confirmation modal (final utterance, spoken, one "New
+        round" action). 409 when there is nothing to accept yet.
+        """
+        handle = _handle(sid, rid)
+        try:
+            handle.last_event = handle.round.accept()
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        _maybe_record(state, handle)
+        return _round_state(handle)
+
+    @app.post(
+        "/api/sessions/{sid}/rounds/{rid}/edit", response_model=schemas.RoundStateOut
+    )
+    async def edit(sid: str, rid: str, body: schemas.EditIn) -> schemas.RoundStateOut:
+        """✗ on the banner: a real-time edit against the live draft.
+
+        The note is interpreted deterministically: slot dismissals mute the
+        slot, notes matching a woven value ban it (strike-through), anything
+        else becomes ordinary guiding context. The pending question is
+        re-proposed against the edited board.
+        """
+        handle = _handle(sid, rid)
+        try:
+            handle.last_event = await handle.round.edit(body.text)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
         return _round_state(handle)

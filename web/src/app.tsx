@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import { api, friendlyError } from "./api";
 import {
+  ConclusionModal,
   ConversationTile,
   InputTile,
+  ProposalBanner,
   ReasoningTile,
   TopicBar,
 } from "./components";
@@ -52,6 +54,8 @@ export function App() {
   const [emotion, setEmotion] = useState<Record<string, number>>({});
   const [audioOn, setAudioOn] = useState<boolean>(initialAudio);
   const [ttsAvailable, setTtsAvailable] = useState(false);
+  // ✓ was pressed: show the explicit confirmation modal until "New round".
+  const [concluded, setConcluded] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [canSelectModel, setCanSelectModel] = useState(false);
@@ -219,6 +223,28 @@ export function App() {
       run(() => api.flip(sessionId, round.round_id));
     }
   };
+  // Banner controls: Speak reads the draft (alternates spoken as "or", the
+  // ellipsis dropped); ✓ concludes and raises the confirmation modal (the
+  // synthesized event is auto-spoken by the readout effect); ✗ applies a
+  // real-time edit note against the draft.
+  const speakDraft = () => {
+    const b = round?.banner;
+    if (b && b.state === "draft" && b.text && audioOn) {
+      speak(b.text.replace(/\//g, " or ").replace(/…/g, "").trim());
+    }
+  };
+  const acceptDraft = () => {
+    if (sessionId && round && !busy && !terminal) {
+      run(() => api.accept(sessionId, round.round_id)).then(() =>
+        setConcluded(true),
+      );
+    }
+  };
+  const editDraft = (text: string) => {
+    if (sessionId && round && !busy && !terminal) {
+      run(() => api.edit(sessionId, round.round_id, text));
+    }
+  };
   const retry = () => {
     if (sessionId && round && !busy && !terminal) {
       run(() => api.retry(sessionId, round.round_id));
@@ -226,6 +252,7 @@ export function App() {
   };
   const newRound = () => {
     if (sessionId && topicId && !busy) {
+      setConcluded(false);
       run(() => api.startRound(sessionId, topicId));
     }
   };
@@ -370,12 +397,26 @@ export function App() {
         onSelectModel={selectModel}
       />
       {error && <div class="errorbar">{error}</div>}
+      {concluded && round?.outcome === "synthesized" && round.final_utterance && (
+        <ConclusionModal
+          utterance={round.final_utterance}
+          onNewRound={newRound}
+        />
+      )}
       {view === "review" ? (
         <main class="review-main">
           <ReviewDashboard audioOn={audioOn} ttsAvailable={ttsAvailable} />
         </main>
       ) : (
         <main class="grid">
+          <ProposalBanner
+            banner={round?.banner ?? null}
+            busy={busy}
+            terminal={!!terminal}
+            onSpeak={speakDraft}
+            onAccept={acceptDraft}
+            onEdit={editDraft}
+          />
           <ConversationTile round={round} busy={busy} phase={phase} onRetry={retry} />
           {/* Pictogram tile shelved — the curated retrieval mostly fell back
               to "?" in real sessions. Component + backend retrieval are kept;
