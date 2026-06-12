@@ -31,10 +31,11 @@ recommendations.
          │                                          │
          │  Tailscale VPN (HTTPS)                   │
          │────────────────────────────────────────► │  FastAPI backend
-         │   4-tile cockpit:                        │    ├─ dialogue / round state
-         │   conversation · pictogram ·             │    ├─ prompt + retrieval layer
-         │   live reasoning · input                 │    ├─ recording / dataset writer
-         │                                          │    └─ LLMBackend → Ollama (local)
+         │   living proposal banner (the evolving   │    ├─ dialogue / round state
+         │   draft: Speak · ⟳ Restate · ✓ accept ·  │    ├─ prompt + retrieval layer
+         │   click-to-edit segments) above 3 tiles: │    ├─ recording / dataset writer
+         │   conversation · live reasoning · input  │    └─ LLMBackend → Ollama (local)
+         │   (pictogram tile shelved)               │
  [ aphasia-oriented input — secondary,              │
    supplemental, later phase ]                      │
 ```
@@ -53,7 +54,9 @@ A three-tier scale (replaces the retired "round/pass" terms):
 
 - **Session** — one open→close of the tool.
 - **Round** — one convergence attempt under a single high-level context (topic).
-  Ends on **synthesis**, topic change, query-budget exhaustion, or session end.
+  Ends on the **caregiver accepting the live proposal banner (✓)** — the
+  engine never proposes or self-ends — or out-of-band on topic change,
+  query-budget exhaustion, or session end.
 - **Query** — one generated question within a round.
 
 Nesting: Session ⊃ Rounds ⊃ Queries. The query budget (the old "20") is a soft
@@ -202,10 +205,17 @@ is no automated write path, which makes automated poisoning impossible. See
 
 ## Caregiver Cockpit
 
-A rich-but-simple web interface — **caregiver-only**. Four tiles + a persistent
-topic dropdown + a recording light. Full spec in `docs/design/beta-retool.md`
-§6. The aphasia UX constraints below do **not** apply to the cockpit — they
-govern the future patient-facing interface.
+A rich-but-simple web interface — **caregiver-only**. The **living proposal
+banner** on top (the evolving draft utterance: Speak · ⟳ Restate · ✓ accept ·
+click-to-edit segments with candidate dropdowns — the ONLY way a round
+concludes in success), three active tiles (conversation · live reasoning with
+the consensus board and refinement chains · input with answer buttons, the
+⇄ opposition flip, undo, and the guiding-context field), a persistent topic
+dropdown, and a recording light. The pictogram tile is shelved. Full spec in
+`docs/design/beta-retool.md` §6; the engine/fix queue in
+`docs/design/convergence-plan.md`. The aphasia UX constraints below do
+**not** apply to the cockpit — they govern the future patient-facing
+interface.
 
 ## Patient-Interface UX Principles
 
@@ -249,5 +259,10 @@ repos and uses its own tooling.
 ## Planning
 
 The phased plan lives in [`docs/ROADMAP.md`](docs/ROADMAP.md); the current beta
-design lives in [`docs/design/beta-retool.md`](docs/design/beta-retool.md).
+design lives in [`docs/design/beta-retool.md`](docs/design/beta-retool.md);
+the **reasoning-engine fix queue and trial autopsies** live in
+[`docs/design/convergence-plan.md`](docs/design/convergence-plan.md) (iterated
+with the owner one proposal at a time, statuses tracked in-doc), grounded in
+the literature audit
+[`docs/design/20q-research-audit.html`](docs/design/20q-research-audit.html).
 Update them when scope changes rather than scattering decisions across docs.

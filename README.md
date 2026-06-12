@@ -23,11 +23,15 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 - **Phase 1 — backend MVP** ✓ Dialogue engine, topics, Ollama client, safety
   layer, and a Rich-based CLI harness.
 - **Phase 2 — caregiver cockpit** ✓ FastAPI backend + Preact/Vite web cockpit:
-  4-tile layout (conversation · pictogram · live reasoning + emotion sliders ·
-  input), persistent topic bar, recording light, session **Review** dashboard,
-  SSE progress channel, JSONL recording/export, and **local TTS** (piper or the
-  warmer kokoro — voice readouts of queries/utterances; review auto-play reads
-  each step).
+  the **living proposal banner** on top (the evolving draft — Speak ·
+  ⟳ Restate · ✓ accept with an explicit confirmation modal · click-to-edit
+  segments with candidate dropdowns), three tiles (conversation · live
+  reasoning with the consensus board and refinement chains + emotion sliders ·
+  input with ⇄ Opposite/Undo and the guiding-context field; pictogram tile
+  shelved), persistent topic bar, recording light, session **Review**
+  dashboard, SSE progress channel, JSONL recording/export, and **local TTS**
+  (piper or the warmer kokoro — voice readouts of queries/utterances; review
+  auto-play reads each step).
 - **Reasoning controller** ✓ A **5W1H facet controller** (LLM does language,
   `agent/facets.py` + `agent/dialogue.py` do control). The belief is a consensus
   **board**: per slot — who / what / when / where / why / how — contender values
@@ -50,16 +54,23 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
   The only model-side terminator is a **"yes" to a proposed utterance**. The
   v2 layer (June 2026): crediting is **asymmetric** (a "no" hits only the
   lowest-scoring tagged pair — confirmed anchors survive wrong guesses); only
-  an **informative yes** advances the synthesis gates (no confirmation
-  farming); a "kinda" on an utterance gets ONE rephrase, then focus **pins**
-  to its weakest slot; person topics get a **direction layer** — four intent
-  buckets (do-for-them / them-for-me / tell / ask) credited by a code
-  classifier, where a "no" with a confirmed who-anchor nudges the **mirror
-  bucket** (the sign flip); a **futility guard** bans a 4-no avenue for a
-  turn; and the cockpit gains the **⇄ Opposite button** (key `o`) — re-render
-  the pending question in its opposite connotation, an action, not an answer.
-  Every knob is env-tunable. Mechanism + known risks: `tool-summary.html`
-  (local) and `docs/design/reasoning-retro.md` §8–§9. How the engine measures
+  an **informative yes** counts as progress (no confirmation farming); person
+  topics get a **direction layer** — four intent buckets (do-for-them /
+  them-for-me / tell / ask) credited by a code classifier, where a "no" with
+  a confirmed who-anchor nudges the **mirror bucket** (the sign flip); a
+  **futility guard** bans a 4-no avenue for a turn; and the cockpit gains the
+  **⇄ Opposite button** (key `o`). The v3 layer (June 2026, from live-trial
+  autopsies): **focus retirement + per-topic facet layout** (settled slots
+  stop drawing questions; body topics treat `where` as a body region and
+  probe it early); **verify-on-lock** ("Just to double-check —" re-asks for
+  values locked by a single answer); **refinement links** (coarse→fine
+  families — "tingling" refines "discomfort" — with non-negative family mass
+  so failed fine guesses never erode an established parent, and the draft
+  weaving the deepest confirmed **frontier**); and the **synthesis editor**
+  (click a draft segment → candidate dropdown / typed replacement /
+  remove — refine-or-replace, no note parsing). Every knob is env-tunable.
+  Mechanism + known risks: `tool-summary.html` (local) and
+  `docs/design/reasoning-retro.md` §8–§9. How the engine measures
   against actual 20-questions game theory (entropy bounds, Rényi–Ulam noise,
   LLM question-asking research, SCA practice):
   [`docs/design/20q-research-audit.html`](docs/design/20q-research-audit.html).

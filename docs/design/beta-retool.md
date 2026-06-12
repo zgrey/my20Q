@@ -138,19 +138,36 @@ interface*, not this cockpit.
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.2 Tiles
+### 6.2 The proposal banner + tiles
+
+0. **The living proposal banner** *(owner design, 2026-06-11 — sits above the
+   tiles, directly under the topbar; the ONLY way a round concludes in
+   success)*: the evolving draft utterance, populated from the first
+   converged core slot with ambiguous alternates and an ellipsis ("I
+   need/want something for/from Rob …"), glowing *Pending synthesis…*
+   before that, and a breathing accent halo at board-readiness. Controls:
+   **🔊 Speak**, **⟳ Restate** (same content, different words), **✓ accept**
+   (explicit confirmation modal — dimmed backdrop, utterance spoken, one
+   "New round" action). The woven segments are **clickable — the synthesis
+   editor**: candidate dropdown from the board, typed replacement
+   (refine-or-replace: extensions deepen the draft via refinement links;
+   swaps strike the old value), or ✕ remove (slot mute). Engine-initiated
+   synthesis no longer exists. Detail: `convergence-plan.md` W1-C/W1-F.
 
 1. **Conversation / question stream** — the round transcript: questions, answers,
    and caregiver context inputs, in order. Streamed.
-2. **AAC pictogram** — the curated pictogram that best matches the current question's
-   intent. **Retrieved**, never generated (see §6.4). Shown so the patient, present
-   alongside the caregiver, gets the AAC reinforcement.
+2. **AAC pictogram** — *shelved* (curated retrieval mostly fell back to "?" in
+   real sessions; component + retrieval retained for a future generator-driven
+   re-mount). The spec below is kept for that revival: the curated pictogram
+   that best matches the current question's intent. **Retrieved**, never
+   generated (see §6.4).
 3. **Live LLM reasoning** — human-readable narration of the reasoner's decision
    ("exploring the notion of …"). Renders the `rationale` field the reasoner already
    emits, plus explore/exploit move and on-topic audit status.
 4. **Input** — quick-answer buttons `y / n / k / s / q` (yes / no / kinda / not sure
    / quit) **and** undo `↶`, plus a free-text field with `send`. The buttons relay
-   the patient's answer; the text field is the caregiver's mid-round context channel.
+   the patient's answer; the text field is the caregiver's **guiding-context**
+   channel only (proposal edits go through the banner's synthesis editor).
    Also the **opposition button** `⇄ o` — an *action, not an answer*: it re-renders
    the pending question in its opposite connotation (who-does-for-whom mirrored via
    the direction buckets, or the key detail reversed) and keeps waiting. The

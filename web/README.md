@@ -41,11 +41,11 @@ not just in the reasoning tile).
 
 ```
 ┌─ brand · Live|Review ── Topic ▼ ── ⬇ · ● REC · 🔊 · ☀ ─┐
-│ ┌─ PROPOSAL BANNER — “I need/want … for/from …” 🔊✓✗ ─┐ │
+│ ┌─ PROPOSAL BANNER — “I need/want … for/from …” 🔊⟳✓ ─┐ │
 │ ├──────────────────────┬─────────────────────┤ │
 │ │ 1 Conversation       │ 2 Live reasoning    │ │
 │ │   transcript + live  │   consensus board + │ │
-│ │   query / verify     │   SSE + sliders     │ │
+│ │   query / verify     │   chains+SSE+sliders│ │
 │ ├──────────────────────┤                     │ │
 │ │ 3 Input y/n/k/s·⇄o·u/q│                    │ │
 │ └──────────────────────┴─────────────────────┘ │
@@ -55,15 +55,22 @@ not just in the reasoning tile).
 **Proposal banner** (top, owner-designed): the evolving draft utterance,
 populated from the first converged slot with ambiguous alternates and a
 trailing ellipsis ("I need/want something for/from Rob …"); glowing
-*Pending synthesis…* before that; accent-bordered when the board says
-propose-ready. Per-part emphasis: **locked** values underlined solid,
-*working* values dotted + pulsing. Controls: **🔊 Speak** (reads the draft;
-slashes spoken as "or"), **✓** accept — pops the explicit confirmation
-modal (dimmed backdrop, the final utterance front and center, spoken, one
-**New round** button), **✗** reject-a-portion — opens a note field next to
-the draft; the note becomes a **value ban** (struck-through chip) or a
-**slot mute** (dimmed struck chip), undoable via Undo. The engine never
-proposes on its own — the banner is the only synthesis path.
+*Pending synthesis…* before that; a breathing accent halo + pulsing ✓ when
+the board says propose-ready. Per-part emphasis: **locked** values
+underlined solid, *working* values dotted + pulsing. Controls: **🔊 Speak**
+(reads the draft; slashes spoken as "or"), **⟳ Restate** (say the same
+thing slightly differently — draft text only), **✓** accept — pops the
+explicit confirmation modal (dimmed backdrop, the final utterance front and
+center, spoken, one **New round** button).
+
+**The synthesis editor**: the draft's woven segments are **clickable**.
+Clicking one opens the editor strip — the slot's top board candidates as
+one-tap chips, a free-text replacement (a word or a grouped phrase; Enter
+applies), and **✕ remove this detail** (mutes the slot). Replacements are
+refine-or-replace: an extension ("tickets" → "Avalanche tickets") deepens
+the draft without striking anything; a swap strikes the old value (struck
+chip) and stands the new one in. All edits are undoable via Undo. The
+engine never proposes on its own — the banner is the only synthesis path.
 
 > The Pictogram tile is shelved (curated retrieval mostly fell back to "?" in
 > real sessions). The component and backend retrieval are retained — re-mount
