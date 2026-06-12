@@ -213,6 +213,34 @@ def test_edit_endpoint_bans_and_mutes() -> None:
     assert state["outcome"] is None  # edits never end the round
 
 
+def test_replace_and_restate_endpoints() -> None:
+    client = _reasoning_client()
+    sid = client.post("/api/sessions").json()["session_id"]
+    # my_people: its core (who+how) matches the mock's question slots, so
+    # the banner populates from the first yes.
+    rid = client.post(
+        f"/api/sessions/{sid}/rounds", json={"topic_id": "my_people"}
+    ).json()["round_id"]
+    client.post(f"/api/sessions/{sid}/rounds/{rid}/answer", json={"answer": "yes"})
+
+    # A clicked segment's precise edit — an extension deepens the draft.
+    state = client.post(
+        f"/api/sessions/{sid}/rounds/{rid}/replace",
+        json={"category": "how", "old": "call", "new": "call on the phone"},
+    ).json()
+    assert any(
+        p["value"] == "call on the phone" for p in state["banner"]["parts"]
+    )
+    assert state["banner"]["banned"] == []  # a refinement strikes nothing
+
+    # ⟳ restate: the draft re-words, nothing else moves.
+    queries_before = state["query_count"]
+    state = client.post(f"/api/sessions/{sid}/rounds/{rid}/restate").json()
+    assert state["banner"]["text"] == "I would like a glass of water."
+    assert state["query_count"] == queries_before
+    assert state["outcome"] is None
+
+
 def test_flip_endpoint_replaces_the_pending_question() -> None:
     # The opposition button: an action, not an answer — the same question
     # comes back mirrored and the round keeps waiting.

@@ -126,6 +126,19 @@ class EditIn(BaseModel):
     text: str
 
 
+class ReplaceIn(BaseModel):
+    """The synthesis editor: a clicked draft segment's precise edit.
+
+    `old` is the segment's current value (may be "" for a pure addition);
+    `new` is the dropdown pick or typed replacement — "" means "remove this
+    detail" (the category is muted).
+    """
+
+    category: str
+    old: str = ""
+    new: str = ""
+
+
 class HistoryEntryOut(BaseModel):
     kind: str
     text: str

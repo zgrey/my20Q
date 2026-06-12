@@ -225,8 +225,9 @@ export function App() {
   };
   // Banner controls: Speak reads the draft (alternates spoken as "or", the
   // ellipsis dropped); ✓ concludes and raises the confirmation modal (the
-  // synthesized event is auto-spoken by the readout effect); ✗ applies a
-  // real-time edit note against the draft.
+  // synthesized event is auto-spoken by the readout effect); ⟳ restates the
+  // same draft in different words; clicking a segment opens the editor and
+  // replace applies its precise (category, old → new) edit.
   const speakDraft = () => {
     const b = round?.banner;
     if (b && b.state === "draft" && b.text && audioOn) {
@@ -240,9 +241,14 @@ export function App() {
       );
     }
   };
-  const editDraft = (text: string) => {
+  const restateDraft = () => {
     if (sessionId && round && !busy && !terminal) {
-      run(() => api.edit(sessionId, round.round_id, text));
+      run(() => api.restate(sessionId, round.round_id));
+    }
+  };
+  const replaceDraft = (category: string, oldValue: string, newValue: string) => {
+    if (sessionId && round && !busy && !terminal) {
+      run(() => api.replace(sessionId, round.round_id, category, oldValue, newValue));
     }
   };
   const retry = () => {
@@ -413,11 +419,13 @@ export function App() {
               caregiver always sees what the round currently believes. */}
           <ProposalBanner
             banner={round?.banner ?? null}
+            facets={round?.event.facets ?? []}
             busy={busy}
             terminal={!!terminal}
             onSpeak={speakDraft}
             onAccept={acceptDraft}
-            onEdit={editDraft}
+            onRestate={restateDraft}
+            onReplace={replaceDraft}
           />
         <main class="grid">
           <ConversationTile round={round} busy={busy} phase={phase} onRetry={retry} />

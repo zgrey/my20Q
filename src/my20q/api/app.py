@@ -453,6 +453,43 @@ def _register_routes(app: FastAPI) -> None:
         return _round_state(handle)
 
     @app.post(
+        "/api/sessions/{sid}/rounds/{rid}/replace", response_model=schemas.RoundStateOut
+    )
+    async def replace_segment(
+        sid: str, rid: str, body: schemas.ReplaceIn
+    ) -> schemas.RoundStateOut:
+        """The synthesis editor: a clicked segment's precise edit.
+
+        No note parsing — the segment identifies the (category, value)
+        exactly. Refine-or-replace semantics; new == "" mutes the category
+        ("remove this detail").
+        """
+        handle = _handle(sid, rid)
+        try:
+            handle.last_event = await handle.round.replace(
+                body.category, body.old, body.new
+            )
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return _round_state(handle)
+
+    @app.post(
+        "/api/sessions/{sid}/rounds/{rid}/restate", response_model=schemas.RoundStateOut
+    )
+    async def restate(sid: str, rid: str) -> schemas.RoundStateOut:
+        """⟳ — re-say the draft slightly differently (same content).
+
+        Draft-cache only: the board, history, and pending question are
+        untouched; failure is soft (409) and leaves the draft as it was.
+        """
+        handle = _handle(sid, rid)
+        try:
+            await handle.round.restate()
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return _round_state(handle)
+
+    @app.post(
         "/api/sessions/{sid}/rounds/{rid}/flip", response_model=schemas.RoundStateOut
     )
     async def flip(sid: str, rid: str) -> schemas.RoundStateOut:

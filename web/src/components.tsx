@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type {
   Answer,
   Banner,
+  Facet,
   HistoryEntry,
   RecordingStatus,
   RoundEvent,
@@ -666,8 +667,12 @@ export function InputTile(props: InputProps) {
 
 // --------------------------------------- the living proposal banner (W1-C)
 
-/** Wrap each woven value's first occurrence in a band-classed mark. */
-function renderDraft(banner: Banner): ComponentChild[] {
+/** Wrap each woven value's first occurrence in a band-classed, SELECTABLE
+ *  mark — clicking a segment opens the editor for its slot. */
+function renderDraft(
+  banner: Banner,
+  onSelect?: (category: string, value: string) => void,
+): ComponentChild[] {
   let segs: ComponentChild[] = [banner.text];
   for (const p of banner.parts) {
     const next: ComponentChild[] = [];
@@ -683,7 +688,11 @@ function renderDraft(banner: Banner): ComponentChild[] {
       }
       next.push(seg.slice(0, i));
       next.push(
-        <mark class={`seg ${p.band}`} title={`${p.category} — ${p.band}`}>
+        <mark
+          class={`seg ${p.band}${onSelect ? " selectable" : ""}`}
+          title={`${p.category} — ${p.band}${onSelect ? " · click to edit" : ""}`}
+          onClick={onSelect ? () => onSelect(p.category, p.value) : undefined}
+        >
           {seg.slice(i, i + p.value.length)}
         </mark>,
       );
@@ -696,23 +705,39 @@ function renderDraft(banner: Banner): ComponentChild[] {
 
 interface BannerProps {
   banner: Banner | null;
+  facets: Facet[]; // event.facets — per-category contenders for the dropdown
   busy: boolean;
   terminal: boolean;
   onSpeak: () => void;
   onAccept: () => void;
-  onEdit: (text: string) => void;
+  onRestate: () => void;
+  onReplace: (category: string, oldValue: string, newValue: string) => void;
 }
 
 /**
- * The evolving draft utterance, always on top: ambiguous alternates +
- * ellipsis while working, per-part emphasis (locked / working), struck
- * chips for ✗-banned values, dimmed-struck chips for muted slots.
- * Speak reads it aloud; ✓ concludes; ✗ opens the edit note field.
+ * The evolving draft utterance, always on top — and an EDITOR (owner
+ * design, 06-11): the woven segments are selectable; clicking one opens
+ * the candidate strip (the board's top contenders for that slot), a
+ * free-text replacement (a word or a grouped phrase), and "remove this
+ * detail". No free-text note parsing — the click identifies the slot and
+ * value exactly. ⟳ restates the same draft in different words; ✓ concludes.
  */
 export function ProposalBanner(props: BannerProps) {
-  const { banner, busy, terminal, onSpeak, onAccept, onEdit } = props;
-  const [editing, setEditing] = useState(false);
-  const [note, setNote] = useState("");
+  const {
+    banner,
+    facets,
+    busy,
+    terminal,
+    onSpeak,
+    onAccept,
+    onRestate,
+    onReplace,
+  } = props;
+  const [selected, setSelected] = useState<{
+    category: string;
+    value: string;
+  } | null>(null);
+  const [typed, setTyped] = useState("");
 
   if (!banner || terminal) return null;
   if (banner.state === "pending") {
@@ -722,18 +747,32 @@ export function ProposalBanner(props: BannerProps) {
       </div>
     );
   }
-  const submit = () => {
-    const v = note.trim();
-    if (v && !busy) {
-      onEdit(v);
-      setNote("");
-      setEditing(false);
+
+  const apply = (newValue: string) => {
+    if (selected && !busy) {
+      onReplace(selected.category, selected.value, newValue.trim());
+      setSelected(null);
+      setTyped("");
     }
   };
+  const candidates = selected
+    ? (facets.find((f) => f.category === selected.category)?.contenders ?? [])
+        .filter((c) => c.score > -2 && c.value !== selected.value)
+        .slice(0, 4)
+        .map((c) => c.value)
+    : [];
+
   return (
     <div class={`banner draft ${banner.ready ? "ready" : ""}`}>
       <div class="banner-row">
-        <span class="banner-text">{renderDraft(banner)}</span>
+        <span class="banner-text">
+          {renderDraft(banner, (category, value) => {
+            setSelected(
+              selected?.value === value ? null : { category, value },
+            );
+            setTyped("");
+          })}
+        </span>
         <span class="banner-actions">
           <button
             class="banner-btn"
@@ -744,20 +783,20 @@ export function ProposalBanner(props: BannerProps) {
             🔊 Speak
           </button>
           <button
+            class="banner-btn"
+            disabled={busy}
+            onClick={onRestate}
+            title="Say the same thing slightly differently"
+          >
+            ⟳ Restate
+          </button>
+          <button
             class="banner-btn accept"
             disabled={busy}
             onClick={onAccept}
             title="Accept — this is the message"
           >
             ✓
-          </button>
-          <button
-            class="banner-btn reject"
-            disabled={busy}
-            onClick={() => setEditing(!editing)}
-            title="Reject a portion — type what is wrong"
-          >
-            ✗
           </button>
         </span>
       </div>
@@ -775,20 +814,43 @@ export function ProposalBanner(props: BannerProps) {
           ))}
         </div>
       )}
-      {editing && (
-        <div class="banner-edit">
+      {selected && (
+        <div class="banner-editor">
+          <span class="editor-label">
+            {selected.category}: “{selected.value}” →
+          </span>
+          {candidates.map((v) => (
+            <button
+              class="cand"
+              key={v}
+              disabled={busy}
+              onClick={() => apply(v)}
+            >
+              {v}
+            </button>
+          ))}
           <input
             type="text"
-            placeholder="What is wrong? e.g. “not the supplies” · “the when doesn't matter”"
-            value={note}
+            placeholder="…or type a replacement (word or phrase)"
+            value={typed}
             disabled={busy}
-            onInput={(e) => setNote((e.target as HTMLInputElement).value)}
+            onInput={(e) => setTyped((e.target as HTMLInputElement).value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
+              e.stopPropagation();
+              if (e.key === "Enter" && typed.trim()) apply(typed);
+              if (e.key === "Escape") setSelected(null);
             }}
           />
-          <button class="send" onClick={submit} disabled={busy || !note.trim()}>
-            Apply
+          <button
+            class="cand remove"
+            disabled={busy}
+            onClick={() => apply("")}
+            title="Drop this detail — not asked about, not spoken"
+          >
+            ✕ remove
+          </button>
+          <button class="cand cancel" onClick={() => setSelected(null)}>
+            cancel
           </button>
         </div>
       )}

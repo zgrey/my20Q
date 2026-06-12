@@ -160,6 +160,66 @@ the EIG gap (W2-E/G1).
 
 ---
 
+## 1c. Evidence — the Avalanche round (06-11 evening, full new stack)
+
+`my_people`, gemma4:e4b, target *"give Zach Colorado Avalanche tickets for
+next week"*: ✗ abandoned at 62 q (10 restarts, 5 diagnostics) — and the
+cause was **the free-text ✗-channel itself**:
+
+- **B5 · ✗-notes destroyed a near-correct draft.** *"remove worrying"*
+  banned the right value but the leftover-minting heuristic minted
+  `why='remove'` (+2) and verify-on-lock then asked the patient *"Is it
+  remove you want to use?"*. Later, the augmentation note *"The news to
+  share is that Paula wants to give Zach Avalanche tickets"* matched the
+  CORRECT who-anchor → **banned Zach (+10, floored)** and minted
+  `who='news share paula give'`. The near-correct draft collapsed; the
+  post-ban fail-loops (the model kept reaching for the vetoed Zach) burned
+  the rest of the round. Free text cannot distinguish ban / augment /
+  replace intent — the guessing must go.
+- **B6 · who-enumeration opening** — 25+ serial name guesses
+  (Rob/Julie/mom/friend/sister/doctor/neighbor…) before Zach surfaced; the
+  people-flavored twin of B4's emotion bingo (W2-E/G1 territory).
+
+→ **W1-F (owner-designed, below): the synthesis editor.** Selectable draft
+segments + candidate dropdown + typed replacement + Restate; the free-text
+✗-note UI is retired, and the residual free-text path is hardened
+(negation-cue gating for bans; marker-gated replacement minting;
+caregiver-chosen values are exempt from verify).
+
+### W1-F · The synthesis editor — Status: IMPLEMENTED (06-11, owner-designed)
+
+The ✗-edit's purpose is *minor tweaks to a mostly-correct structure*; the
+implementation makes that the only thing it can do:
+
+1. **Selectable segments.** The draft's woven values are clickable; a click
+   opens the editor strip: the slot's **top board candidates** as one-tap
+   chips, a **free-text replacement** (a word or a grouped phrase; Enter
+   applies — fixed: it can no longer leak to caregiver context), and
+   **✕ remove this detail** (mutes the slot). The click identifies the
+   (category, value) exactly — zero parsing.
+2. **Refine-or-replace** (`Round.replace`, `POST …/replace`): a replacement
+   that lexically EXTENDS the old value ("tickets" → "Avalanche tickets")
+   keeps it as the parent — the refinement edge derives automatically, the
+   frontier deepens, nothing is banned; a genuine swap strikes the old
+   value and the new one stands in at caregiver strength (+2, minted
+   verbatim — no canonical folding onto its own parent). Empty = mute.
+3. **⟳ Restate** (`POST …/restate`): re-say the same draft differently
+   (the rephrase machinery with a kinda-note — same content, new words);
+   touches only the draft cache.
+4. **Hardening from B5:** free-text bans require a negation/removal cue;
+   replacement minting is marker-gated ("seems to be / replace…with /
+   should be") — *"remove worrying"* now bans cleanly with no junk mint,
+   and an augmentation note becomes guiding context, never a ban.
+   Caregiver-chosen values (mints/replacements) count as verified — the
+   engine never double-checks the caregiver's own words aloud.
+
+**Acceptance (met in tests):** the three Avalanche failure notes replay
+correctly; "a drink" → "a hot drink" refines (parent kept, frontier
+deepens, no verify); swaps strike-and-stand-in; remove mutes; restate
+changes only the text. 212 tests pass.
+
+---
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -617,6 +677,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W1-C | The living proposal banner (Speak / ✓ / ✗-edits) | **IMPLEMENTED** (06-11; validated in trial 2 — banner moved up top + ready-glow strengthened per owner notes) |
 | W1-D | Focus directives in the context field (shrunk by C) | PROPOSED · demoted (✗-flow absorbed it in trial 2) |
 | W1-E | Per-topic priorities · body-aware seeds · replacement ✗-edits | **IMPLEMENTED** (06-11; body core → what+where) |
+| W1-F | The synthesis editor (selectable segments · candidates · ⟳ Restate) | **IMPLEMENTED** (06-11/12, owner-designed; ✗-note UI retired, free-text path hardened) |
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (B1: the right-leg yes wasted on established tags — third sighting) |
 | W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11; 3 clean fires in trial 2) |
 | W2-G | Noise bench | PROPOSED |

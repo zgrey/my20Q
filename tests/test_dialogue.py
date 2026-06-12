@@ -939,6 +939,101 @@ async def test_edit_replacement_bans_and_mints(topics: list[Topic]) -> None:
     assert entry["mint"] == {"category": "what", "value": "hot tea"}
 
 
+# ----------------------------------------- the synthesis editor (W1-F)
+
+
+async def test_replace_refines_when_extending(topics: list[Topic]) -> None:
+    # The Avalanche case: "tickets" → "Avalanche tickets" is an AUGMENTATION
+    # — the old value stays (as the parent), the draft deepens, nothing is
+    # banned, and the caregiver-chosen value needs no double-check.
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # what='a drink' +1
+    ev = await rnd.replace("what", "a drink", "a hot drink")
+    assert ev.kind == "query"
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] == 1.0  # NOT banned — it is the parent
+    assert board["what"]["a hot drink"] == 2.0  # caregiver strength
+    assert rnd._edges["what"]["a hot drink"] == "a drink"  # the dive
+    assert rnd._weave(board)["what"] == "a hot drink"  # frontier deepened
+    assert rnd._verify_due(board) is None  # caregiver-chosen — no double-check
+
+
+async def test_replace_swaps_when_different(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # what='a drink' +1
+    await rnd.replace("what", "a drink", "the Avalanche tickets")
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] == facets.ELIMINATE_FLOOR  # struck
+    assert board["what"]["the Avalanche tickets"] == 2.0
+    assert rnd._weave(board)["what"] == "the Avalanche tickets"
+    banner = rnd.banner()
+    assert {"category": "what", "value": "a drink"} in banner["banned"]
+
+
+async def test_replace_with_empty_removes_the_detail(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    ev = await rnd.replace("when", "today", "")
+    assert ev.kind == "query"
+    assert rnd.banner()["muted"] == ["when"]
+    assert "when" not in rnd._weave(rnd._replay_board())
+
+
+async def test_restate_changes_only_the_draft(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    before_history = len(rnd.history)
+    pending = rnd._pending
+    await rnd.restate()
+    text1 = rnd.banner()["text"]
+    await rnd.restate()
+    text2 = rnd.banner()["text"]
+    assert text1 and text2 and text1 != text2  # same content, new words
+    assert "water" in text1 and "water" in text2
+    assert len(rnd.history) == before_history  # the board is untouched
+    assert rnd._pending is pending  # the pending question is untouched
+
+
+async def test_free_text_augmentation_note_is_context_not_a_ban(
+    topics: list[Topic],
+) -> None:
+    # The Avalanche blow-up: an augmentation note mentioning the CORRECT
+    # woven value must never ban it — without a negation cue or replacement
+    # marker, the note is guiding context.
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=_controller_backend(expand={"what": ["a drink"]}),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # what='a drink' in the weave
+    await rnd.edit("the news is that she wants a drink with lots of ice")
+    kinds = [h["kind"] for h in rnd.history]
+    assert "edit" not in kinds and "context" in kinds
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] > 0  # the correct anchor survived
+
+
+async def test_removal_note_bans_without_minting_junk(topics: list[Topic]) -> None:
+    # "remove worrying" minted why='remove' in the Avalanche round and the
+    # engine then double-checked the junk aloud. Marker-gated minting: a
+    # removal note bans, full stop.
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # what='a drink' +1
+    await rnd.edit("remove a drink")
+    entry = next(h for h in rnd.history if h["kind"] == "edit")
+    assert entry["ban"] == {"category": "what", "value": "a drink"}
+    assert "mint" not in entry  # nothing invented from the instruction words
+
+
 async def test_edit_mute_dims_a_slot_and_redirects(topics: list[Topic]) -> None:
     rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
                 rng=_FixedRandom(0.99))

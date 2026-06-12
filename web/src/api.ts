@@ -58,6 +58,17 @@ export const api = {
   // ✗ on the banner: a real-time edit against the live draft (ban / mute).
   edit: (sid: string, rid: string, text: string) =>
     post<RoundState>(`/sessions/${sid}/rounds/${rid}/edit`, { text }),
+  // The synthesis editor: a clicked segment's precise edit (new === ""
+  // removes the detail — the category is muted).
+  replace: (sid: string, rid: string, category: string, old: string, newValue: string) =>
+    post<RoundState>(`/sessions/${sid}/rounds/${rid}/replace`, {
+      category,
+      old,
+      new: newValue,
+    }),
+  // ⟳ — re-say the draft slightly differently (same content).
+  restate: (sid: string, rid: string) =>
+    post<RoundState>(`/sessions/${sid}/rounds/${rid}/restate`),
   eventsUrl: (sid: string, rid: string) =>
     `${BASE}/sessions/${sid}/rounds/${rid}/events`,
   exportUrl: (sid: string, format: "jsonl" | "md" = "jsonl") =>

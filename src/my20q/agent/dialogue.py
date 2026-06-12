@@ -772,6 +772,27 @@ class Round:
             "think", "thinks", "probably", "maybe", "more",
         ]
     )
+    #: A free-text note may BAN a woven value only when it carries a clear
+    #: negation/removal cue or a replacement marker. Without one it is
+    #: guiding context — the Avalanche round's augmentation note ("The news
+    #: to share is that Paula wants to give Zach … tickets") mentioned the
+    #: CORRECT who-anchor and the old rule banned it, blowing up a
+    #: near-correct draft.
+    _NEGATION_CUES = frozenset(
+        [
+            "not", "no", "isn't", "isnt", "never", "wrong", "without",
+            "remove", "stop", "don't", "dont", "drop", "delete",
+        ]
+    )
+    #: Replacement markers — only notes shaped like an explicit substitution
+    #: mint a replacement; bare-leftover minting produced junk twice in live
+    #: trials ("remove worrying" → why='remove'; the Avalanche note → who
+    #: gibberish).
+    _REPLACE_MARKER = re.compile(
+        r"(?:seems?\s+to\s+be|seemed\s+to\s+be|should\s+be|"
+        r"replace\b.*?\bwith|change\b.*?\bto|make\s+it)\s+",
+        re.IGNORECASE,
+    )
 
     @classmethod
     def _parse_mute(cls, note: str) -> str | None:
@@ -810,7 +831,7 @@ class Round:
             )
             self._pending = None
             return await self._advance()
-        if self._seed_values is not None:
+        if self._seed_values is not None and self._edit_intent(note):
             board = self._replay_board()
             for cat, val in self._weave(board).items():
                 if facets.mentions(note, val):
@@ -821,31 +842,49 @@ class Round:
                         "ban": {"category": cat, "value": val},
                     }
                     # Replacement semantics: "X seems to be Y" / "replace X
-                    # with Y" — what remains of the note after dropping the
-                    # banned value's words and the framing noise IS the
-                    # replacement, minted at context strength. (All three
-                    # trial-2 bans were replacements; without this the board
-                    # never learned "dinner" or "right leg".)
+                    # with Y" — what FOLLOWS the marker (minus the banned
+                    # value's words and framing noise) is the replacement,
+                    # minted at context strength. Marker-gated: leftover
+                    # heuristics minted junk twice in live trials.
                     mint = self._replacement_value(note, val)
                     if mint:
                         entry["mint"] = {"category": cat, "value": mint}
                     self._history.append(entry)
                     self._pending = None
                     return await self._advance()
-        return await self.add_context(note)  # no draft match — guiding context
+        return await self.add_context(note)  # no edit intent — guiding context
+
+    @classmethod
+    def _edit_intent(cls, note: str) -> bool:
+        """Whether a free-text note means REMOVE/REPLACE rather than inform.
+
+        A ban needs a negation/removal cue ("no, not a drink", "remove
+        worrying") or an explicit replacement marker ("plans seem to be
+        dinner"). An augmentation note that merely MENTIONS woven values is
+        guiding context — never a ban.
+        """
+        tokens = set(re.findall(r"[a-z']+", note.casefold()))
+        if tokens & cls._NEGATION_CUES:
+            return True
+        return cls._REPLACE_MARKER.search(note) is not None
 
     @classmethod
     def _replacement_value(cls, note: str, banned: str) -> str:
-        """The replacement a ban-note proposes, or "" for a plain ban.
+        """The replacement an explicitly-marked note proposes, or "".
 
-        Deterministic: the note's words minus the banned value's tokens
-        (stem-tolerant), stopwords, and replacement framing — capped at four
-        words so a chatty note can't mint a sentence. "no, not a drink"
-        leaves nothing → plain ban; "plans seem to be dinner" → "dinner".
+        Marker-gated: only text FOLLOWING a replacement marker ("seems to
+        be …", "replace … with …", "should be …") is considered — then the
+        banned value's tokens, stopwords, and framing noise are dropped and
+        the result capped at four words. "remove worrying" has no marker →
+        plain ban, nothing minted.
         """
+        m = cls._REPLACE_MARKER.search(note)
+        if m is None:
+            return ""
+        tail = note[m.end():]
         banned_tokens = facets._content_tokens(banned)
         kept: list[str] = []
-        for raw in re.findall(r"[A-Za-z][A-Za-z']*", note):
+        for raw in re.findall(r"[A-Za-z][A-Za-z']*", tail):
             token = raw.casefold()
             if token in cls._REPLACE_NOISE or token in facets._STOPWORDS:
                 continue
@@ -854,6 +893,81 @@ class Round:
                 continue
             kept.append(token)
         return " ".join(kept[:4])
+
+    async def replace(self, category: str, old: str, new: str) -> RoundEvent:
+        """A precise banner edit: the caregiver clicked a draft segment.
+
+        The synthesis editor's primary action (owner design, 06-11): the
+        clicked segment identifies the (category, value) EXACTLY — no note
+        parsing, no guessing. ``new`` may come from the candidate dropdown
+        or be typed free text (a word, or a grouped phrase like "Colorado
+        Avalanche tickets"); an empty ``new`` means "remove this detail"
+        (the slot is muted). Refine-or-replace at replay: a ``new`` that
+        lexically EXTENDS ``old`` keeps it as the parent (the draft deepens,
+        nothing banned); otherwise ``old`` is struck and ``new`` stands in
+        at context strength.
+        """
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        if category not in facets.CATEGORIES:
+            raise RuntimeError(f"unknown category: {category!r}")
+        old = " ".join(old.split())
+        new = " ".join(new.split())[:60]
+        if not new:
+            self._history.append(
+                {
+                    "kind": "edit",
+                    "text": f"remove {category}: {old}" if old else f"remove {category}",
+                    "answer": None,
+                    "mute": category,
+                }
+            )
+        else:
+            self._history.append(
+                {
+                    "kind": "edit",
+                    "text": f"{old} → {new}" if old else new,
+                    "answer": None,
+                    "replace": {"category": category, "old": old, "new": new},
+                }
+            )
+        self._pending = None
+        return await self._advance()
+
+    async def restate(self) -> None:
+        """⟳ on the banner: say the same draft slightly differently.
+
+        Owner design: a caregiver-triggered rephrase — same content,
+        different wording (swapped verbs/nouns) — for when the draft is
+        structurally right but reads wrong. Touches only the draft cache;
+        the board, history, and the pending question are untouched. Soft
+        failure: any error leaves the current draft as it was.
+        """
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        if self._reasoner is None:
+            raise RuntimeError("no language model is configured — cannot restate")
+        if self._seed_values is None:
+            raise RuntimeError("nothing to restate yet")
+        board = self._replay_board()
+        weave = self._weave(board)
+        if not weave:
+            raise RuntimeError("nothing to restate yet — no confirmed details")
+        current = (
+            self._draft_text
+            if self._draft_text and self._draft_weave == weave
+            else self._template_draft(weave)
+        )
+        # The existing rephrase machinery is exactly restate's semantics:
+        # "kinda" = close — keep the gist, change the wording.
+        action = await self._reasoner.synthesize(
+            leaders=weave,
+            history=self._history,
+            rejected=[(current, Answer.KINDA.value)],
+            **self._reasoner_ctx(),
+        )
+        self._draft_text = action.content
+        self._draft_weave = dict(weave)
 
     def _edit_mutes(self) -> set[str]:
         """Slots the caregiver dismissed via ✗-edits (recomputed → undo-safe)."""
@@ -864,14 +978,24 @@ class Round:
         }
 
     def _edit_bans(self) -> dict[str, set[str]]:
-        """Values the caregiver struck via ✗-edits, per category."""
+        """Values the caregiver struck, per category — explicit bans plus the
+        old value of every SWAP replacement (refining replacements keep the
+        old value as the parent; nothing is struck)."""
         out: dict[str, set[str]] = {}
         for h in self._history:
-            if h.get("kind") == "edit" and isinstance(h.get("ban"), dict):
-                ban = h["ban"]
+            if h.get("kind") != "edit":
+                continue
+            ban = h.get("ban")
+            if isinstance(ban, dict):
                 out.setdefault(ban.get("category", ""), set()).add(
                     ban.get("value", "")
                 )
+            rep = h.get("replace")
+            if isinstance(rep, dict):
+                old = rep.get("old", "")
+                new = rep.get("new", "")
+                if old and new and not facets.value_extends(new, old):
+                    out.setdefault(rep.get("category", ""), set()).add(old)
         return out
 
     async def _propose_question(
@@ -1238,6 +1362,19 @@ class Round:
         spent = 0
         yes_counts: dict[tuple[str, str], int] = {}
         for h in self._history:
+            if h.get("kind") == "edit":
+                # Values the CAREGIVER chose (replacements / replacement
+                # mints) are already confirmed by the most reliable channel —
+                # double-checking them produced nonsense in the Avalanche
+                # round ("Is it remove you want to use?").
+                for payload, key in ((h.get("mint"), "value"), (h.get("replace"), "new")):
+                    if isinstance(payload, dict):
+                        cat = payload.get("category", "")
+                        val = payload.get(key, "")
+                        if cat and val:
+                            found = facets._find(board.get(cat, {}), val)
+                            verified.add((cat, found if found is not None else val))
+                continue
             if h.get("kind") != "query":
                 continue
             if h.get("verify"):
@@ -1529,6 +1666,24 @@ class Round:
                     if cat in facets.CATEGORIES and val:
                         val = facets.canonical_value(board, cat, val)
                         board = facets.apply_context(board, {cat: [val]})
+                rep = h.get("replace")
+                if isinstance(rep, dict):
+                    # The synthesis editor: refine-or-replace. An extension
+                    # ("tickets" → "Avalanche tickets") keeps the old value
+                    # as the parent — the lexical edge derives automatically
+                    # and the frontier deepens; a genuine swap strikes it.
+                    # The new value is minted VERBATIM (no canonical folding
+                    # — the caregiver chose these exact words, and folding a
+                    # refinement onto its own parent would erase it).
+                    cat = rep.get("category", "")
+                    old = rep.get("old", "")
+                    new = rep.get("new", "")
+                    if cat in facets.CATEGORIES and new:
+                        if old and not facets.value_extends(new, old):
+                            key = facets._find(board.get(cat, {}), old)
+                            if key is not None:
+                                board[cat][key] = facets.ELIMINATE_FLOOR
+                        board = facets.apply_context(board, {cat: [new]})
             elif kind == "query":
                 answer = h.get("answer")
                 slots = h.get("slots")

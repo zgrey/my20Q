@@ -291,16 +291,24 @@ def derive_edges(board: Board, tags: list[tuple[str, str, str]]) -> Edges:
             best_size = 0
             for parent in keys[:i]:  # only OLDER values can parent
                 ptok = _content_tokens(parent)
-                if not ptok or len(ptok) >= len(ctok):
+                if not ptok or len(ptok) <= best_size:
                     continue
-                contained = all(
-                    any(_tokens_match(p, c) for c in ctok) for p in ptok
-                )
-                if contained and len(ptok) > best_size:
+                if value_extends(child, parent):
                     best, best_size = parent, len(ptok)
             if best is not None and not _is_ancestor(edges[cat], child, best):
                 edges[cat][child] = best
     return edges
+
+
+def value_extends(child: str, parent: str) -> bool:
+    """Whether `child` lexically EXTENDS `parent` ("Avalanche tickets" ⊃
+    "tickets") — the refine-vs-replace decision for caregiver edits and the
+    lexical edge fallback."""
+    ctok = _content_tokens(child)
+    ptok = _content_tokens(parent)
+    if not ctok or not ptok or len(ptok) >= len(ctok):
+        return False
+    return all(any(_tokens_match(p, c) for c in ctok) for p in ptok)
 
 
 def family_root(cat_edges: Mapping[str, str], value: str) -> str:
