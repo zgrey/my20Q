@@ -754,6 +754,20 @@ class Round:
         "forget",
         "drop",
     )
+    #: Words that frame a REPLACEMENT note without being the replacement —
+    #: "plans seem to be dinner", "replace a visit with dinner", "she seems
+    #: to be indicating the right leg". Filtered (with stopwords and the
+    #: banned value's own tokens) so what remains is the replacement value.
+    _REPLACE_NOISE = frozenset(
+        [
+            "she", "he", "they", "i", "we", "you", "her", "him", "its",
+            "seem", "seems", "seemed", "specifically", "actually", "really",
+            "instead", "rather", "just", "like", "replace", "replacing",
+            "replaced", "indicate", "indicates", "indicating", "mean",
+            "means", "meant", "say", "says", "said", "not", "no", "never",
+            "think", "thinks", "probably", "maybe", "more",
+        ]
+    )
 
     @classmethod
     def _parse_mute(cls, note: str) -> str | None:
@@ -796,17 +810,46 @@ class Round:
             board = self._replay_board()
             for cat, val in self._weave(board).items():
                 if facets.mentions(note, val):
-                    self._history.append(
-                        {
-                            "kind": "edit",
-                            "text": note,
-                            "answer": None,
-                            "ban": {"category": cat, "value": val},
-                        }
-                    )
+                    entry: dict = {
+                        "kind": "edit",
+                        "text": note,
+                        "answer": None,
+                        "ban": {"category": cat, "value": val},
+                    }
+                    # Replacement semantics: "X seems to be Y" / "replace X
+                    # with Y" — what remains of the note after dropping the
+                    # banned value's words and the framing noise IS the
+                    # replacement, minted at context strength. (All three
+                    # trial-2 bans were replacements; without this the board
+                    # never learned "dinner" or "right leg".)
+                    mint = self._replacement_value(note, val)
+                    if mint:
+                        entry["mint"] = {"category": cat, "value": mint}
+                    self._history.append(entry)
                     self._pending = None
                     return await self._advance()
         return await self.add_context(note)  # no draft match — guiding context
+
+    @classmethod
+    def _replacement_value(cls, note: str, banned: str) -> str:
+        """The replacement a ban-note proposes, or "" for a plain ban.
+
+        Deterministic: the note's words minus the banned value's tokens
+        (stem-tolerant), stopwords, and replacement framing — capped at four
+        words so a chatty note can't mint a sentence. "no, not a drink"
+        leaves nothing → plain ban; "plans seem to be dinner" → "dinner".
+        """
+        banned_tokens = facets._content_tokens(banned)
+        kept: list[str] = []
+        for raw in re.findall(r"[A-Za-z][A-Za-z']*", note):
+            token = raw.casefold()
+            if token in cls._REPLACE_NOISE or token in facets._STOPWORDS:
+                continue
+            stem = facets._stem(token)
+            if any(facets._tokens_match(stem, b) for b in banned_tokens):
+                continue
+            kept.append(token)
+        return " ".join(kept[:4])
 
     def _edit_mutes(self) -> set[str]:
         """Slots the caregiver dismissed via ✗-edits (recomputed → undo-safe)."""
@@ -1473,7 +1516,9 @@ class Round:
                 board = facets.apply_context(board, h["slots"])
             elif kind == "edit":
                 # A caregiver ban floors the value — out of play, still on the
-                # board (never re-minted), struck through in the banner.
+                # board (never re-minted), struck through in the banner. A
+                # replacement note also MINTS what the caregiver said instead,
+                # at context strength (it is caregiver signal, not a guess).
                 ban = h.get("ban")
                 if isinstance(ban, dict):
                     cat = ban.get("category", "")
@@ -1483,6 +1528,13 @@ class Round:
                         board[cat][key if key is not None else val] = (
                             facets.ELIMINATE_FLOOR
                         )
+                mint = h.get("mint")
+                if isinstance(mint, dict):
+                    cat = mint.get("category", "")
+                    val = mint.get("value", "")
+                    if cat in facets.CATEGORIES and val:
+                        val = facets.canonical_value(board, cat, val)
+                        board = facets.apply_context(board, {cat: [val]})
             elif kind == "query":
                 answer = h.get("answer")
                 slots = h.get("slots")

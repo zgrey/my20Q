@@ -25,27 +25,58 @@
   seed_universal_wants: false
   # The feeling itself (what) and its cause/object (why) define the need.
   core_facets: [what, why]
+  # Drill tie-breaker only — evidence always dominates. Feelings are often
+  # about a person, so who outranks how; place/time rarely matter.
+  facet_priority: [what, why, who, how, when, where]
   reasoning_hint: |
-    Stay on FEELINGS and emotional states — loneliness, fear, worry about loved
+    Stay on FEELINGS and inner states — loneliness, fear, worry about loved
     ones, frustration (especially at not being understood), sadness, boredom,
-    anger, restlessness, grief for lost abilities, and positive feelings like
-    wanting joy or company. Do NOT seed or ask about physical needs (thirst,
-    hunger, toilet, pain, temperature) — those belong to the body topic. Lean on
-    the patient profile for what they care about and worry about.
+    anger, restlessness, grief for lost abilities, positive feelings like
+    wanting joy or company — AND the non-emotion inner states that matter
+    just as much: CONFUSION (about what she is seeing, hearing, or what is
+    happening around her), feeling overwhelmed, and disorientation. Do NOT
+    seed or ask about physical needs (thirst, hunger, toilet, pain,
+    temperature) — those belong to the body topic. Lean on the patient
+    profile for what they care about and worry about. Never enumerate
+    emotion names one per question — broad kinds first (upset vs confused vs
+    missing someone), then narrow.
 
-    Map the slots accordingly: "what" = the EMOTION itself (fear, sadness,
-    anger, loneliness, worry, frustration, shame, restlessness, longing);
-    "why" = its CAUSE or OBJECT (a specific person, the news/world, her body
-    or independence, the future, the home); "who" = the person it concerns,
-    when there is one. Identify the feeling itself, never merely whether she
-    wishes to express it (banned: "do you want to share how you feel" —
-    everyone says yes).
+    Map the slots accordingly: "what" = the feeling or state itself (fear,
+    sadness, anger, loneliness, worry, frustration, shame, restlessness,
+    longing, confusion, overwhelm); "why" = its CAUSE or OBJECT (a specific
+    person, the news / what is on TV, her body or independence, the future,
+    the home); "who" = the person it concerns, when there is one. Identify
+    the feeling itself, never merely whether she wishes to express it
+    (banned: "do you want to share how you feel" — everyone says yes).
 
 - id: physical_health
   label: My body
   description: Physical needs or discomfort.
-  # The physical want/discomfort (what) and the action needed (how).
-  core_facets: [what, how]
+  # A body report is sensation + location before anything: what (the
+  # want/discomfort) and where (the BODY region) gate readiness; the remedy
+  # (how) follows. 06-11 trial: location starved while "where" was a modifier
+  # holding room-place seeds. Non-localized wants (thirst) leave "where"
+  # empty — the caregiver ✗-mutes it or accepts pre-ready.
+  core_facets: [what, where]
+  # Drill tie-breaker only — evidence always dominates (see my_people note).
+  facet_priority: [what, where, how, why, when, who]
+  reasoning_hint: |
+    In this topic "where" means a place ON THE BODY, never a room: head,
+    face, mouth, neck, shoulders, arms, hands, chest, stomach, back, hips,
+    legs, knees, feet — and one side versus the other (left/right). Seed and
+    ask "where" with body regions, narrowing region → side → specific part
+    ("Is it in your legs?" → "Is it the right leg?" → "Is it in the thigh?").
+
+    Map the slots: "what" = the sensation or want itself (pain, tingling,
+    numbness, itching, pressure, dizziness, nausea, thirst, hunger, needing
+    the toilet, feeling too hot or too cold, tiredness); "where" = the body
+    region when the need is localized (a want like thirst may have none —
+    that is fine); "how" = the remedy or action wanted (adjust position,
+    bring a drink, rub it, a blanket, fetch the caregiver); "why" = the
+    suspected cause, only if it emerges on its own. Establish WHAT is felt
+    and WHERE on the body early — before exploring causes or remedies, and
+    never linger on furniture or the room when the person reports a body
+    feeling.
 
 - id: my_people
   label: My people
@@ -104,3 +135,5 @@
   label: Other
   description: General comfort and engagement needs. Catch-all, pinned last.
   core_facets: [what, how]
+  # Drill tie-breaker only: object + action first, location next.
+  facet_priority: [what, how, where, who, why, when]

@@ -365,7 +365,7 @@ must co-occur. **Acceptance:** replaying A3's note yields forced what-focus
 for 3 turns and no `when` credit; "she pointed at the kitchen" behaves as
 today.
 
-### W1-E · Per-topic facet priorities, body-aware seeds, replacement edits — Status: PROPOSED (owner-requested, 06-11 trial)
+### W1-E · Per-topic facet priorities, body-aware seeds, replacement edits — Status: IMPLEMENTED (06-11, owner approved as drafted)
 
 **Problem (B1/B3/B4).** The body round starved `where` (junk room-place
 seeds; not core; unreachable until late); ✗-notes that *replace* a value
@@ -594,7 +594,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W1-B | Focus v3: retire/widen/rotate-on-stall | **IMPLEMENTED** (06-11, amended: ratio retirement, banded priority) |
 | W1-C | The living proposal banner (Speak / ✓ / ✗-edits) | **IMPLEMENTED** (06-11; validated in trial 2 — banner moved up top + ready-glow strengthened per owner notes) |
 | W1-D | Focus directives in the context field (shrunk by C) | PROPOSED · demoted (✗-flow absorbed it in trial 2) |
-| W1-E | Per-topic priorities · body-aware seeds · replacement ✗-edits | **PROPOSED** ← next for iteration |
+| W1-E | Per-topic priorities · body-aware seeds · replacement ✗-edits | **IMPLEMENTED** (06-11; body core → what+where) |
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (B1: the right-leg yes wasted on established tags — third sighting) |
 | W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11; 3 clean fires in trial 2) |
 | W2-G | Noise bench | PROPOSED |

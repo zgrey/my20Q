@@ -194,7 +194,9 @@ def test_consec_no_streak_counts_tail(topics: list[Topic]) -> None:
 
 
 def _policy_round(topics: list[Topic]) -> Round:
-    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())  # core: what+how
+    # The catch-all topic keeps core [what, how] — these tests exercise the
+    # generic policy mechanics, not a topic's facet layout.
+    rnd = Round(_topic(topics, "general"), llm=MockBackend())
     rnd._seed_values = {"what": ["a drink", "a snack"], "how": ["bring it"],
                         "why": ["thirsty"]}
     return rnd
@@ -389,8 +391,28 @@ def test_topic_facet_priority_loaded_and_validated(topics: list[Topic]) -> None:
     people = _topic(topics, "my_people")
     assert people.facet_priority[0] == "who"
     assert people.facet_priority[-1] == "where"  # implied in caregiving
+    body = _topic(topics, "physical_health")
+    assert body.core_facets == ["what", "where"]  # sensation + location
+    assert body.facet_priority[:2] == ["what", "where"]
+    feelings = _topic(topics, "mental_health")
+    assert feelings.facet_priority[:3] == ["what", "why", "who"]
     with pytest.raises(ValueError):
         Topic(id="x", label="X", facet_priority=["whom"])
+
+
+def test_physical_where_is_core_and_probed_early(topics: list[Topic]) -> None:
+    # 06-11 trial B1: location starved as a modifier (probed once in 42 q).
+    # where is core for the body topic — probed the moment what has signal.
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend(),
+                rng=_FixedRandom(0.99))
+    rnd._seed_values = {"what": ["pain", "thirst"], "where": ["legs", "back"],
+                        "how": ["adjust position"]}
+    rnd._history = [
+        {"kind": "query", "text": "Are you feeling pain?", "answer": "yes",
+         "slots": {"what": "pain"}},
+    ]
+    focus, directive, _ = rnd._pick_focus(rnd._replay_board(), rnd._history)
+    assert (focus, directive) == ("where", "probe")
 
 
 # --------------------------------------------------- reasoning round flow
@@ -400,7 +422,7 @@ async def test_reasoning_round_converges_via_the_board(topics: list[Topic]) -> N
     # The full banner stack: pending → draft → verify-on-lock → board-ready
     # LLM weave → caregiver accept. The engine never proposes on its own.
     backend = _controller_backend(
-        expand={"what": ["a drink"], "how": ["bring it"]}
+        expand={"what": ["a drink"], "where": ["my throat"]}
     )
     rnd = Round(_topic(topics, "physical_health"), llm=backend,
                 rng=_FixedRandom(0.99))
@@ -418,18 +440,20 @@ async def test_reasoning_round_converges_via_the_board(topics: list[Topic]) -> N
     assert not rnd.banner()["ready"]
 
     # A caregiver note locks both core slots → two verify-on-lock turns.
-    ev = await rnd.add_context("she pointed at her cup on the tray")
+    # (Both values are anchored in the note's words — the expand gate.)
+    ev = await rnd.add_context("she pointed at her cup and rubbed her throat")
     assert rnd._pending is not None and rnd._pending.verify
     ev = await rnd.answer(Answer.YES)  # confirm what='a drink'
     assert rnd._pending is not None and rnd._pending.verify
-    ev = await rnd.answer(Answer.YES)  # confirm how='bring it'
+    ev = await rnd.answer(Answer.YES)  # confirm where='my throat'
     assert ev.kind == "query"  # still questioning — no auto-proposal
 
     banner = rnd.banner()
     assert banner["ready"] and banner["state"] == "draft"
-    # Board-ready → the LLM weave replaced the code template.
+    # Board-ready (body core = what + where) → the LLM weave replaced the
+    # code template.
     assert "water" in banner["text"]
-    assert {p["category"] for p in banner["parts"]} >= {"what", "how"}
+    assert {p["category"] for p in banner["parts"]} >= {"what", "where"}
     assert all(p["band"] == "locked" for p in banner["parts"])
 
     ev = rnd.accept()
@@ -818,6 +842,35 @@ async def test_pin_focus_targets_weakest_slot_after_rejection(
     focus, directive, _ = rnd._pick_focus(rnd._replay_board(), rnd._history)
     # what is confident (2.0); how (0.5) is the utterance's weak detail.
     assert (focus, directive) == ("how", "pin")
+
+
+def test_replacement_value_extraction() -> None:
+    # The three trial-2 ban notes, verbatim — each was actually a replacement.
+    rv = Round._replacement_value
+    assert rv("plans seem to be dinner", "making plans") == "dinner"
+    assert rv("Replace a visit with dinner", "a visit") == "dinner"
+    assert (
+        rv("she seems to be indicating the right leg is the body part",
+           "body part")
+        == "right leg"
+    )
+    assert rv("no, not a drink", "a drink") == ""  # plain ban — nothing to mint
+
+
+async def test_edit_replacement_bans_and_mints(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # what='a drink' +1 → in the weave
+    ev = await rnd.edit("a drink seems to be hot tea")
+    assert ev.kind == "query"
+    board = rnd._replay_board()
+    assert board["what"]["a drink"] == facets.ELIMINATE_FLOOR  # struck
+    assert board["what"]["hot tea"] == 2.0  # minted at context strength
+    assert rnd._weave(board)["what"] == "hot tea"  # the draft re-weaves on it
+    entry = next(h for h in rnd.history if h["kind"] == "edit")
+    assert entry["ban"] == {"category": "what", "value": "a drink"}
+    assert entry["mint"] == {"category": "what", "value": "hot tea"}
 
 
 async def test_edit_mute_dims_a_slot_and_redirects(topics: list[Topic]) -> None:

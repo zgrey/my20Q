@@ -81,7 +81,8 @@ from the first converged slot ("I need/want something for/from Rob…" — the
 alternates collapse as evidence arrives), brightens at board-readiness, and
 offers Speak / ✓ accept (an explicit front-and-center confirmation, spoken,
 one "New round" action) / ✗ reject-a-portion (typed edits → struck-out value
-bans and dimmed slot mutes, all undoable).
+bans and dimmed slot mutes, all undoable; a replacement note — "X seems to
+be Y" — bans X and mints Y onto the board at context strength).
 
 ## Privacy invariant
 

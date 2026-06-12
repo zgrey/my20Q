@@ -119,6 +119,10 @@ def dump(path: str) -> None:
                     flags.append(f"FLIPPED (was {q['flipped_from']!r})")
                 if q.get("ban"):
                     flags.append(f"BAN {q['ban']['category']}≠{q['ban']['value']!r}")
+                if q.get("mint"):
+                    flags.append(
+                        f"MINT {q['mint']['category']}={q['mint']['value']!r}"
+                    )
                 if q.get("mute"):
                     flags.append(f"MUTE {q['mute']}")
                 if flags:
