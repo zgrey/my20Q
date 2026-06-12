@@ -228,12 +228,90 @@ def test_classify_direction_leaves_concern_unclassified() -> None:
     assert facets.classify_direction("Are you worried about Rob?", who) is None
 
 
+# ------------------------------------------ refinement links (W3-H)
+
+
+def test_derive_edges_explicit_and_lexical() -> None:
+    board = facets.seed_board({"what": ["discomfort", "a task"]})
+    board = facets.update(board, {"what": "tingling"}, "yes")
+    board = facets.update(board, {"what": "a specific cleanup task"}, "yes")
+    edges = facets.derive_edges(board, [("what", "tingling", "discomfort")])
+    assert edges["what"]["tingling"] == "discomfort"  # explicit (synonyms)
+    # Lexical subset fallback: "a specific cleanup task" ⊃ "a task".
+    assert edges["what"]["a specific cleanup task"] == "a task"
+
+
+def test_derive_edges_never_resurrects_or_cycles() -> None:
+    board = facets.seed_board({"what": ["discomfort"]})
+    edges = facets.derive_edges(board, [("what", "discomfort", "ghost")])
+    assert edges["what"] == {}  # the parent must already exist
+    board = facets.update(board, {"what": "tingling"}, "yes")
+    edges = facets.derive_edges(
+        board,
+        [("what", "tingling", "discomfort"), ("what", "discomfort", "tingling")],
+    )
+    assert edges["what"] == {"tingling": "discomfort"}  # the cycle is refused
+
+
+def test_family_mass_is_nonnegative_protection() -> None:
+    # The owner's "functional protection": a child's no never erodes the
+    # family — the parent stays locked while the round weaves through failed
+    # refinements (no propagated points; pure read-time shielding).
+    board = facets.seed_board({"what": ["discomfort"]})
+    for _ in range(3):
+        board = facets.update(board, {"what": "discomfort"}, "yes")
+    board = facets.update(board, {"what": "burning"}, "no")
+    board = facets.update(board, {"what": "stabbing"}, "no")
+    edges = facets.derive_edges(
+        board,
+        [("what", "burning", "discomfort"), ("what", "stabbing", "discomfort")],
+    )
+    assert facets.families(board, "what", edges)[0] == ("discomfort", 3.0)
+
+
+def test_frontier_descends_and_retreats() -> None:
+    board = facets.seed_board({"what": ["discomfort"]})
+    board = facets.update(board, {"what": "discomfort"}, "yes")
+    board = facets.update(board, {"what": "discomfort"}, "yes")
+    board = facets.update(board, {"what": "tingling"}, "yes")
+    edges = facets.derive_edges(board, [("what", "tingling", "discomfort")])
+    top = facets.frontier(board, "what", edges)
+    assert top is not None and top[0] == "tingling"  # one confirmed yes weaves
+    # The fine value loses support → the frontier RETREATS to the parent.
+    board = facets.update(board, {"what": "tingling"}, "no")
+    top = facets.frontier(board, "what", edges)
+    assert top is not None and top[0] == "discomfort"
+
+
+def test_family_confident_collapses_fragmentation() -> None:
+    # The thigh round's shape: five rivals for ONE sensation kept the slot
+    # permanently unconfident (22× drill-hammering); as one family it is
+    # decisively established.
+    board = facets.seed_board({"what": ["discomfort", "the chair"]})
+    for value, answer in [
+        ("discomfort", "yes"), ("discomfort", "yes"), ("tingling", "yes"),
+        ("pins and needles", "kinda"), ("buzzing", "kinda"),
+        ("the chair", "yes"), ("the chair", "yes"),
+    ]:
+        board = facets.update(board, {"what": value}, answer)
+    edges = facets.derive_edges(
+        board,
+        [("what", "tingling", "discomfort"),
+         ("what", "pins and needles", "discomfort"),
+         ("what", "buzzing", "discomfort")],
+    )
+    assert not facets.confident(board, "what", ready_points=2.0, margin=1.0)
+    assert facets.family_confident(
+        board, "what", edges, ready_points=2.0, margin=1.0
+    )
+
+
 def test_facet_view_shape() -> None:
     board = facets.update(_seeded(), {"who": "Zach"}, "yes")
     view = facets.facet_view(board, "who")
     assert [v["category"] for v in view] == list(facets.CATEGORIES)
     who = view[0]
     assert who["focus"] is True
-    assert who["contenders"][0] == {"value": "Zach", "score": 1.0}
+    assert who["contenders"][0] == {"value": "Zach", "score": 1.0, "parent": None}
     when = next(v for v in view if v["category"] == "when")
     assert when["contenders"] == [] and when["focus"] is False

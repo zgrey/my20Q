@@ -26,6 +26,9 @@ export type EventKind =
 export interface FacetContender {
   value: string;
   score: number;
+  // The contender this one refines ("tingling" → "discomfort"), or null —
+  // rendered as a chained chip: › value.
+  parent: string | null;
 }
 
 // One 5W1H category of the live board (the honest reasoning tile).

@@ -1653,3 +1653,11 @@ body,
   cursor: pointer;
   min-height: 48px;
 }
+
+/* Refinement chains in the consensus board: a child chip renders as
+   "› value" and dims toward its family — the visible dive. */
+.facet-chip.child {
+  border-left: 2px solid var(--accent);
+  margin-left: 10px;
+  opacity: 0.92;
+}

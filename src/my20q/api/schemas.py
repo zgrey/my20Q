@@ -54,6 +54,9 @@ class FacetContenderOut(BaseModel):
 
     value: str
     score: float
+    # The contender this one refines ("tingling" → "discomfort"), or null —
+    # lets the tile render the dive: parent › child.
+    parent: str | None = None
 
 
 class FacetOut(BaseModel):

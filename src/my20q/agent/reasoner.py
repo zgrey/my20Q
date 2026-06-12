@@ -93,6 +93,10 @@ class ReasonerAction:
     #: A deliberate double-check of a single locked pair (verify-on-lock) —
     #: gate-exempt by construction, recorded so a pair is never re-verified.
     verify: bool = False
+    #: Refinement tags: {category: parent value} — the asserted value is a
+    #: MORE SPECIFIC version of that existing contender ("tingling" refines
+    #: "discomfort"). Anchored to the board: the parent must already exist.
+    refines: dict[str, str] = field(default_factory=dict)
 
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
@@ -234,6 +238,7 @@ class Reasoner:
         directive: str,
         split_pair: tuple[str, str] | None = None,
         history: list[dict],
+        edges: facets.Edges | None = None,
         asked: list | None = None,
         established: set[tuple[str, str]] | None = None,
         banned: tuple[str, str] | None = None,
@@ -280,6 +285,7 @@ class Reasoner:
                     focus=focus,
                     directive=directive,
                     split_pair=split_pair,
+                    edges=edges,
                     asked=asked_texts,
                     seed_context=seed_context,
                     profile_context=profile_context,
@@ -344,6 +350,7 @@ class Reasoner:
                 )
                 continue
             action = self._ask_action(cleaned, slots, data, focus)
+            action.refines = _anchored_refines(data.get("refines"), slots, board)
             best = action
             if not slots:
                 corrections.append(
@@ -657,6 +664,35 @@ def _anchored_slots(
         out[cat] = facets.canonical_value(board, cat, clean)
         if len(out) >= 2:
             break
+    return out
+
+
+def _anchored_refines(
+    raw: object, slots: dict[str, str], board: facets.Board
+) -> dict[str, str]:
+    """Keep refinement tags that link two REAL contenders, nothing else.
+
+    A tag is kept only when its category was actually asserted this turn and
+    the named parent already exists on the board (canonical, distinct from
+    the child) — a refines tag can link contenders, never resurrect or
+    invent them. Synonym refinements (tingling → discomfort) can only arrive
+    this way; lexical subsets are derived in code regardless.
+    """
+    out: dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for cat, parent in raw.items():
+        if cat not in slots or not isinstance(parent, str):
+            continue
+        clean = sanitize_llm_text(parent)[:MAX_VALUE_CHARS].strip()
+        if not clean:
+            continue
+        canonical = facets.canonical_value(board, cat, clean)
+        if canonical not in board.get(cat, {}):
+            continue  # the parent must already exist — no resurrection
+        if canonical == slots[cat]:
+            continue
+        out[cat] = canonical
     return out
 
 

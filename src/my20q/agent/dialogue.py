@@ -211,6 +211,10 @@ class Round:
         # board-readiness the banner renders the code template instead.
         self._draft_text: str = ""
         self._draft_weave: dict[str, str] = {}
+        # Refinement edges (child → parent per category), derived alongside
+        # every full board replay from history tags + the lexical fallback —
+        # reading structure only; scores stay flat and text-anchored.
+        self._edges: facets.Edges = facets.empty_edges()
         self._outcome: str | None = None
         self._final_utterance = ""
         self._opened = False
@@ -288,6 +292,8 @@ class Round:
             entry["flipped_from"] = pending.flipped_from
         if pending.kind == "query" and pending.verify:
             entry["verify"] = True
+        if pending.kind == "query" and pending.refines:
+            entry["refines"] = dict(pending.refines)
         # An INFORMATIVE yes moved the board (some asserted pair was not yet
         # established); a yes that merely re-confirms established leaders
         # earns its points but does NOT advance the synthesis gates —
@@ -435,7 +441,7 @@ class Round:
                 facets.classify_direction(action.content, who_names) or ""
             )
         self._pending = action
-        return self._event_for(action, facets.facet_view(board, action.focus))
+        return self._event_for(action, facets.facet_view(board, action.focus, self._edges))
 
     # -------------------------------------------------------- internal
 
@@ -528,7 +534,7 @@ class Round:
         self._pending = action
         # Keep the banner's draft current (cheap: re-weaves only on change).
         await self._refresh_draft(board)
-        return self._event_for(action, facets.facet_view(board, focus))
+        return self._event_for(action, facets.facet_view(board, focus, self._edges))
 
     # ---------------------------------------- the living proposal banner
 
@@ -554,19 +560,23 @@ class Round:
         return [c for c in ("what", "how") if c not in muted] or ["what"]
 
     def _weave(self, board: facets.Board) -> dict[str, str]:
-        """Ban/mute-aware positive slot leaders — what the draft is woven from.
+        """Ban/mute-aware FRONTIER values — what the draft is woven from.
 
-        Banned values are floored on the board (see ``_replay_board``), so
-        the next-best live contender steps up automatically.
+        Per slot: the leading family's deepest confirmed member (one yes —
+        verify-on-lock covers thin locks), retreating to the best positive
+        member when nothing finer is confirmed. The draft therefore says
+        "tingling", not "discomfort", the moment tingling is confirmed — and
+        coarsens honestly if the fine value later loses support. Banned
+        values are floored on the board, so families re-route around them.
         """
         muted = self._edit_mutes()
         out: dict[str, str] = {}
         for cat in facets.CATEGORIES:
             if cat in muted:
                 continue
-            ranked = facets.live(board, cat)
-            if ranked and ranked[0][1] > 0:
-                out[cat] = ranked[0][0]
+            top = facets.frontier(board, cat, self._edges)
+            if top is not None and top[1] > 0:
+                out[cat] = top[0]
         return out
 
     def _template_draft(self, weave: dict[str, str]) -> str:
@@ -658,19 +668,13 @@ class Round:
         weave = self._weave(board)
         if not any(c in weave for c in self._core_facets()):
             return base  # nothing real to draft from yet
-        T = self.tuning
         parts = [
             {
                 "category": cat,
                 "value": val,
                 "band": (
                     "locked"
-                    if facets.confident(
-                        board,
-                        cat,
-                        ready_points=T.facet_ready_points,
-                        margin=T.facet_split_margin,
-                    )
+                    if self._family_confident(board, cat)
                     else "working"
                 ),
             }
@@ -912,6 +916,7 @@ class Round:
             directive=directive,
             split_pair=split_pair,
             history=self._history,
+            edges=self._edges,
             asked=asked,
             established=established,
             banned=self._futile_pair(seg),
@@ -1006,21 +1011,16 @@ class Round:
             for cat, _val in ranked_used:
                 if cat not in facets.CATEGORIES or cat in muted:
                     continue
-                if facets.confident(
-                    board,
-                    cat,
-                    ready_points=T.facet_ready_points,
-                    margin=T.facet_split_margin,
-                ):
+                if self._family_confident(board, cat):
                     continue
                 if fresh(cat):
                     return cat, "pin", None
 
-        # 1. Unestablished core slots — no contender confirmed above zero yet.
+        # 1. Unestablished core slots — no family confirmed above zero yet.
         open_core = []
         for cat in core:
-            top = facets.leader(board, cat)
-            if top is None or top[1] <= 0:
+            fams = facets.families(board, cat, self._edges)
+            if not fams or fams[0][1] <= 0:
                 open_core.append(cat)
         cat = first_fresh(open_core)
         if cat is not None:
@@ -1033,16 +1033,11 @@ class Round:
                 return cat, "split", (pair[0][0], pair[1][0])
 
         # 3. Every core slot is confident → enrich an empty modifier slot.
-        if all(
-            facets.confident(
-                board, c, ready_points=T.facet_ready_points, margin=T.facet_split_margin
-            )
-            for c in core
-        ):
+        if all(self._family_confident(board, c) for c in core):
             open_other = []
             for c in others:
-                top = facets.leader(board, c)
-                if top is None or top[1] <= 0:
+                fams = facets.families(board, c, self._edges)
+                if not fams or fams[0][1] <= 0:
                     open_other.append(c)
             alt = first_fresh(open_other)
             if alt is not None:
@@ -1050,26 +1045,28 @@ class Round:
 
         # 4. Drill a live slot (core or not; retired slots are out —
         #    re-drilling a settled answer is the metronome). Rank: core block
-        #    first; within a block, UNESTABLISHED leaders (below ready) before
+        #    first; within a block, UNESTABLISHED families (below ready) before
         #    established ones (coverage is information; refinement can wait);
         #    within a band, the topic's facet_priority order — so for people
         #    topics a vague established "what" outranks an established "when"/
-        #    "where" — and weakest leader last as the final tie-break.
+        #    "where" — and weakest family last as the final tie-break.
         order = {c: i for i, c in enumerate(self._facet_order())}
+
+        def _mass(c: str) -> float:
+            fams = facets.families(board, c, self._edges)
+            return fams[0][1] if fams else 0.0
+
         pool = [
             c
             for c in facets.CATEGORIES
-            if c not in muted
-            and not self._retired(board, c)
-            and (top := facets.leader(board, c)) is not None
-            and top[1] > 0
+            if c not in muted and not self._retired(board, c) and _mass(c) > 0
         ]
         pool.sort(
             key=lambda c: (
                 c not in core,
-                (facets.leader(board, c) or ("", 0.0))[1] >= T.facet_ready_points,
+                _mass(c) >= T.facet_ready_points,
                 order.get(c, len(order)),
-                (facets.leader(board, c) or ("", 0.0))[1],
+                _mass(c),
             )
         )
         cat = first_fresh(pool)
@@ -1084,16 +1081,18 @@ class Round:
         return cat, "drill", None
 
     def _retired(self, board: facets.Board, cat: str) -> bool:
-        """Whether `cat`'s leader DOMINATES — excluded from probe/drill/pin.
+        """Whether `cat`'s leading FAMILY dominates — excluded from probe/drill/pin.
 
-        Dominance ratio, not margin: leader >= retire_ready_x * ready points
-        AND runner-up <= half the leader. (A margin rule retires whatever is
-        two clean yeses ahead — which mid-round is usually the vague leader
-        that most needs drilling; a ratio targets settled slots like who=Rob
-        at +25.5 vs +10 while leaving what at +6 vs +4 live.)
+        Dominance ratio, not margin: family mass >= retire_ready_x * ready
+        points AND the rival family <= half. (A margin rule retires whatever
+        is two clean yeses ahead — which mid-round is usually the vague
+        leader that most needs drilling; a ratio targets settled slots like
+        who=Rob at +25.5 vs +10 while leaving what at +6 vs +4 live.) Read
+        at family level: drilling WITHIN the leading family is the frontier's
+        job, not the focus rotation's.
         """
         T = self.tuning
-        ranked = facets.live(board, cat)
+        ranked = facets.families(board, cat, self._edges)
         if not ranked or ranked[0][1] < T.retire_ready_x * T.facet_ready_points:
             return False
         runner = ranked[1][1] if len(ranked) > 1 else 0.0
@@ -1126,16 +1125,11 @@ class Round:
 
         Drives the banner's propose-ready vibrance (≈ the conjunction of
         per-slot posteriors crossing ~0.5 — see the research audit) and the
-        LLM-weave trigger. Caregiver-muted slots are excluded.
+        LLM-weave trigger. Caregiver-muted slots are excluded; confidence is
+        read at FAMILY level, so a confirmed idea fragmented across its own
+        refinements still counts as established.
         """
-        T = self.tuning
-        core = self._core_facets()
-        return all(
-            facets.confident(
-                board, c, ready_points=T.facet_ready_points, margin=T.facet_split_margin
-            )
-            for c in core
-        )
+        return all(self._family_confident(board, c) for c in self._core_facets())
 
     def _explore_probability(self, yeses: int) -> float:
         """Probability the next question probes fresh: ``explore_decay**(yeses+1)``.
@@ -1240,7 +1234,6 @@ class Round:
         exceed VERIFY_BUDGET per round; >= 2 yeses never need it. Core slots
         are checked first.
         """
-        T = self.tuning
         verified: set[tuple[str, str]] = set()
         spent = 0
         yes_counts: dict[tuple[str, str], int] = {}
@@ -1269,14 +1262,10 @@ class Round:
             c for c in facets.CATEGORIES if c not in core and c not in muted
         ]
         for cat in core + others:
-            if not facets.confident(
-                board,
-                cat,
-                ready_points=T.facet_ready_points,
-                margin=T.facet_split_margin,
-            ):
+            if not self._family_confident(board, cat):
                 continue
-            top = facets.leader(board, cat)
+            # Verify the FRONTIER — the value the draft would actually weave.
+            top = facets.frontier(board, cat, self._edges)
             if top is None:
                 continue
             pair = (cat, top[0])
@@ -1340,6 +1329,11 @@ class Round:
             "seeds": self._seed_values,
             "final": facets.snapshot(self._replay_board()),
         }
+        # Refinement edges (child → parent per slot) — autopsies can see the
+        # dive structure, not just the flat scores.
+        edges = {cat: dict(m) for cat, m in self._edges.items() if m}
+        if edges:
+            record["edges"] = edges
         restarts = [
             {"reason": h.get("reason", ""), "board": h.get("board") or {}}
             for h in self._history
@@ -1541,7 +1535,42 @@ class Round:
                 if answer and slots:
                     board = facets.update(board, slots, answer)
                 board = self._apply_direction(board, h)
+        if upto is None:
+            # Keep the refinement edges in lockstep with the live board
+            # (derived, never stored — undo stays pop-and-recompute).
+            self._edges = facets.derive_edges(board, self._refine_tags())
         return board
+
+    def _refine_tags(self) -> list[tuple[str, str, str]]:
+        """(category, child, parent) refinement tags from history, in order."""
+        tags: list[tuple[str, str, str]] = []
+        for h in self._history:
+            if h.get("kind") != "query":
+                continue
+            refines = h.get("refines")
+            slots = h.get("slots") or {}
+            if not isinstance(refines, dict):
+                continue
+            for cat, parent in refines.items():
+                child = slots.get(cat)
+                if child and isinstance(parent, str):
+                    tags.append((cat, child, parent))
+        return tags
+
+    def _family_confident(self, board: facets.Board, cat: str) -> bool:
+        """Confidence read at FAMILY level — refinement-aware.
+
+        Non-negative family mass: a child's no never erodes the family, so
+        an established parent stays locked while the round weaves through
+        its children (see facets.families).
+        """
+        return facets.family_confident(
+            board,
+            cat,
+            self._edges,
+            ready_points=self.tuning.facet_ready_points,
+            margin=self.tuning.facet_split_margin,
+        )
 
     def _apply_direction(self, board: facets.Board, h: dict) -> facets.Board:
         """Fold one query's direction evidence into the intent buckets."""
@@ -1619,7 +1648,7 @@ class Round:
                     f"(recovered after a context restart) {action.rationale}".strip()
                 )
                 self._pending = action
-                return self._event_for(action, facets.facet_view(board, focus))
+                return self._event_for(action, facets.facet_view(board, focus, self._edges))
 
         if unreachable:
             text = (
@@ -1661,7 +1690,7 @@ class Round:
         if self._seed_values is not None:
             board = self._replay_board()
             return self._event_for(
-                self._pending, facets.facet_view(board, self._pending.focus)
+                self._pending, facets.facet_view(board, self._pending.focus, self._edges)
             )
         return self._event_for(self._pending)
 

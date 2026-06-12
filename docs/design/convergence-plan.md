@@ -496,7 +496,29 @@ invariant).
 one command reproduces §1's table for any recording or simulated run; W1
 fixes show a measured Δ on the dishes fixture.
 
-### W3-H · Refinement links — coarse→fine inside a slot — Status: PROPOSED · **PROMOTED (06-11 trial)**
+### W3-H · Refinement links — coarse→fine inside a slot — Status: IMPLEMENTED (06-11)
+
+> **Owner decisions:** (1) frontier weaves at ONE confirmed yes —
+> verify-on-lock covers thin locks; (2) upward propagation DEBATED and
+> resolved as **non-negative family mass** read-time shielding instead:
+> a child's yes lifts the family implicitly, a child's no hits only the
+> child — the parent stays locked through failed weaving below it, with
+> zero propagated points (propagation would write credit onto values the
+> question never said — the Aaron-bug class — and double-count evidence);
+> (3) chains render in the cockpit NOW (`› child` chips with an accent
+> spine in the consensus board) — the visible dive.
+> **Shipped:** `facets.derive_edges` (explicit model tags, parent must
+> already exist — no resurrection; lexical-subset fallback; insertion-order
+> acyclicity), `families`/`family_confident`/`frontier` (descends at one
+> yes, RETREATS when a fine value loses support), refines tags through
+> FORMAT→`ReasonerAction.refines`→history→replay; all policy confidence
+> reads (ready / retire / probe-open / pin / drill bands / verify target)
+> moved to family level; the weave uses the frontier; board records carry
+> `edges`; prompts render `parent›value`; the tile shows chained chips.
+> **Watch:** family-level retirement can stop drilling while the frontier
+> is still coarse — the ✗/pin flows reopen it, but if live rounds show
+> coarse frontiers at retirement, add "frontier confirmed" to the
+> retirement condition. 205 tests pass.
 
 > Second sighting, opposite face: the dishes round showed the COARSE
 > failure (stale leader uncatchable by refinements); the thigh round shows
@@ -598,6 +620,6 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (B1: the right-leg yes wasted on established tags — third sighting) |
 | W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11; 3 clean fires in trial 2) |
 | W2-G | Noise bench | PROPOSED |
-| W3-H | Refinement links (coarse→fine) | PROPOSED · **promoted: next after W1-E** (fragmentation = 22× what-hammering in trial 2) |
+| W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11; non-negative family mass, frontier weaving, chains in the tile) |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | PROPOSED |

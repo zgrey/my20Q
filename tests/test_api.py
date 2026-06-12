@@ -161,7 +161,7 @@ def test_reasoning_round_via_injected_backend() -> None:
     assert [f["category"] for f in facets] == ["who", "what", "when", "where", "why", "how"]
     assert any(f["focus"] for f in facets)  # the targeted slot is marked
     who = facets[0]
-    assert {"value": "your son", "score": 0.0} in who["contenders"]
+    assert {"value": "your son", "score": 0.0, "parent": None} in who["contenders"]
     assert state["banner"]["state"] == "pending"  # no signal yet
 
     for _ in range(3):

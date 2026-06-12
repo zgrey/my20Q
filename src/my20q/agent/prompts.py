@@ -101,6 +101,11 @@ OUTPUT — STRICT JSON, nothing else:
   to move it?" → {"who": "Zach", "how": "move it"}). NEVER tag a value the
   question does not mention. Reuse the exact wording of a listed contender
   when the question is about it.
+- "refines": OPTIONAL — when an asserted value is a MORE SPECIFIC version of
+  a contender already on the board, name that broader contender VERBATIM
+  (testing "tingling" under the confirmed "discomfort" →
+  {"refines": {"what": "discomfort"}}). The board shows known refinements as
+  "parent›value". Omit when the value is not a refinement.
 - "preface": OPTIONAL short spoken lead-in, at most 8 words, ENDING with an em
   dash, that flows grammatically into the question when read aloud as one
   sentence (e.g. "Okay, not food then —"). It must not reuse the question's
@@ -311,16 +316,28 @@ def _context_block(
     return out
 
 
-def _board_block(board: facets.Board, *, scores: bool = True) -> str:
-    """The live board, one line per category: ``what: a picture +2.0 | a gift 0.0``."""
+def _board_block(
+    board: facets.Board, *, scores: bool = True, edges: facets.Edges | None = None
+) -> str:
+    """The live board, one line per category: ``what: a picture +2.0 | a gift 0.0``.
+
+    With `edges`, refinements render as ``parent›value`` so the model sees
+    the dive structure and can tag (and extend) it.
+    """
     lines: list[str] = []
     for cat in facets.CATEGORIES:
         ranked = facets.live(board, cat)[: facets.MAX_LISTED]
+        cat_edges = (edges or {}).get(cat, {})
+
+        def name(v: str, _edges: dict = cat_edges) -> str:
+            parent = _edges.get(v)
+            return f"{parent}›{v}" if parent else v
+
         if ranked:
             if scores:
-                vals = " | ".join(f"{v} [{s:+.1f}]" for v, s in ranked)
+                vals = " | ".join(f"{name(v)} [{s:+.1f}]" for v, s in ranked)
             else:
-                vals = " | ".join(v for v, _ in ranked)
+                vals = " | ".join(name(v) for v, _ in ranked)
         else:
             vals = "(no contenders yet)"
         lines.append(f"  {cat}: {vals}")
@@ -377,7 +394,8 @@ _DIRECTIVE_NOTE = {
     "drill": (
         "DIRECTIVE — DRILL the leader: it is confirmed but still vague. Ask a "
         "MORE SPECIFIC version of it (a concrete instance, detail, or "
-        "narrower form)."
+        "narrower form). Known refinements show as parent›value on the board "
+        "— go DEEPER than the finest confirmed one."
     ),
     "pin": (
         "DIRECTIVE — PIN DOWN the focus slot: the last proposed message was "
@@ -439,6 +457,7 @@ def deliberate_messages(
     focus: str,
     directive: str,
     split_pair: tuple[str, str] | None = None,
+    edges: facets.Edges | None = None,
     asked: list[str] | None = None,
     seed_context: str = "",
     profile_context: str = "",
@@ -476,7 +495,8 @@ def deliberate_messages(
         lines = "\n".join(f'  - {cat}: "{val}"' for cat, val in sorted(vetoed))
         instruction += _VETOED_NOTE.format(lines=lines)
     instruction += (
-        f"THE BOARD (slot: contenders [points]):\n{_board_block(board)}\n\n"
+        f"THE BOARD (slot: contenders [points]; parent›value = a refinement):\n"
+        f"{_board_block(board, edges=edges)}\n\n"
         f"FOCUS SLOT: {focus}\n"
         f"{_DIRECTIVE_NOTE.get(directive, _DIRECTIVE_NOTE['probe'])}\n"
     )

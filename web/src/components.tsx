@@ -537,9 +537,11 @@ export function ReasoningTile({
                       <span
                         class={`facet-chip${i === 0 ? " lead" : ""}${
                           c.score < 0 ? " neg" : ""
-                        }`}
+                        }${c.parent ? " child" : ""}`}
                         key={c.value}
+                        title={c.parent ? `refines “${c.parent}”` : ""}
                       >
+                        {c.parent ? "› " : ""}
                         {c.value} <b>{c.score}</b>
                       </span>
                     ))

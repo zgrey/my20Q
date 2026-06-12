@@ -80,6 +80,10 @@ def dump(path: str) -> None:
             if board.get("restarts"):
                 reasons = [x.get("reason", "?") for x in board["restarts"]]
                 print(f"    restarts: {len(reasons)} ({', '.join(reasons)})")
+            if board.get("edges"):
+                for cat, links in board["edges"].items():
+                    pairs = ", ".join(f"{p} › {c}" for c, p in links.items())
+                    print(f"    edges {cat:6s}: {pairs}")
             if board.get("final"):
                 print("    final board:")
                 for cat, pairs in board["final"].items():

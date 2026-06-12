@@ -629,7 +629,9 @@ async def test_add_context_steers_and_boosts(topics: list[Topic]) -> None:
     assert "context" in [h["kind"] for h in rnd.history]
     assert ev.text != first.text
     what = next(f for f in ev.facets if f["category"] == "what")
-    assert what["contenders"][0] == {"value": "a drink", "score": 2.0}
+    assert what["contenders"][0] == {
+        "value": "a drink", "score": 2.0, "parent": None,
+    }
 
 
 async def test_undo_removes_context_boost(topics: list[Topic]) -> None:
@@ -842,6 +844,70 @@ async def test_pin_focus_targets_weakest_slot_after_rejection(
     focus, directive, _ = rnd._pick_focus(rnd._replay_board(), rnd._history)
     # what is confident (2.0); how (0.5) is the utterance's weak detail.
     assert (focus, directive) == ("how", "pin")
+
+
+# ------------------------------------------ refinement links (W3-H)
+
+
+async def test_refines_tag_recorded_and_frontier_woven(
+    topics: list[Topic],
+) -> None:
+    # e2e: a refinement-tagged yes deepens the WEAVE (the draft says the
+    # fine value) while family confidence absorbs the fragmentation.
+    state = {"q": 0}
+    script = [
+        {"question": "Are you feeling discomfort?",
+         "slots": {"what": "discomfort"}},
+        {"question": "Is the discomfort more like tingling?",
+         "slots": {"what": "tingling"}, "refines": {"what": "discomfort"}},
+    ]
+
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "starting GUESSES" in system:
+            return json.dumps({"what": ["discomfort", "an ache"],
+                               "where": ["legs", "back"],
+                               "how": ["adjust position"]})
+        if "pin down the ONE specific" in system:
+            return "thinking"
+        if "Convert a drafted question" in system:
+            payload = script[min(state["q"], len(script) - 1)]
+            state["q"] += 1
+            return json.dumps({**payload, "preface": "", "rationale": "x"})
+        return json.dumps({"utterance": "It tingles."})
+
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=MockBackend(responder=responder), rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # discomfort +1
+    await rnd.answer(Answer.YES)  # tingling +1, refines discomfort
+    entry = next(h for h in rnd.history if h.get("refines"))
+    assert entry["refines"] == {"what": "discomfort"}
+    board = rnd._replay_board()
+    assert rnd._edges["what"]["tingling"] == "discomfort"
+    assert rnd._weave(board)["what"] == "tingling"  # frontier, not the root
+    assert any(p["value"] == "tingling" for p in rnd.banner()["parts"])
+
+
+def test_family_confidence_ends_the_what_hammering(topics: list[Topic]) -> None:
+    # Thigh-round shape: with refinements linked, the what FAMILY is
+    # established, so focus moves to the open core slot instead of drilling
+    # the fragmented sensation for the 22nd time.
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend(),
+                rng=_FixedRandom(0.99))
+    rnd._seed_values = {"what": ["discomfort"], "where": ["legs", "back"],
+                        "how": ["adjust position"]}
+    rnd._history = [
+        {"kind": "query", "text": "d1", "answer": "yes",
+         "slots": {"what": "discomfort"}},
+        {"kind": "query", "text": "d2", "answer": "yes",
+         "slots": {"what": "discomfort"}},
+        {"kind": "query", "text": "t1", "answer": "yes",
+         "slots": {"what": "tingling"}, "refines": {"what": "discomfort"}},
+    ]
+    board = rnd._replay_board()
+    focus, directive, _ = rnd._pick_focus(board, rnd._history)
+    assert (focus, directive) == ("where", "probe")
 
 
 def test_replacement_value_extraction() -> None:

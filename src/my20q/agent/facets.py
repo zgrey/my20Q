@@ -233,6 +233,172 @@ def tied_top(
     return None
 
 
+# ----------------------------------------- refinement links (coarse → fine)
+
+#: Per-category child→parent edges: "tingling" refines "discomfort". Derived
+#: deterministically from the board + history tags (replay-safe); edges shape
+#: READING only — scores stay flat and text-anchored (the Aaron rule).
+Edges = dict[str, dict[str, str]]
+
+
+def empty_edges() -> Edges:
+    return {cat: {} for cat in CATEGORIES}
+
+
+def _is_ancestor(cat_edges: Mapping[str, str], node: str, of: str) -> bool:
+    """Whether `node` sits on `of`'s ancestor chain (cycle guard)."""
+    cur = of
+    for _ in range(12):
+        if cur not in cat_edges:
+            return False
+        cur = cat_edges[cur]
+        if cur == node:
+            return True
+    return False
+
+
+def derive_edges(board: Board, tags: list[tuple[str, str, str]]) -> Edges:
+    """Child→parent edges from explicit tags + a lexical-subset fallback.
+
+    Explicit ``(cat, child, parent)`` tags (history order, first one wins)
+    attach only when BOTH values already exist on the board — a tag can link
+    contenders, never resurrect or invent them. The fallback links an
+    untagged value to the largest OLDER value whose content tokens it wholly
+    contains ("upper thigh" ⊃ "thigh"; "a specific cleanup task" ⊃ "a task")
+    — insertion order makes that acyclic by construction; synonym
+    refinements (tingling → discomfort) need the explicit tag.
+    """
+    edges = empty_edges()
+    for cat, child, parent in tags:
+        if cat not in board:
+            continue
+        ck = _find(board[cat], child)
+        pk = _find(board[cat], parent)
+        if ck is None or pk is None or ck == pk or ck in edges[cat]:
+            continue
+        if _is_ancestor(edges[cat], ck, pk):
+            continue  # would cycle
+        edges[cat][ck] = pk
+    for cat in CATEGORIES:
+        keys = list(board.get(cat, {}))
+        for i, child in enumerate(keys):
+            if child in edges[cat]:
+                continue
+            ctok = _content_tokens(child)
+            if not ctok:
+                continue
+            best: str | None = None
+            best_size = 0
+            for parent in keys[:i]:  # only OLDER values can parent
+                ptok = _content_tokens(parent)
+                if not ptok or len(ptok) >= len(ctok):
+                    continue
+                contained = all(
+                    any(_tokens_match(p, c) for c in ctok) for p in ptok
+                )
+                if contained and len(ptok) > best_size:
+                    best, best_size = parent, len(ptok)
+            if best is not None and not _is_ancestor(edges[cat], child, best):
+                edges[cat][child] = best
+    return edges
+
+
+def family_root(cat_edges: Mapping[str, str], value: str) -> str:
+    cur = value
+    for _ in range(12):
+        if cur not in cat_edges:
+            return cur
+        cur = cat_edges[cur]
+    return cur
+
+
+def _depth(cat_edges: Mapping[str, str], value: str) -> int:
+    d = 0
+    cur = value
+    while cur in cat_edges and d < 12:
+        cur = cat_edges[cur]
+        d += 1
+    return d
+
+
+def families(board: Board, cat: str, edges: Edges) -> list[tuple[str, float]]:
+    """(root, family mass) per LIVE family, highest mass first.
+
+    Family mass sums the NON-NEGATIVE member scores: a child's yes lifts the
+    family (the implicit upward credit), a child's no hits only that child —
+    failed fine guesses never erode the family's standing, so an established
+    parent stays locked while the round weaves through its children. (The
+    owner's "functional protection", delivered at read time instead of by
+    propagated points — propagation would write credit onto values the
+    question never said, the Aaron-bug class.)
+    """
+    cat_edges = edges.get(cat, {})
+    masses: dict[str, float] = {}
+    alive: set[str] = set()
+    for value, score in board.get(cat, {}).items():
+        root = family_root(cat_edges, value)
+        masses[root] = masses.get(root, 0.0) + max(0.0, score)
+        if score > ELIMINATE_FLOOR:
+            alive.add(root)
+    ranked = [(r, m) for r, m in masses.items() if r in alive]
+    ranked.sort(key=lambda t: t[1], reverse=True)
+    return ranked
+
+
+def family_confident(
+    board: Board, cat: str, edges: Edges, *, ready_points: float, margin: float
+) -> bool:
+    """`confident`, read at family level (mass + lead over the rival family)."""
+    ranked = families(board, cat, edges)
+    if not ranked or ranked[0][1] < ready_points:
+        return False
+    if len(ranked) == 1:
+        return True
+    return (ranked[0][1] - ranked[1][1]) >= margin
+
+
+def frontier(
+    board: Board, cat: str, edges: Edges, *, min_own: float = YES_POINTS
+) -> tuple[str, float] | None:
+    """The weave value: the leading family's deepest member with own score
+    ≥ ``min_own`` (one confirmed yes — verify-on-lock covers thin locks).
+
+    Ties prefer the higher own score. When no member is confirmed at
+    ``min_own`` the best positive member stands in (often the root), and if
+    a once-confirmed child later loses support the frontier RETREATS to its
+    parent — the draft coarsens honestly instead of clinging to a value the
+    answers no longer back.
+    """
+    ranked = families(board, cat, edges)
+    if not ranked or ranked[0][1] <= 0:
+        return None
+    cat_edges = edges.get(cat, {})
+    root = ranked[0][0]
+    members = [
+        (v, s)
+        for v, s in board.get(cat, {}).items()
+        if s > ELIMINATE_FLOOR and family_root(cat_edges, v) == root
+    ]
+    qualified = [(v, s) for v, s in members if s >= min_own]
+    if qualified:
+        return max(qualified, key=lambda t: (_depth(cat_edges, t[0]), t[1]))
+    positive = [(v, s) for v, s in members if s > 0]
+    return max(positive, key=lambda t: t[1]) if positive else None
+
+
+def chain(cat_edges: Mapping[str, str], value: str) -> list[str]:
+    """Root-first ancestry path ending at `value` (for rendering `a › b › c`)."""
+    path = [value]
+    cur = value
+    for _ in range(12):
+        if cur not in cat_edges:
+            break
+        cur = cat_edges[cur]
+        path.append(cur)
+    path.reverse()
+    return path
+
+
 # --------------------------------------------------- question-text anchoring
 
 #: Filler tokens that don't identify a contender on their own.
@@ -483,15 +649,43 @@ def classify_direction(question: str, who_names: list[str]) -> str | None:
     return None
 
 
-def facet_view(board: Board, focus: str = "") -> list[dict]:
+def facet_view(board: Board, focus: str = "", edges: Edges | None = None) -> list[dict]:
     """The cockpit tile payload: every category with its top live contenders.
 
     Raw accumulated points (can be 0 / negative for shown leaders' rivals) —
-    that is the actual consensus right now, honestly displayed.
+    that is the actual consensus right now, honestly displayed. With `edges`,
+    contenders come family-grouped (each family's chain in root→leaf order,
+    families by mass) and each contender carries its `parent`, so the tile
+    can render the dive: ``discomfort › tingling``.
     """
     view: list[dict] = []
     for cat in CATEGORIES:
-        contenders = [{"value": v, "score": round(s, 2)} for v, s in live(board, cat)[:MAX_LISTED]]
+        if edges is not None and edges.get(cat):
+            cat_edges = edges[cat]
+            ranked_live = dict(live(board, cat))
+            ordered: list[tuple[str, float]] = []
+            for root, _mass in families(board, cat, edges):
+                fam = [
+                    (v, s)
+                    for v, s in ranked_live.items()
+                    if family_root(cat_edges, v) == root
+                ]
+                # Chain order: shallow → deep, higher score first among peers.
+                fam.sort(key=lambda t: (_depth(cat_edges, t[0]), -t[1]))
+                ordered.extend(fam)
+            contenders = [
+                {
+                    "value": v,
+                    "score": round(s, 2),
+                    "parent": cat_edges.get(v),
+                }
+                for v, s in ordered[:MAX_LISTED]
+            ]
+        else:
+            contenders = [
+                {"value": v, "score": round(s, 2), "parent": None}
+                for v, s in live(board, cat)[:MAX_LISTED]
+            ]
         view.append(
             {
                 "category": cat,

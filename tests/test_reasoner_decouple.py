@@ -251,6 +251,25 @@ async def test_flip_raises_when_no_usable_flip_emerges() -> None:
         )
 
 
+# ------------------------------------------------------------------ refines
+
+
+async def test_refines_tag_is_board_anchored() -> None:
+    tagged = {"question": "Is it more like a framed photo?",
+              "slots": {"what": "a framed photo"},
+              "refines": {"what": "a picture"}, "rationale": "x"}
+    action = await _ask(MockBackend(responder=_format_responder([tagged])))
+    assert action.refines == {"what": "a picture"}  # the parent exists
+
+
+async def test_refines_to_an_unknown_parent_is_dropped() -> None:
+    ghost = {"question": "Is it more like a framed photo?",
+             "slots": {"what": "a framed photo"},
+             "refines": {"what": "a daguerreotype"}, "rationale": "x"}
+    action = await _ask(MockBackend(responder=_format_responder([ghost])))
+    assert action.refines == {}  # a refines tag can never resurrect a value
+
+
 # ------------------------------------------------------------------- verify
 
 
