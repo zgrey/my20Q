@@ -8,9 +8,16 @@ each round with the autopsy summary (answer mix, focus histogram, farming
 yeses, verifies/flips/edits/restarts) that previously had to be hand-built.
 """
 
+import contextlib
 import json
 import sys
 from collections import Counter
+
+# Recordings carry unicode (≠ / ⇄ / curly quotes); the legacy Windows console
+# encodes cp1252 and would crash mid-dump — force UTF-8 on the streams.
+for _stream in (sys.stdout, sys.stderr):
+    with contextlib.suppress(AttributeError, ValueError):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def _summary(r: dict) -> None:

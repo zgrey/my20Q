@@ -408,7 +408,9 @@ export function App() {
           <ReviewDashboard audioOn={audioOn} ttsAvailable={ttsAvailable} />
         </main>
       ) : (
-        <main class="grid">
+        <>
+          {/* The living proposal — up top, before everything else, so the
+              caregiver always sees what the round currently believes. */}
           <ProposalBanner
             banner={round?.banner ?? null}
             busy={busy}
@@ -417,6 +419,7 @@ export function App() {
             onAccept={acceptDraft}
             onEdit={editDraft}
           />
+        <main class="grid">
           <ConversationTile round={round} busy={busy} phase={phase} onRetry={retry} />
           {/* Pictogram tile shelved — the curated retrieval mostly fell back
               to "?" in real sessions. Component + backend retrieval are kept;
@@ -443,6 +446,7 @@ export function App() {
             onNewRound={newRound}
           />
         </main>
+        </>
       )}
     </div>
   );

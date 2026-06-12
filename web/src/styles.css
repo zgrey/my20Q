@@ -1467,13 +1467,16 @@ body,
 }
 
 /* ----------------------------- the living proposal banner (W1-C) */
+/* Sits directly under the topbar, ABOVE the tile grid — the first thing
+   the caregiver sees (owner note 06-11: it was missed inside the grid). */
 .banner {
-  grid-column: 1 / -1;
+  margin: 12px 14px 0;
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 10px 16px;
+  flex: 0 0 auto;
 }
 .banner.pending {
   text-align: center;
@@ -1488,9 +1491,32 @@ body,
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
 }
+/* Propose-ready: unmistakable (owner note 06-11 — the subtle glow was
+   too subtle). Breathing accent halo on the whole banner + a pulsing ✓. */
 .banner.draft.ready {
-  border-color: var(--accent);
-  box-shadow: 0 0 14px var(--accent-soft, rgba(0, 94, 162, 0.35));
+  border-color: var(--accent-hover);
+  animation: bannerReady 1.8s ease-in-out infinite;
+}
+@keyframes bannerReady {
+  0%,
+  100% {
+    box-shadow: 0 0 4px 1px var(--accent-soft);
+  }
+  50% {
+    box-shadow: 0 0 24px 5px var(--accent-hover);
+  }
+}
+.banner.draft.ready .banner-btn.accept {
+  animation: acceptPulse 1.8s ease-in-out infinite;
+}
+@keyframes acceptPulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.12);
+  }
 }
 .banner-row {
   display: flex;

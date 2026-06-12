@@ -107,6 +107,59 @@ slots is high single digits.
 
 ---
 
+## 1b. Evidence — the second trial (06-11 PM, four rounds)
+
+Fresh targets, four models/rounds, the full W1-A/B/C + W2-F stack live.
+
+| Round | Model | Target | Outcome |
+|---|---|---|---|
+| my_people | gemma4:e4b | "miss Aaron, plan dinner soon" | **✓ 32 q, 0 restarts** (was 95/8 on dishes) |
+| physical_health | gemma4:e4b | "tingling pain, right leg/thigh" | ✓ 42 q, 0 restarts — but `what` focused 22×, `where` 5× |
+| mental_health | gemma3:12b | "confused about what's on TV" | ✗ 11 q → 3 diagnostics (model unusable) |
+| mental_health | gemma4:26b | same | ✗ abandoned at 7 q (latency unusable) |
+
+**Validated:** focus v3 (the metronome is gone — Aaron's spread was
+what=12 who=9 why=5 how=3 where=2 when=1; zero restarts in both e4b
+rounds); verify-on-lock (3 fires, all on kinda/context-locked pairs);
+the banner + ✗ flow (used naturally: 3 bans, 3 mutes across rounds);
+flips (3, all re-anchored). gemma4:e4b is the clear front-runner;
+gemma3:12b cannot drive the pipeline; gemma4:26b is latency-priced out.
+
+**B1 · `where` starved structurally in the body round (owner's complaint
+— confirmed, three interlocking causes).** (a) `where` is not core for
+physical_health and held junk place-seeds (chair / bathroom / room /
+nearby — ROOM places, not BODY regions), so the one location channel was
+unanswerable; (b) the decisive location answers were tagged elsewhere —
+q33 *"…when you try to move your right leg?"* → YES was tagged
+`{what: tingling}` only, so **"right leg" was never credited anywhere**
+(the dishes-q93 pattern again — W2-E); (c) when "upper thigh" finally
+scored (+1 at q39), q42's no clawed it back to 0.0 as the lowest tagged
+pair. The final utterance says "upper thigh" only because the LLM weave
+read the history; the board never knew.
+
+**B2 · `what` fragmentation caused the 22× hammering (W3-H, second
+sighting).** pain / discomfort / pins-and-needles / tingling / buzzing —
+five contenders for ONE sensation, splitting credit (+5.5/+2.5/+2/+1/+1),
+keeping `what` permanently least-confident, so the drill policy correctly
+kept choosing it. The dishes round showed the coarse face of this gap
+(stale leader); this round shows the fine face (fragmented refinements).
+Refinement links fix both.
+
+**B3 · ✗-notes carry REPLACEMENT semantics the parser drops (new).** All
+three value-bans were actually replacements: *"plans seem to be dinner"*,
+*"Replace a visit with dinner"*, *"she seems to be indicating the right
+leg is the body part"*. The parser banned X each time but never minted Y —
+"dinner" never became a contender (the Aaron round's what-slot ended led
+by junk at +1.0), "right leg" never entered `where`. The weave rescued
+both finals via history, but the board flew blind.
+
+**B4 · Feelings rounds open with emotion-name bingo.** Both mental_health
+rounds enumerated angry/worried/sad/scared/lonely serially; "confused"
+was not in the seeds and enumeration never reaches it. Seed/hint gap +
+the EIG gap (W2-E/G1).
+
+---
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -278,7 +331,12 @@ after W2-F. **Acceptance:** dishes-round replay shows a draft from the
 first established slot; no engine-initiated proposals; an X-note bans a
 value that then disappears from questioning and speech.
 
-### W1-D · Caregiver directive channel — Status: PROPOSED
+### W1-D · Caregiver directive channel — Status: PROPOSED · **DEMOTED (06-11 trial)**
+
+> The banner's ✗-flow absorbed most of D's reason to exist: across four
+> trial rounds the owner steered entirely through ✗-bans/mutes and plain
+> context — no "focus on X" note was typed. D stays queued (the directive-
+> leak guard is still wanted) but drops behind W1-E and W3-H.
 
 **Problem (A3).** "Focus on X / ignore Y" notes neither steer focus nor are
 protected from being mis-read as evidence (the `when:'later'` +2 credit from
@@ -306,6 +364,54 @@ for D is the FOCUS half of A3:
 must co-occur. **Acceptance:** replaying A3's note yields forced what-focus
 for 3 turns and no `when` credit; "she pointed at the kitchen" behaves as
 today.
+
+### W1-E · Per-topic facet priorities, body-aware seeds, replacement edits — Status: PROPOSED (owner-requested, 06-11 trial)
+
+**Problem (B1/B3/B4).** The body round starved `where` (junk room-place
+seeds; not core; unreachable until late); ✗-notes that *replace* a value
+("plans seem to be dinner") only ban, never mint; feelings seeds lack the
+non-emotion states (confusion) so rounds open with emotion-name bingo.
+
+**Proposal — three coordinated data/parser changes:**
+
+1. **Per-topic priorities** (the owner's ask — all in `topics.yaml`, no
+   engine logic). Draft, reasoned per topic:
+   - `my_people` — KEEP `core [who, how]`, `priority [who, how, what, why,
+     when, where]` (validated: Aaron round, 32 q).
+   - `physical_health` — **core → `[what, where]`** (a body report is
+     sensation + location before anything; the remedy follows). `priority
+     [what, where, how, why, when, who]`. For non-localized wants (thirst)
+     `where` never goes positive: the caregiver ✗-mutes it (one tap — the
+     owner already does this naturally) or accepts pre-ready. Probe order =
+     core order, so `where` is probed the moment `what` has any signal —
+     the structural fix B-priorities alone cannot deliver.
+   - `mental_health` — KEEP `core [what, why]`; `priority [what, why, who,
+     how, when, where]` (feelings are often about a person → who before
+     how; place/time last).
+   - `general` — KEEP `core [what, how]`; `priority [what, how, where,
+     who, why, when]`.
+2. **Body-aware `where` seeds + hint.** physical_health's topic hint
+   redefines `where` as the BODY REGION (head / back / arms / legs /
+   stomach / chest …), not a room — B1(a)'s junk seeds (chair, bathroom,
+   nearby) made the slot unanswerable. mental_health's hint gains the
+   non-emotion states (confused, overwhelmed, bored) so seeds stop being
+   pure emotion-name bingo (B4).
+3. **Replacement semantics in ✗-notes.** Patterns like "X seems to be Y",
+   "replace X with Y", "not X, [it's] Y" ban X **and mint Y** in the same
+   category at context strength (+2) — recorded in the same edit entry
+   (`ban` + `mint`). Fallback: after any ban, leftover content tokens of
+   the note (minus the banned value's and stopwords) mint into the banned
+   category. All three trial bans were replacements; the board never
+   learned "dinner" or "right leg".
+
+**Touches:** `topics.yaml` (+ hints), `dialogue.edit`/`_parse` (+ mint in
+replay), tests. **Risks:** body-core `[what, where]` delays readiness for
+non-localized wants (mitigated by mute + accept-anytime); replacement
+minting could mint junk from a chatty note (mitigated: mint only from the
+ban path, value capped at a few tokens). **Acceptance:** replaying B1's
+round, `where` is probed within the first ~6 queries and "right leg"
+enters the board at the ✗-edit; "plans seem to be dinner" yields
+`what: dinner +2` struck-for-struck.
 
 ### W2-E · Candidate selection + tag rescue + pronoun folding — Status: PROPOSED
 
@@ -390,7 +496,14 @@ invariant).
 one command reproduces §1's table for any recording or simulated run; W1
 fixes show a measured Δ on the dishes fixture.
 
-### W3-H · Refinement links — coarse→fine inside a slot — Status: PROPOSED
+### W3-H · Refinement links — coarse→fine inside a slot — Status: PROPOSED · **PROMOTED (06-11 trial)**
+
+> Second sighting, opposite face: the dishes round showed the COARSE
+> failure (stale leader uncatchable by refinements); the thigh round shows
+> the FINE failure (pain / discomfort / pins-and-needles / tingling /
+> buzzing fragmenting one sensation across five rivals at
+> +5.5/+2.5/+2/+1/+1, keeping `what` least-confident and drawing 22 of 42
+> focuses). One missing structure, both costs. H moves to next-after-W1-E.
 
 **Problem (A1, audit G4 — the single biggest cost in this round).** Fine
 values fight the coarse value they refine; the weave stays vague; restarts
@@ -479,11 +592,12 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 |----|-------|--------|
 | W1-A | Rephrase default → 1 | **IMPLEMENTED** (owner-decided 06-11) |
 | W1-B | Focus v3: retire/widen/rotate-on-stall | **IMPLEMENTED** (06-11, amended: ratio retirement, banded priority) |
-| W1-C | The living proposal banner (Speak / ✓ / ✗-edits) | **IMPLEMENTED** (06-11, owner-designed; ✓-modal incl.) |
-| W1-D | Focus directives in the context field (shrunk by C) | PROPOSED |
-| W2-E | Candidates + tag rescue + pronoun fold | PROPOSED |
-| W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11) |
+| W1-C | The living proposal banner (Speak / ✓ / ✗-edits) | **IMPLEMENTED** (06-11; validated in trial 2 — banner moved up top + ready-glow strengthened per owner notes) |
+| W1-D | Focus directives in the context field (shrunk by C) | PROPOSED · demoted (✗-flow absorbed it in trial 2) |
+| W1-E | Per-topic priorities · body-aware seeds · replacement ✗-edits | **PROPOSED** ← next for iteration |
+| W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (B1: the right-leg yes wasted on established tags — third sighting) |
+| W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11; 3 clean fires in trial 2) |
 | W2-G | Noise bench | PROPOSED |
-| W3-H | Refinement links (coarse→fine) | PROPOSED |
+| W3-H | Refinement links (coarse→fine) | PROPOSED · **promoted: next after W1-E** (fragmentation = 22× what-hammering in trial 2) |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | PROPOSED |
