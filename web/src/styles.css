@@ -725,7 +725,7 @@ body,
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
-/* Secondary actions — Undo + Quit, smaller, beneath the grid. */
+/* Secondary actions — Opposite/Repeat/Undo/Quit, smaller, beneath the grid. */
 .secondary-row {
   display: flex;
   gap: 10px;
@@ -773,6 +773,10 @@ body,
    doesn't answer or unwind it. */
 .answer.flip {
   background: var(--accent);
+}
+/* Repeat — a readout utility, not an answer: neutral like undo. */
+.answer.repeat {
+  background: var(--neutral);
 }
 .answer.quit {
   background: var(--neutral-strong);

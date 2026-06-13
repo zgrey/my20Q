@@ -568,11 +568,13 @@ interface InputProps {
   canAnswer: boolean;
   canUndo: boolean;
   canFlip: boolean;
+  canRepeat: boolean;
   terminal: boolean;
   busy: boolean;
   onAnswer: (a: Answer) => void;
   onUndo: () => void;
   onFlip: () => void;
+  onRepeat: () => void;
   onSend: (text: string) => void;
   onNewRound: () => void;
 }
@@ -590,11 +592,13 @@ export function InputTile(props: InputProps) {
     canAnswer,
     canUndo,
     canFlip,
+    canRepeat,
     terminal,
     busy,
     onAnswer,
     onUndo,
     onFlip,
+    onRepeat,
     onSend,
     onNewRound,
   } = props;
@@ -636,6 +640,14 @@ export function InputTile(props: InputProps) {
           title="Ask the same question the opposite way around"
         >
           ⇄ Opposite<kbd>O</kbd>
+        </button>
+        <button
+          class="answer repeat"
+          disabled={!canRepeat}
+          onClick={onRepeat}
+          title="Read the current question aloud again"
+        >
+          🔊 Repeat<kbd>R</kbd>
         </button>
         <button class="answer undo" disabled={!canUndo} onClick={onUndo}>
           Undo<kbd>U</kbd>

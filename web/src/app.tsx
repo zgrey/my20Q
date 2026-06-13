@@ -204,6 +204,14 @@ export function App() {
   // The opposition button works on a pending QUERY only — a proposed
   // utterance is confirmed/rejected, not flipped.
   const canFlip = !!round && !busy && !terminal && round.event.kind === "query";
+  // Repeat re-speaks the pending question — only meaningful when there's a
+  // query on screen and a voice to read it.
+  const canRepeat =
+    !!round &&
+    !terminal &&
+    round.event.kind === "query" &&
+    audioOn &&
+    ttsAvailable;
 
   const answer = (a: Answer) => {
     if (sessionId && round && canAnswer) {
@@ -222,6 +230,15 @@ export function App() {
     if (sessionId && round && canFlip) {
       run(() => api.flip(sessionId, round.round_id));
     }
+  };
+  // Re-speak the current question aloud — same lead-in the auto-readout uses,
+  // so a repeat sounds like the original. No server round-trip.
+  const repeat = () => {
+    const ev = round?.event;
+    if (!ev || !canRepeat || !ev.text) return;
+    const spoken = ev.preface ? `${ev.preface} ${ev.text}` : ev.text;
+    lastSpokenRef.current = spoken;
+    speak(spoken);
   };
   // Banner controls: Speak reads the draft (alternates spoken as "or", the
   // ellipsis dropped); ✓ concludes and raises the confirmation modal (the
@@ -330,7 +347,8 @@ export function App() {
     });
   };
 
-  // y/n/k/s answer shortcuts, u = undo, o = opposite (flip), q = new round.
+  // y/n/k/s answer shortcuts, u = undo, o = opposite (flip), r = repeat,
+  // q = new round.
   // The handlers are re-bound each render so they close over current state.
   //
   // While a text-entry surface is focused (the caregiver context field, the
@@ -369,6 +387,9 @@ export function App() {
       } else if (key === "o") {
         e.preventDefault();
         flip();
+      } else if (key === "r") {
+        e.preventDefault();
+        repeat();
       } else if (key === "q") {
         e.preventDefault();
         newRound();
@@ -445,11 +466,13 @@ export function App() {
             canAnswer={canAnswer}
             canUndo={canUndo}
             canFlip={canFlip}
+            canRepeat={canRepeat}
             terminal={!!terminal}
             busy={busy}
             onAnswer={answer}
             onUndo={undo}
             onFlip={flip}
+            onRepeat={repeat}
             onSend={sendContext}
             onNewRound={newRound}
           />
