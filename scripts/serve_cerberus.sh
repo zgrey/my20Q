@@ -16,7 +16,9 @@ set -uo pipefail
 SESSION="my20q"
 PORT="${MY20Q_API_PORT:-8000}"
 REPO="$HOME/Git/GitHub/my20Q"
-PY="$HOME/venv/Scripts/python.exe"
+# Per-project venv (built with `uv venv ~/venvs/my20q` + `uv pip install -e .[api,trials]`).
+# Override with MY20Q_PY to point elsewhere (e.g. the old shared ~/venv) if needed.
+PY="${MY20Q_PY:-$HOME/venvs/my20q/Scripts/python.exe}"
 
 # Local piper TTS — use the shell's values if already exported, else the paths
 # persisted on cerberus (via setx). Inlined into the tmux command below so the
