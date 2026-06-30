@@ -108,7 +108,7 @@ local (piper or kokoro) — there is no cloud-voice path.
 
 ```bash
 # Shared venv (owner's convention) — or your tool of choice
-source ~/venv/Scripts/activate          # Windows / Git Bash
+source ~/venvs/my20q/Scripts/activate          # Windows / Git Bash
 pip install -e ".[dev]"
 pytest
 ```
