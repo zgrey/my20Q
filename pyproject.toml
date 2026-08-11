@@ -19,7 +19,9 @@ dependencies = [
 
 [project.optional-dependencies]
 api = [
-    "fastapi>=0.115",
+    # >=0.133.0 to pull in Starlette >=1.0.1, which fixes CVE-2026-48710
+    # ("BadHost"): a Host-header parsing bug enabling auth bypass -> SSRF.
+    "fastapi>=0.133.0",
     "uvicorn[standard]>=0.30",
 ]
 trials = [
