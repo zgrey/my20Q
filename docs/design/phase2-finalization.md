@@ -95,19 +95,31 @@ as a test dep, or move wholesale), not a one-line bump.
 
 ---
 
-## 3. Recommended merge bar
+## 3. The merge bar — DECIDED (owner, 2026-08-11)
 
-**F1 → F2 → F3 → F4 → merge.** Rationale: F1 is nearly free and derisks
-everything; F2 is zero-risk to the engine and converts the whole convergence
-queue from anecdote to measurement; F3 is the last cheap engine win and wants
-F2 to exist first; F4 prevents `main` from landing with a roadmap that
-describes a system that no longer exists.
+**The bar is F1 → F2 → F3 → F4 → merge.** Rationale: F1 is nearly free and
+derisks everything; F2 is zero-risk to the engine and converts the whole
+convergence queue from anecdote to measurement; F3 is the last cheap engine
+win and wants F2 to exist first; F4 prevents `main` from landing with a
+roadmap that describes a system that no longer exists.
 
-**Merge mechanics.** `CLAUDE.md` specifies squash-merge PRs into `main`. A
-62-commit branch carrying the entire cockpit is the one case where squashing
-destroys real history — the convergence work is a documented sequence of
-owner-iterated proposals, and the autopsies reference commits. **Recommend a
-true merge commit here**, as an explicit, noted exception. Owner's call.
+Concretely, nothing merges until:
+
+- [ ] **F1** — one fresh trial session on the current stack, recorded.
+- [ ] **F2** — W2-G bench lands and reproduces the §1 metrics on a fixture.
+- [ ] **F3** — W2-E lands, with a measured delta on the bench.
+- [ ] **F4** — ROADMAP Phase 2 rewritten; §12 checklist reconciled.
+
+**Merge mechanics — DECIDED: a true merge commit**, as an explicit,
+documented exception to the squash-merge rule in `CLAUDE.md`. A 62-commit
+branch carrying the entire cockpit is the one case where squashing destroys
+real history: the convergence work is a documented sequence of owner-iterated
+proposals, and the autopsies in `convergence-plan.md` reference individual
+commits. Squashing would break those references.
+
+> Note for F4: `CLAUDE.md`'s Git Workflow section says "squash-merge PRs into
+> `main`" without exception. Record this carve-out there so the next session
+> does not read the merge commit as a process violation.
 
 ---
 
