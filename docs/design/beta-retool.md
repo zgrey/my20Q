@@ -411,6 +411,10 @@ Items surfaced after the plan was approved; not yet scheduled into a phase.
   step is a conditional sampling scheme that uses the slider *weights* to
   bias query generation toward the patient's emotional state — a more
   principled mechanism than prompt text alone. To be iterated on next.
+- **Scheduling rounds (owner-requested 2026-08-11).** A scheduling-specific
+  mode of play: converge on scheduling logistics / event planning and
+  synthesize in that register. Post-beta; the requirement and its open
+  questions are recorded in [`scheduling-rounds.md`](scheduling-rounds.md).
 - **Pictogram tile shelved; image slot → generator (under review).** In
   real sessions the curated ARASAAC retrieval mostly fell back to "?", so
   the pictogram tile is unmounted from the cockpit (the `PictogramTile`

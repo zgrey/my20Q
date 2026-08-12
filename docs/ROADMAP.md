@@ -7,6 +7,13 @@ independently testable and produces a usable artifact.
 > lives in [`design/beta-retool.md`](design/beta-retool.md) — the source of
 > truth for beta scope. Phases 0–1 are historical and complete.
 
+> **⚠ The Phase 2 entry below is stale (2026-08-11).** It predates the
+> 5W1H facet-controller rebuild and the entire banner era, and its
+> verification numbers are wrong (211 tests pass now, not 51). For the
+> current state, what remains, and the merge plan, read
+> [`design/phase2-finalization.md`](design/phase2-finalization.md). Rewriting
+> this section is item F4 of that plan.
+
 ## Phase 0 — Repo scaffolding ✅
 
 - `CLAUDE.md` documenting architecture, decisions, UX/safety principles.
@@ -75,6 +82,19 @@ conditional-sampling scheme, and an on-topic LLM auditor.
 3. **Interactive graph visualization** that builds as edits are approved.
 4. **Expensive loop detection** — bridging queries across oscillating topics;
    topic-correlations feeding the graph.
+
+## Phase 3.5 — Scheduling rounds (owner-requested 2026-08-11)
+
+**Goal**: a scheduling-specific mode of play — rounds that converge on
+scheduling logistics or event planning and synthesize an utterance in that
+register ("Aaron's dinner is Saturday — at our house?").
+
+Notable because it is the first topic where `when` carries the round: every
+existing topic ranks `when` 5th or last, and the trials treated `when`-farming
+as waste. Time is natively hierarchical, so it leans hard on W3-H refinement
+links. Not yet iterated or designed — the requirement, the structural notes,
+and the open questions are recorded in
+[`design/scheduling-rounds.md`](design/scheduling-rounds.md).
 
 ## Phase 4 — Patient operational interface
 
