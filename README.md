@@ -20,6 +20,15 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 
 ## Status
 
+> **Parked 2026-08-12.** Work is paused on the `phase2-cockpit` branch (62
+> commits ahead of `main`, 0 behind; 211 tests / ruff / cockpit typecheck all
+> green). Phase 2 is feature-complete but **not yet merged** — the merge bar
+> and the four remaining gates are in
+> [`docs/design/phase2-finalization.md`](docs/design/phase2-finalization.md).
+> **Resume there**, not from `docs/ROADMAP.md` (its Phase 2 entry is stale).
+> Next action: **F1** — one fresh trial session; the engine has not been
+> exercised since 2026-06-13.
+
 - **Phase 1 — backend MVP** ✓ Dialogue engine, topics, Ollama client, safety
   layer, and a Rich-based CLI harness.
 - **Phase 2 — caregiver cockpit** ✓ FastAPI backend + Preact/Vite web cockpit:
@@ -79,6 +88,11 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
   — proposals are iterated with the owner one at a time before implementation.
 - **Phase 3 — caregiver interview + knowledge graph** — deferred (the only
   graph write path).
+- **Phase 3.5 — scheduling rounds** — requested 2026-08-11, not yet designed:
+  a scheduling-logistics / event-planning mode of play. The first topic where
+  `when` would carry the round (every current topic ranks it 5th or last).
+  Requirement and open questions:
+  [`docs/design/scheduling-rounds.md`](docs/design/scheduling-rounds.md).
 
 ## Terminology
 
@@ -90,10 +104,16 @@ stops only: an emergency topic, a caregiver topic switch, or the optional
 `MY20Q_MAX_QUERIES` safety ceiling. The **banner** carries an evolving draft
 from the first converged slot ("I need/want something for/from Rob…" — the
 alternates collapse as evidence arrives), brightens at board-readiness, and
-offers Speak / ✓ accept (an explicit front-and-center confirmation, spoken,
-one "New round" action) / ✗ reject-a-portion (typed edits → struck-out value
-bans and dimmed slot mutes, all undoable; a replacement note — "X seems to
-be Y" — bans X and mints Y onto the board at context strength).
+offers Speak / ⟳ Restate (re-say the same draft in different words) / ✓ accept
+(an explicit front-and-center confirmation, spoken, one "New round" action).
+Corrections go through the **synthesis editor**, not free text: clicking a
+woven segment opens its slot's top board candidates as one-tap chips, a typed
+replacement, and **✕ remove this detail** (mutes the slot). A replacement that
+lexically extends the old value ("tickets" → "Avalanche tickets") *refines* it
+— the parent is kept and the frontier deepens; a genuine swap strikes the old
+value and stands in at caregiver strength. The earlier free-text
+"✗ reject-a-portion" note flow was **retired by W1-F** (it could not tell ban
+from augment from replace — see `docs/design/convergence-plan.md` §1c).
 
 ## Privacy invariant
 

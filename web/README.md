@@ -90,6 +90,10 @@ detail reversed — and keeps waiting. An *action*, not an answer: nothing is
 recorded until the flipped question is answered, and a failed flip leaves the
 question untouched.
 
+**🔊 Repeat** (in the input tile's action row): re-speaks the current question
+aloud, unchanged. Purely an output control — it records nothing, advances
+nothing, and never re-asks the engine.
+
 **Emotion sliders** (in the reasoning tile): ten opposed-emotion pairs, each a
 coarse 5-detent scale (strong/mild each side + neutral) with large pole labels.
 Every change posts the full reading to the backend to colour the next query;
