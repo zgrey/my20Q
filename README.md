@@ -20,24 +20,30 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 
 ## Status
 
-> **Unparked 2026-09-08.** Work continues on the `phase2-cockpit` branch (66
-> commits ahead of `main`, 0 behind; 211 tests / ruff / cockpit typecheck all
-> green). Phase 2 is feature-complete but **not yet merged** — the merge bar
-> and the remaining gates are in
+> **Parked 2026-09-08, mid-merge-bar.** `phase2-cockpit` is 68 commits ahead of
+> `main`, 0 behind, and pushed. All green: **220 tests / 2 skipped**, ruff and
+> cockpit typecheck clean. Phase 2 is feature-complete but **not yet merged** —
+> the bar and the remaining gates are in
 > [`docs/design/phase2-finalization.md`](docs/design/phase2-finalization.md).
 > **Resume there**, not from `docs/ROADMAP.md` (its Phase 2 entry is stale).
 >
-> **F1 is closed.** Trial sessions were sat on 2026-08-31 and 2026-09-01; the
-> autopsy is [`convergence-plan.md`
-> §1d](docs/design/convergence-plan.md). The banner era works — one round
-> synthesized cleanly in 18 queries — but the trial surfaced a reproducible
-> defect in the facet board's **value identity**: fine values collapse onto
-> their coarse incumbent ("right thigh" becomes "right side"), which caps the
-> board at seed granularity, has silently disabled refinement links since they
-> shipped, and writes wrong values into the recorded dataset.
+> The bar is **F1 → F1.5 → F2 → F3 → F4 → merge**. Two gates are cleared:
 >
-> Next action: **W2-K** (gate F1.5) — proposed, awaiting owner iteration before
-> any implementation. The bar is now **F1 → F1.5 → F2 → F3 → F4 → merge**.
+> - **F1 ✓** — trials sat 08-31 / 09-01; autopsy in
+>   [`convergence-plan.md` §1d](docs/design/convergence-plan.md).
+> - **F1.5 ✓** — **W2-K**, the value-identity fix. Fine values were collapsing
+>   onto their coarse incumbent, which capped the board at seed granularity,
+>   wrote wrong values into the recorded dataset, and — by making a tagged
+>   child equal its own named parent — made every refinement edge get dropped.
+>   **Refinement links had therefore never once engaged in production.** Fixed
+>   and verified by replay; **W2-L** (verify wording) and **W2-N** (restart
+>   keeps the profile prior) rode along.
+>
+> **Next: F2, the noise bench** — but land **W2-O** (autopsy instrumentation)
+> first: recordings carry no proposal state, no per-call latency, no restart
+> positions and no gate-rejection reasons, so the bench cannot score honestly
+> until they do. Bench simulator defaults to local `gemma4:e4b`; add the
+> 09-01 body-region round as a canonical fixture.
 
 - **Phase 1 — backend MVP** ✓ Dialogue engine, topics, Ollama client, safety
   layer, and a Rich-based CLI harness.
