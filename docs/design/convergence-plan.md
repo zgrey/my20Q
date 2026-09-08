@@ -220,6 +220,208 @@ changes only the text. 212 tests pass.
 
 ---
 
+## 1d. Evidence — the 08-31 / 09-01 trial (gate F1)
+
+The first trial after the two-month park, and the **first two sessions of the
+banner era** to be recorded. It closes gate F1 of
+[`phase2-finalization.md`](phase2-finalization.md) — and it did what F1 was for:
+it found a regression the June rounds could not have exposed, because June never
+ran a laterality-heavy body round.
+
+`gemma4:e4b` on local Ollama throughout (real profile ⇒ the cloud path is
+refused fail-closed). 8 rounds, 45 answered questions, **1 accepted proposal**.
+
+| Session | Round | Topic | Outcome | Queries | job_b |
+|---|---|---|---|---|---|
+| 08-31 | r1 | my_people | abandoned | 0 | 0.0 |
+| 08-31 | r2 | physical_health | abandoned | 0 | 0.0 |
+| 08-31 | r3 | mental_health | **synthesized** | 18 | **9.556** |
+| 08-31 | r4 | mental_health | abandoned | 0 | 0.0 |
+| 09-01 | r1 | my_people | abandoned | 0 | 0.0 |
+| 09-01 | r2 | physical_health | abandoned | 7 | −0.571 |
+| 09-01 | r3 | physical_health | abandoned | 0 | 0.0 |
+| 09-01 | r4 | physical_health | abandoned | **20** (the cap) | −0.600 |
+
+**What worked — the banner era is sound.** 08-31 r3 locked both core facets
+(`what: confusion +2.0`, `why: about my memory +2.0`) with margin, went ready,
+and the caregiver accepted the LLM weave via a genuine ✓ (`Round.accept`):
+
+> *"I feel this confusion all the time, and it's mostly about my memory,
+> especially worrying about forgetting things that happened in my past."*
+
+Zero diagnostics, one `stalled` restart, and `who` correctly went all-negative
+and was excluded from the weave — the round genuinely was not about a person.
+**Zero literal repeats in either session** (the hard repeat gate holds; the
+"same question 7 times" era is over). Seeding is healthy in every round,
+including the four zero-query ones.
+
+**What failed — the engine cannot retain the specific content of a "yes."**
+Across 09-01, Paula confirmed *toes*, *right leg*, *right thigh*, and *it is
+hurting*; the caregiver typed *"Paula wants do talk about her right side
+paralysis"* and, later, *"Pain in right calf"*. After 27 questions, 3 fail-loop
+restarts, 2 diagnostic cards, 2 typed rescues and ~19 minutes, the board's best
+answer was `pain / right side` — **less specific than the seven words the
+caregiver typed himself**. The 09-01 session is a total loss for the patient.
+
+**C1 · Value identity is the binding constraint (new — the headline).**
+Reproducible with no LLM in the loop:
+
+```
+canonical_value({'where': {'right side': 7.0}}, 'where', 'right leg')      -> 'right side'
+canonical_value(..., 'right thigh')                                        -> 'right side'
+canonical_value(..., 'right arm')                                          -> 'right side'
+mentions("Is the pain you are feeling happening right now?", "right side")  -> True
+canonical_value({'what': {'confusion': 2.0}}, 'what', 'confused')          -> 'confused'  (no fold)
+```
+
+Three faults in the same fifty lines of `facets.py`:
+
+- *Coarse absorption.* `canonical_value` folds at raw token overlap ≥ 0.5, so
+  any two-token value sharing one token collapses. Every laterality-bearing body
+  part *becomes* "right side", which ended at **+7.0** while the actual answer
+  never existed as a value. This also silently disables **W3-H**: `board.edges`
+  is **absent from all 8 rounds** — the child is never minted, so no coarse→fine
+  edge can ever form. The refinement machinery has never once engaged in
+  production.
+- *False credit.* `mentions` is `any()` over the value's content tokens, so a
+  multi-token value is "said" when **one** token appears. q024 *"Is the pain you
+  are feeling happening **right now**?"* credited `where: right side` off the
+  word "right"; 08-31 q007 *"Are you feeling lonely?"* → **no** scored −1.0 on
+  `why: feeling overwhelmed` off the shared stem *feeling*. This is a hole in
+  the very gate built to stop score drift (the Aaron rule): it blocks unrelated
+  subjects but credits anything sharing one stem.
+- *Variant fragmentation.* `canonical_value` compares raw token sets while
+  `mentions` uses the prefix-tolerant `_tokens_match`, so single-token
+  morphological variants never fold: 08-31 ended with `confusion +2.0` beside
+  `confused −1.0`, and `worried +1.0` beside `worry −0.5`.
+
+The corruption reaches the **recorded dataset**, not just the live round:
+`yes_memory_2026-09-01.jsonl` logs *"Is the feeling you are having located in
+your right thigh?"* with `needs: ["feeling", "right side"]`. Job-A/Job-B
+training data is being written with the wrong value. → **W2-K**.
+
+**C2 · A4/B1 again — decisive answers wasted by tag choice, fifth sighting.**
+q005 *"Is the tingling you are feeling in your **toes**?"* → **yes**, tagged
+`{what: tingling}` — "toes" never minted anywhere. q015 *"…located in your right
+**thigh**?"* → **yes**, tagged `{where: right side}`. q018 *"Is the sensation
+you are having in your right thigh because it is **hurting**?"* → **yes**,
+tagged `{where: right side}` only and formally flagged `informative: false` —
+the round's clearest confirmation scored nothing but an already-locked location.
+Rejections vanish the same way: q013 ruled out *pressure* and q019 *burning*,
+neither ever minted, so the engine cannot know it has ruled that axis out and
+re-probes it. This is exactly **W2-E**, but note the ordering consequence: W2-E
+rescues the *tag*, C1 fixes the *identity* the tag lands on. Rescuing onto a
+board that has already collapsed "right thigh" into "right side" buys nothing.
+
+**C3 · Verify-on-lock is unsafe (new).** `prompts._SLOT_PHRASE` feeds "the thing
+or subject" / "the place" into the verify instruction and gemma4 folds that
+vocabulary straight into patient-facing text:
+
+- *"Is the subject you want to discuss tingling?"* (09-01 r2 q006)
+- *"Is the place you want is the right side?"* (09-01 r4 q009 — ungrammatical)
+- *"The subject is pain? Is that correct?"* (09-01 r4 q008)
+
+`auditor._META_PHRASES` contains "the board" and "candidate" but not "the
+subject" / "the place", so nothing caught them — and these were spoken via TTS
+to a patient with documented comprehension confusion. Worse, the verify is
+gate-exempt by construction and applies a full −1.0: **2 of the 3 verifies in
+this trial destroyed a correct belief.** q006 took a **no** on `what: tingling`
+one question after a **yes** on tingling-in-toes, halving it and killing the
+round. q009 fired on `where: right side`, whose only support was a caregiver
+note — which W1-F specified is exempt from verify. → **W2-L**.
+
+**C4 · Caregiver notes are mistranslated (new, and the most damaging single
+event available).** `expand_slots` is instructed to repeat already-on-board
+values verbatim so they are credited; that rule now destroys new information:
+
+- *"…her right side **paralysis**"* → `{where: right side, what: **pain**}`.
+  The note does not say pain. "pain" was fabricated from an existing contender
+  at `CONTEXT_POINTS = 2.0` — enough to lock the slot instantly — which then
+  triggered the verify that got **no**. The engine invented a fact, believed it
+  hard, asked the patient about it, and was told it was wrong.
+- *"Pain in right **calf**"* → `{what: pain, where: right side}`. *calf* is in
+  the note's own words and would have anchored cleanly, but the model preferred
+  the coarse contender already at +5. The word *calf* appears in no question, no
+  slot, and no board in the entire session.
+
+Both notes came after long no-streaks — the caregiver was visibly rescuing a
+failing round, twice, in plain text, and the engine's next questions were about
+doctors, posture, burning and timing. → **W2-M**.
+
+**C5 · Restart deletes the caregiver's name prior (new).** `_restart` reseeds
+with `profile_context = ""`. The profile says *"Rob is the number one
+priority"* and lists the family in ask order; after one restart `who` went from
+`Rob, Zach, Aaron, Julie, Ashley` to `my husband / my caregiver / my daughter /
+a doctor` — generic relations, which are exactly the low-information questions
+the name list exists to prevent, and they drew four consecutive no's. Restart
+also drops all `kinda` mass, erasing the fine-grained signal (the A5 effect,
+still live). What a restart should dump is the *no/kinda score history*, not the
+*identity prior*. → **W2-N**.
+
+**C6 · The autopsy instrumentation cannot support the bench (new — blocks F2).**
+This §1d had to be reconstructed partly by reading engine source, because the
+record does not contain: `seed_context` (the round-opening guiding-context box
+is **never** persisted — and `dump_recording.py`'s `job_b["seed_context"]` probe
+can therefore never fire); banner text or `ready` transitions (so the 09-01
+banner state below is *inference*, not record); per-call latency or token counts
+(turn cost of **~25–65 s/question** had to be derived from `yes_memory`
+timestamps); the position of restarts (markers are stripped from `queries`); the
+gate rejections behind "could not produce a usable question"; and any pending
+unanswered question (08-31 r4 sat 7 min 14 s with zero answers and we cannot see
+what was on screen). W2-G is supposed to automate the §1 metrics — it cannot
+report honestly on data that does not record them. → **W2-O**, an F2
+precondition.
+
+*Inferred banner state (reconstruction, not record).* At abandon, 09-01 r4's
+core facets `[what, where]` were both confident — `what: pain 4.0` (over
+`feeling 3.0`, a margin of exactly 1.0) and `where: right side 7.0` — so the
+banner was **ready and glowing**, weaving `pain / right side / caregiver`. The
+caregiver had an accept button in front of him and declined it, because the
+location was still "right side" after he had twice typed something finer.
+
+**C7 · Smaller, recorded here so they are not lost.**
+
+- *Focus vs. content divergence.* `focus` is what the controller asked for;
+  `slots` is what the model delivered, and they disagree on roughly **9 of 45**
+  turns (q003 `focus=where` asserting only `{what}`; q017/q018 `focus=what`
+  asserting no `what` at all). `_pick_focus` then re-selects the same starving
+  slot, which is what produces r4's `what=11 / 20` histogram.
+- *Semantic enumeration the repeat gate does not catch.* Six confusion-frame
+  questions in 08-31 r3; ten sensation-quality probes across 09-01
+  (discomfort → tingling → numbness → cold → dull ache → pressure → itch →
+  heaviness → burning), against topic hints that say never to enumerate. The
+  `FUTILE_STREAK` guard is **disarmed by C1/C2**: it needs 4 consecutive no's
+  sharing one asserted pair, and the scattered tags never share one.
+- *Vacuous contenders.* `what: feeling +3.0` is a contentless placeholder that
+  came within 1.0 of leading the slot.
+- *Best-effort accepts.* Two questions in 08-31 r3 were asked with the retry
+  budget exhausted and unusable tags; both got "no".
+- *`yes_memory` is written and never read.* 09-01 r2 confirmed *tingling in
+  toes*; r4, same topic, minutes later, re-asked about tingling and got **no**.
+  Its `round_id` (`"r4"`, an ordinal) cannot be joined to the recording's uuid,
+  it carries no `session_id`, its `needs` inherit C1/C2's lossy tagging, and
+  `dated_path` keys on **local** date while `at` is **UTC** — hence a file named
+  `yes_memory_2026-08-31.jsonl` containing only `2026-09-01T02:…` timestamps.
+- *Banner affordances went unused.* No `edit`, `ban`, `mute`, `mint` or
+  `flipped_from` entries exist in either session. Of ✓ / ✗ / ⟳ / ⇄, **only ✓ was
+  ever used, once.** Worth asking the caregiver whether they were undiscovered
+  or unwanted before building more of them.
+- *Profile "never ask" rules are prose-only.* The profile bans questions
+  insinuating Paula can speak; 08-31 q008 asked *"Are you feeling frustrated
+  because it is hard to get your thoughts out right now?"* and drew the round's
+  only `not_sure`. `audit_query` already exists as the code-level backstop for
+  what prompts fail to enforce; hard bans belong there.
+
+**Bottom line.** The failure is *upstream of the banner*. Given a board that
+locks honestly, the banner produces a good utterance and the caregiver accepts
+it (08-31 r3). Given a board whose value identity has collapsed, no amount of
+banner or synthesis work can help — which is why **W2-K is ordered ahead of the
+bench**, as an explicit exception to the "measure first" rule: it is
+deterministic, unit-testable without a bench, and it is corrupting the recorded
+dataset every session it survives.
+
+---
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -238,6 +440,14 @@ Three sorting keys, in order:
 Dependencies: W3-H (refinement links) supersedes parts of W1-B's vagueness
 ranking and W1-C's weave-change test — both are written to degrade
 gracefully into it. W2-G (bench) gates *validation* of everything after it.
+
+**Amended 09-08 by §1d.** One exception to key 2 and to "the bench must exist
+first": **W2-K (value identity) lands before W2-G.** It is deterministic and
+unit-testable with no bench, it has silently disabled W3-H since W3-H shipped,
+and it writes wrong values into the recorded dataset — so measuring first would
+only establish a corrupt baseline. The rest of the new §1d queue (W2-L…W2-Q)
+keeps the normal ordering, except **W2-O**, which W2-G structurally requires.
+New dependency chain: **W2-K → W2-O → W2-G → W2-E**.
 
 ---
 
@@ -507,6 +717,18 @@ wrong in multi-person rounds (guarded: only with a unique positive leader).
 replay credits the unestablished mention; "him/he" no longer appear as
 who-contenders alongside a named leader.
 
+> **Fifth sighting (§1d C2, 09-08)** — *"…tingling in your **toes**?"* → yes,
+> tagged `{what: tingling}`; *"…located in your right **thigh**?"* → yes,
+> tagged `{where: right side}`; *"…because it is **hurting**?"* → yes, tagged
+> `{where: right side}` and flagged `informative: false`. Rejections vanish the
+> same way (*pressure*, *burning* never minted, so the engine re-probes the
+> axis it already ruled out).
+> **Ordering (owner, 09-08): W2-E lands after W2-K.** Rescuing a tag onto a
+> board that has already collapsed "right thigh" into "right side" buys
+> nothing — the identity layer has to be honest before the rescue is worth
+> measuring. Pronoun folding (part 3) is a special case of W2-K's folding rule
+> and should be implemented there or reconciled with it.
+
 ### W2-F · Verify turns + slot-aware repeat exemption — Status: AGREED (owner, 06-11) → IMPLEMENTED
 
 > Owner: "Definitely verify with re-asks — very important functionality I
@@ -556,6 +778,164 @@ invariant).
 one command reproduces §1's table for any recording or simulated run; W1
 fixes show a measured Δ on the dishes fixture.
 
+> **Amended 09-08 (owner):** the simulator defaults to local **`gemma4:e4b`**
+> — `ANTHROPIC_API_KEY` is not set on this machine and a local default keeps
+> the bench reproducible offline. Add the **09-01 right-thigh round** as a
+> canonical fixture beside picture / kitchen / dishes: it is the regression
+> this refresh exists to prevent. **W2-O is a precondition** — the bench
+> cannot report restarts, gate rejections, latency or banner state on
+> recordings that do not carry them. The bench also has **zero test
+> coverage** today; add some.
+
+### W2-K · Value identity — anchoring and folding — Status: PROPOSED (09-08, §1d C1)
+
+**Problem (§1d C1 — the binding constraint, and the only one reproducible with
+no LLM in the loop).** `facets.canonical_value` folds at raw token overlap
+≥ 0.5, so "right leg" / "right thigh" / "right arm" / "right calf" all *become*
+"right side"; `facets.mentions` is `any()` over the value's content tokens, so
+"…happening **right** now?" credits `where: right side` and "Are you feeling
+**lonely**?" penalises `why: feeling overwhelmed`; and because
+`canonical_value` compares raw token sets while `mentions` uses the
+prefix-tolerant `_tokens_match`, single-token variants never fold at all
+(`confusion` beside `confused`, `worried` beside `worry`). Consequences: the
+board cannot get finer than its seeds, `board.edges` is empty in **every**
+recorded round so **W3-H has never engaged in production**, `FUTILE_STREAK` is
+disarmed because scattered tags never share a pair, and the wrong value is
+written into `yes_memory` — i.e. into the Job-A/Job-B dataset.
+
+**Proposal sketch (to be iterated with the owner before implementation).**
+
+1. **Anchoring.** Require **all** content tokens of a multi-token value to
+   appear in the question; keep `any()` only for single-token values. Exclude
+   vacuous tokens (*feeling*, *thing*, *about*, *something*) from anchoring
+   entirely.
+2. **Folding.** Use the same prefix-tolerant `_tokens_match` the anchor uses,
+   so *confused*/*confusion* and *worry*/*worried* fold; and require **head-token
+   agreement** for multi-token values, so a shared modifier ("right", "my",
+   "the") can never collapse distinct heads.
+3. **Vacuous contenders.** Blacklist contentless nouns on mint — `what: feeling`
+   reached +3.0 and came within 1.0 of leading the slot.
+4. **W3-H interaction.** Once "right thigh" survives as its own value, the
+   `derive_edges` lexical-subset fallback should parent it under the coarse
+   value and the frontier should weave the fine one. Verify by replay, not by
+   assertion.
+
+**Touches:** `facets` (`mentions`, `canonical_value`, `_mint`), tests.
+**Risks:** stricter anchoring drops some legitimate credit (mitigation: the
+`_derive_slots` fallback already covers the empty-slots case, and W2-E's tag
+rescue is the designed complement); head-token detection is crude for
+prepositional values ("about my memory"). **Acceptance:** `canonical_value`
+keeps "right thigh" distinct from "right side" and folds "confused" onto
+"confusion"; `mentions("…happening right now?", "right side")` is False; a
+replay of 09-01 r4 carries a fine `where` value and a **non-empty**
+`board.edges`.
+
+**Ordering — decided (owner, 09-08):** W2-K lands **before** W2-G, an explicit
+exception to "no engine change before the bench". It is deterministic and
+unit-testable without a bench, it silently disables an already-shipped feature,
+and it corrupts the recorded dataset every session it survives.
+
+### W2-L · Verify-turn safety — Status: PROPOSED (09-08, §1d C3)
+
+**Problem.** `prompts._SLOT_PHRASE` ("the thing or subject", "the place") leaks
+into patient-facing text — *"Is the subject you want to discuss tingling?"*,
+*"Is the place you want is the right side?"*, *"The subject is pain? Is that
+correct?"* — spoken via TTS to a patient with comprehension confusion.
+`auditor._META_PHRASES` does not contain those stems. The verify is gate-exempt
+and applies a full −1.0, so **2 of 3 verifies in the 08-31/09-01 trial
+destroyed a correct belief**, and one fired on a caregiver-supplied value that
+W1-F declared exempt.
+
+**Proposal.** (a) Add the slot-phrase stems to `_META_PHRASES` and add a
+minimal grammaticality check ("is … is"); (b) rewrite `VERIFY_SYSTEM` to pass
+the *value* without the slot gloss; (c) a verify disagreement should **open a
+split, not erase the pair** — one noisy answer must not undo a genuine
+confirmation; (d) enforce the W1-F exemption: never verify a pair whose only
+support is a caregiver context boost. **Touches:** `prompts`, `auditor`,
+`dialogue` (verify-due check), tests.
+
+### W2-M · Caregiver-note fidelity — Status: PROPOSED (09-08, §1d C4)
+
+**Problem.** The "repeat already-on-board values VERBATIM so they are credited"
+rule in `expand_slots` turns notes into hallucinations: *"right side
+**paralysis**"* → `what: pain` (fabricated, credited +2.0, instantly locking the
+slot, then contradicted by the engine's own verify); *"Pain in right **calf**"*
+→ `where: right side` (the specific location deleted). At
+`CONTEXT_POINTS = 2.0`, a mistranslated note is the single most damaging event
+available to the system — and both notes were the caregiver *rescuing* a
+failing round.
+
+**Proposal.** Extract note-anchored values **first** and mint them as new
+contenders; fold onto an existing contender only on exact or near-exact match
+(reusing W2-K's tightened rule); **never emit a value absent from the note's own
+words**. **Touches:** `prompts.expand_slots` instruction, `dialogue` (context
+path), tests.
+
+### W2-N · Restart keeps the profile prior — Status: PROPOSED (09-08, §1d C5)
+
+**Problem.** `_restart` reseeds with `profile_context = ""`, so the caregiver's
+ordered name list ("Rob is the number one priority") is deleted exactly when the
+round is in trouble; `who` degrades to *my husband / my caregiver / a doctor*
+and draws consecutive no's. Restart also drops all `kinda` mass (the A5 erase
+effect, still live).
+
+**Proposal.** Keep `profile_context` on the recovery reseed — what a restart
+dumps is the *no/kinda score history*, not the *identity prior* — and carry
+`kinda` credits forward at reduced weight. **Touches:** `dialogue._restart`,
+tests. **Risks:** low; the profile prior scores nothing by itself, it only
+shapes seeds.
+
+### W2-O · Autopsy instrumentation — Status: PROPOSED (09-08, §1d C6) · F2 precondition
+
+**Problem.** §1d had to be reconstructed partly from engine source. The record
+carries no `seed_context` (so `dump_recording.py`'s probe for it can never
+fire), no banner text or `ready` transitions, no per-call latency or token
+counts, no restart *position* (markers are stripped from `queries`), no gate
+rejection reasons behind "could not produce a usable question", and no pending
+unanswered question. W2-G is supposed to automate the §1 metrics; it cannot
+report honestly on data that does not record them.
+
+**Proposal.** Snapshot `banner()` alongside every query entry; record
+`seed_context`; record per-call milliseconds; keep restart markers in-sequence
+(flagged) rather than stripping them; record which gate rejected each attempt;
+record a pending question on abandon. **Touches:** `recording.recorder`,
+`dialogue` (history entries), `reasoner` (rejection reasons),
+`scripts/dump_recording.py`, tests. **Risks:** record-schema change — older
+recordings must still dump (the dumper already handles legacy fields).
+
+### W2-P · Focus/content divergence gate + enumeration-axis guard — Status: PROPOSED (09-08, §1d C7)
+
+**Problem.** Roughly **9 of 45** turns assert no slot in the category the
+controller asked for, so `_pick_focus` keeps re-selecting a slot the questions
+never feed (r4's `what=11 / 20`). Separately, the repeat gate blocks rewordings
+but not *semantic enumeration down one axis* — six confusion-frame questions,
+ten sensation-quality probes — and `FUTILE_STREAK` cannot catch it because the
+scattered tags never share a pair.
+
+**Proposal.** A fifth gate rejecting any question that asserts no slot in the
+requested focus category; and an axis-level guard that tracks the semantic
+dimension being enumerated (sub-types of one confirmed parent) and forces a
+category rotation after N misses, independent of pair identity. **Note:** W2-K
+partly re-arms `FUTILE_STREAK` on its own — re-measure after W2-K before
+building the axis guard.
+
+### W2-Q · `yes_memory` integrity and same-session read-back — Status: PROPOSED (09-08, §1d C7)
+
+**Problem.** 09-01 r2 confirmed *tingling in toes*; r4, same topic, minutes
+later, re-asked about tingling and got **no**. The log held the answer.
+Additionally its `round_id` is an ordinal (`"r4"`) that cannot join the
+recording's uuid, it carries no `session_id`, its `needs` inherit C1/C2's lossy
+tagging, and `dated_path` keys on **local** date while `at` is **UTC** (hence
+`yes_memory_2026-08-31.jsonl` containing only `2026-09-01T02:…` timestamps).
+
+**Proposal.** Unify the round id, add `session_id`, make the file key and the
+timestamp the same timezone, and feed *same-session, same-topic* confirmed yeses
+into the seed/ask prompts as established facts. **Open question for iteration:**
+the read-back is a deliberate two-layer-rule boundary (`yes_memory.py` docstring
+says the engine no longer reads the log) — same-session read-back is arguably
+still volatile-layer and permitted, but that is the owner's call, not a
+refactor to make quietly.
+
 ### W3-H · Refinement links — coarse→fine inside a slot — Status: IMPLEMENTED (06-11)
 
 > **Owner decisions:** (1) frontier weaves at ONE confirmed yes —
@@ -579,6 +959,16 @@ fixes show a measured Δ on the dishes fixture.
 > is still coarse — the ✗/pin flows reopen it, but if live rounds show
 > coarse frontiers at retirement, add "frontier confirmed" to the
 > retirement condition. 205 tests pass.
+
+> **Superseded by §1d (09-08): this has never engaged in production.**
+> `board.edges` is **empty in all 8 recorded rounds** of the 08-31/09-01
+> trial. The cause is upstream, in W2-K: `canonical_value` folds every fine
+> value onto its coarse incumbent ("right thigh" *becomes* "right side"), so
+> the child never exists as a contender and `derive_edges` has nothing to
+> link. The Watch above cannot even be evaluated until W2-K lands. Status
+> stays IMPLEMENTED (the code is there and unit-tested) but it is **not
+> validated in the field** — re-check `board.edges` on the first post-W2-K
+> trial before believing any claim about refinement links.
 
 > Second sighting, opposite face: the dishes round showed the COARSE
 > failure (stale leader uncatchable by refinements); the thigh round shows
@@ -678,9 +1068,16 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W1-D | Focus directives in the context field (shrunk by C) | PROPOSED · demoted (✗-flow absorbed it in trial 2) |
 | W1-E | Per-topic priorities · body-aware seeds · replacement ✗-edits | **IMPLEMENTED** (06-11; body core → what+where) |
 | W1-F | The synthesis editor (selectable segments · candidates · ⟳ Restate) | **IMPLEMENTED** (06-11/12, owner-designed; ✗-note UI retired, free-text path hardened) |
-| W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (B1: the right-leg yes wasted on established tags — third sighting) |
-| W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11; 3 clean fires in trial 2) |
-| W2-G | Noise bench | PROPOSED |
-| W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11; non-negative family mass, frontier weaving, chains in the tile) |
+| W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (§1d C2: **fifth sighting** — toes, right thigh, "hurting" all wasted on established tags). Ordered after W2-K |
+| W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11) — but see W2-L: §1d found it unsafe in production |
+| W2-G | Noise bench | PROPOSED · gate **F2** (amended 09-08: local `gemma4:e4b` simulator, right-thigh fixture, needs W2-O) |
+| **W2-K** | **Value identity — anchoring + folding** | **PROPOSED (09-08, §1d C1)** — the binding constraint. Ordered **before** W2-G by owner decision |
+| W2-L | Verify-turn safety | PROPOSED (09-08, §1d C3) — patient-facing; 2 of 3 verifies destroyed a correct belief |
+| W2-M | Caregiver-note fidelity | PROPOSED (09-08, §1d C4) |
+| W2-N | Restart keeps the profile prior | PROPOSED (09-08, §1d C5) — one line |
+| W2-O | Autopsy instrumentation | PROPOSED (09-08, §1d C6) — **F2 precondition** |
+| W2-P | Focus/content gate + enumeration-axis guard | PROPOSED (09-08, §1d C7) — re-measure after W2-K |
+| W2-Q | `yes_memory` integrity + same-session read-back | PROPOSED (09-08, §1d C7) |
+| W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11) — but **never engaged in production**: `board.edges` is empty in all 8 rounds of §1d, blocked by W2-K |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | PROPOSED |
