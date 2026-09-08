@@ -787,7 +787,44 @@ fixes show a measured Δ on the dishes fixture.
 > recordings that do not carry them. The bench also has **zero test
 > coverage** today; add some.
 
-### W2-K · Value identity — anchoring and folding — Status: PROPOSED (09-08, §1d C1)
+### W2-K · Value identity — anchoring and folding — Status: IMPLEMENTED (09-08)
+
+> **Owner-approved and landed 09-08** ("address why drill-down isn't
+> functioning"). **The mechanism was one step deeper than §1d C1 first
+> recorded**, and it is worth stating exactly, because it exonerates the model:
+>
+> 1. The reasoner asked a correct drilling question and tagged it correctly —
+>    `{where: "right thigh"}` **with** `refines: {where: "right leg"}`. The
+>    model was doing its job.
+> 2. `canonical_value` folded the child onto the coarse incumbent, so
+>    `slots["where"]` became `"right side"`.
+> 3. The named parent was *also* `"right side"` — so `_anchored_refines`
+>    (`reasoner.py:693`, "parent must differ from child") **silently dropped
+>    the edge**.
+> 4. The point landed on the coarse value, the child never existed, and
+>    `derive_edges` had nothing to link.
+>
+> So the fold did not merely lose the fine value — it destroyed the explicit
+> refinement tag that would have rescued it. The lexical fallback could not
+> help either: `value_extends("right thigh", "right side")` is False (they are
+> siblings, not a subset pair), so the explicit tag was the only path and the
+> fold closed it.
+>
+> **Shipped:** `head_token` (values are head-final; two values disagreeing on
+> the head are different things however many modifiers they share);
+> `mentions` requires the head plus ≥ 50% token overlap for multi-token values
+> (single-token behaviour unchanged); `canonical_value` never folds across a
+> `value_extends` refinement pair, requires head agreement, and matches with
+> the prefix-tolerant `_tokens_match` so `confused`→`confusion` folds; `_stem`
+> restores a trailing `i`→`y` so `worried`→`worry`; `is_vacuous` blocks
+> contentless placeholder contenders (`what: feeling` reached +3.0).
+> **Verified by replay:** the 09-01 sequence now builds
+> `right side › right leg › right thigh` and the frontier weaves
+> **"right thigh"** — the actual answer — instead of `right side +7.0`.
+> 220 tests pass, ruff clean.
+>
+> **Not done here, deliberately:** W2-E's candidate selection and tag rescue
+> (still F3) — this fixes the identity the tag lands on, not the tag choice.
 
 **Problem (§1d C1 — the binding constraint, and the only one reproducible with
 no LLM in the loop).** `facets.canonical_value` folds at raw token overlap
@@ -835,7 +872,31 @@ exception to "no engine change before the bench". It is deterministic and
 unit-testable without a bench, it silently disables an already-shipped feature,
 and it corrupts the recorded dataset every session it survives.
 
-### W2-L · Verify-turn safety — Status: PROPOSED (09-08, §1d C3)
+### W2-L · Verify-turn safety — Status: PARTLY IMPLEMENTED (09-08)
+
+> **Landed 09-08 — the wording half only.** `prompts.verify_messages` no
+> longer hands the model its slot gloss as a label to reuse: each slot now
+> ships an indefinite description plus a natural example of what the question
+> should sound like, and `VERIFY_SYSTEM` explicitly forbids naming the *kind*
+> of detail. `auditor._META_PHRASES` gains a deliberately narrow backstop list
+> ("the subject", "you want to discuss", "the place you want" …) — narrow on
+> purpose, because re-prompt pressure is what drives fail-loop restarts, so
+> blocking the bare word "the place" would trade one failure mode for another.
+>
+> **Correction to §1d C3 (recorded honestly):** the claim that verify "fired
+> on a value W1-F declared exempt" conflates two paths. W1-F exempts values
+> the caregiver picks in the *synthesis editor*; values extracted from a
+> context *note* are deliberately verified (`dialogue.py:101-104`) precisely
+> because the extraction can be wrong. And in this trial it **worked** —
+> q008's double-check on the fabricated `what: pain` correctly came back
+> **no**. That verify caught a real error; only its phrasing was bad.
+>
+> **Still open:** whether a verify *disagreement* should erase the pair
+> (−1.0, today) or open a split. q006 took a noisy "no" on `what: tingling`
+> one question after a genuine yes and halved it, killing the round. This is
+> an **owner-decided** behaviour (W2-F: "Scoring is the normal rule — no
+> special halving"), so it is not being changed unilaterally. It wants the
+> bench before it is re-decided.
 
 **Problem.** `prompts._SLOT_PHRASE` ("the thing or subject", "the place") leaks
 into patient-facing text — *"Is the subject you want to discuss tingling?"*,
@@ -871,7 +932,13 @@ contenders; fold onto an existing contender only on exact or near-exact match
 words**. **Touches:** `prompts.expand_slots` instruction, `dialogue` (context
 path), tests.
 
-### W2-N · Restart keeps the profile prior — Status: PROPOSED (09-08, §1d C5)
+### W2-N · Restart keeps the profile prior — Status: IMPLEMENTED (09-08)
+
+> **Landed 09-08.** `Round._restart` no longer blanks `profile_context` before
+> the recovery reseed — a one-line deletion. The comment now states the rule
+> it was violating: a restart dumps the **no/kinda score history**, never the
+> **identity prior**. Not done: carrying `kinda` mass forward at reduced
+> weight (the A5 erase effect) — that changes scoring, so it wants the bench.
 
 **Problem.** `_restart` reseeds with `profile_context = ""`, so the caregiver's
 ordered name list ("Rob is the number one priority") is deleted exactly when the
@@ -960,15 +1027,19 @@ refactor to make quietly.
 > coarse frontiers at retirement, add "frontier confirmed" to the
 > retirement condition. 205 tests pass.
 
-> **Superseded by §1d (09-08): this has never engaged in production.**
-> `board.edges` is **empty in all 8 recorded rounds** of the 08-31/09-01
-> trial. The cause is upstream, in W2-K: `canonical_value` folds every fine
-> value onto its coarse incumbent ("right thigh" *becomes* "right side"), so
-> the child never exists as a contender and `derive_edges` has nothing to
-> link. The Watch above cannot even be evaluated until W2-K lands. Status
-> stays IMPLEMENTED (the code is there and unit-tested) but it is **not
-> validated in the field** — re-check `board.edges` on the first post-W2-K
-> trial before believing any claim about refinement links.
+> **§1d (09-08): this had never engaged in production — now unblocked.**
+> `board.edges` was **empty in all 8 recorded rounds** of the 08-31/09-01
+> trial. The cause was upstream, in W2-K: `canonical_value` folded every fine
+> value onto its coarse incumbent ("right thigh" *became* "right side"), which
+> both removed the child and — by making the child equal the parent named in
+> the model's `refines` tag — made `_anchored_refines` drop the edge.
+> `derive_edges` then had nothing to link.
+>
+> **W2-K landed 09-08** and a replay of the 09-01 sequence now builds
+> `right side › right leg › right thigh` with the frontier weaving the fine
+> value. The Watch above is finally *evaluable*: re-check `board.edges` and
+> whether retirement fires on a still-coarse frontier on the next live trial.
+> Until then W3-H is IMPLEMENTED and unit-tested, **not field-validated**.
 
 > Second sighting, opposite face: the dishes round showed the COARSE
 > failure (stale leader uncatchable by refinements); the thigh round shows
@@ -1071,13 +1142,13 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (§1d C2: **fifth sighting** — toes, right thigh, "hurting" all wasted on established tags). Ordered after W2-K |
 | W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11) — but see W2-L: §1d found it unsafe in production |
 | W2-G | Noise bench | PROPOSED · gate **F2** (amended 09-08: local `gemma4:e4b` simulator, right-thigh fixture, needs W2-O) |
-| **W2-K** | **Value identity — anchoring + folding** | **PROPOSED (09-08, §1d C1)** — the binding constraint. Ordered **before** W2-G by owner decision |
-| W2-L | Verify-turn safety | PROPOSED (09-08, §1d C3) — patient-facing; 2 of 3 verifies destroyed a correct belief |
+| **W2-K** | **Value identity — anchoring + folding** | **IMPLEMENTED (09-08)** — drill-down restored; verified by replay (`right side › right leg › right thigh`) |
+| W2-L | Verify-turn safety | **PARTLY IMPLEMENTED (09-08)** — wording fixed; the verify-no scoring question stays open (owner-decided, wants the bench) |
 | W2-M | Caregiver-note fidelity | PROPOSED (09-08, §1d C4) |
-| W2-N | Restart keeps the profile prior | PROPOSED (09-08, §1d C5) — one line |
+| W2-N | Restart keeps the profile prior | **IMPLEMENTED (09-08)** — one line |
 | W2-O | Autopsy instrumentation | PROPOSED (09-08, §1d C6) — **F2 precondition** |
 | W2-P | Focus/content gate + enumeration-axis guard | PROPOSED (09-08, §1d C7) — re-measure after W2-K |
 | W2-Q | `yes_memory` integrity + same-session read-back | PROPOSED (09-08, §1d C7) |
-| W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11) — but **never engaged in production**: `board.edges` is empty in all 8 rounds of §1d, blocked by W2-K |
+| W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | PROPOSED |

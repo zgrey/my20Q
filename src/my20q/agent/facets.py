@@ -94,10 +94,26 @@ def _find(bucket: dict[str, float], value: str) -> str | None:
     return None
 
 
+#: Contentless nouns that identify nothing on their own. Tagged as a value
+#: they become placeholder contenders that compete with the real answer — the
+#: 09-01 round carried `what: feeling` at +3.0, within 1.0 of leading the slot
+#: against `pain`. Only rejected when the value is NOTHING BUT these words:
+#: "feeling cold" and "the feeling in my leg" are perfectly good values.
+_VACUOUS = frozenset(["feel", "feeling", "thing", "stuff"])
+
+
+def is_vacuous(value: str) -> bool:
+    """Whether `value` is made up entirely of contentless placeholder nouns."""
+    tokens = _content_tokens(value)
+    return bool(tokens) and tokens <= _VACUOUS
+
+
 def _mint(board: Board, cat: str, value: str) -> str | None:
     """Ensure `value` exists in `cat` (at 0.0 if new); return its canonical key."""
     value = " ".join(value.split())
     if not value or cat not in board:
+        return None
+    if is_vacuous(value) and _find(board[cat], value) is None:
         return None
     bucket = board[cat]
     key = _find(bucket, value)
@@ -463,8 +479,12 @@ _SUFFIXES = ("ing", "es", "ed", "s")
 def _stem(token: str) -> str:
     for suf in _SUFFIXES:
         if token.endswith(suf) and len(token) - len(suf) >= 3:
-            return token[: -len(suf)]
-    return token
+            token = token[: -len(suf)]
+            break
+    # "worried" -> "worri" -> "worry": without the y-restore, a stemmed
+    # variant never matches its own base form and the two fragment the slot
+    # ("worried" +1.0 beside "worry" -0.5 in the 08-31 round).
+    return f"{token[:-1]}y" if token.endswith("i") else token
 
 
 def _content_tokens(text: str) -> set[str]:
@@ -481,19 +501,46 @@ def _tokens_match(a: str, b: str) -> bool:
     return len(lo) >= 3 and len(hi) >= 4 and hi.startswith(lo)
 
 
+def head_token(value: str) -> str | None:
+    """The value's head — its LAST content token.
+
+    English noun phrases are head-final ("right thigh" → thigh, "a specific
+    cleanup task" → task), so the head is what the value is fundamentally
+    *about*; the tokens before it are modifiers. Two values that disagree on
+    the head are different things, however many modifiers they share.
+    """
+    tokens = [
+        _stem(t)
+        for t in _TOKEN_RE.findall(value.casefold())
+        if len(t) >= 3 and t not in _STOPWORDS
+    ]
+    return tokens[-1] if tokens else None
+
+
 def mentions(text: str, value: str) -> bool:
     """Whether `text` actually says `value` — the crediting anchor.
 
-    True when any content token of the value appears (stemmed, prefix-tolerant)
-    in the text; a value with no content tokens (e.g. "help") falls back to a
-    substring check. This is what stops an answer's points from landing on a
-    contender the question never mentioned.
+    A single-token value matches when that token appears (stemmed,
+    prefix-tolerant); a value with no content tokens (e.g. "help") falls back
+    to a substring check.
+
+    A MULTI-token value additionally requires its :func:`head_token` to appear
+    and at least half its tokens to match. Plain `any()` was far too loose:
+    "Is the pain you are feeling happening **right** now?" credited
+    `where: right side` off the word "right", and "Are you **feeling**
+    lonely?" put −1.0 on `why: feeling overwhelmed`. Both are real 08-31/09-01
+    trial defects — a hole in the very gate built to stop score drift.
     """
     vtok = _content_tokens(value)
     if not vtok:
         return value.casefold().strip() in text.casefold()
     ttok = _content_tokens(text)
-    return any(_tokens_match(v, t) for v in vtok for t in ttok)
+    if len(vtok) == 1:
+        return any(_tokens_match(v, t) for v in vtok for t in ttok)
+    head = head_token(value)
+    if head is None or not any(_tokens_match(head, t) for t in ttok):
+        return False
+    return overlap_ratio(value, text) >= 0.5
 
 
 def overlap_ratio(a: str, b: str) -> float:
@@ -509,10 +556,25 @@ def overlap_ratio(a: str, b: str) -> float:
 def canonical_value(board: Board, cat: str, value: str) -> str:
     """Map a freshly-tagged value onto an existing contender when it's the same.
 
-    Case-insensitive equality or strong token overlap folds variants together
-    ("the picture" → "a picture"), so points accrue to one contender instead of
-    fragmenting across rewordings. Returns `value` unchanged when nothing
-    matches.
+    Folds rewordings together ("the picture" → "a picture") so points accrue to
+    one contender instead of fragmenting. Returns `value` unchanged when
+    nothing matches. Two guards keep it from folding things that are NOT the
+    same — both are 09-01 trial defects:
+
+    * **Never fold across a refinement.** If either value lexically extends the
+      other ("a phone call" ⊃ "a call"), they are parent and child, and folding
+      them collapses the very structure W3-H exists to drill through.
+    * **Multi-token values must agree on their head.** Raw overlap ≥ 0.5 meant
+      any two-token values sharing one token collapsed, so "right leg",
+      "right thigh", "right arm" and "right calf" all *became* "right side" on
+      the shared modifier "right". The board could then never get more specific
+      than its seeds, and — because the folded child then equalled the parent
+      named in the model's ``refines`` tag — every refinement edge was dropped.
+      `board.edges` was empty in all 8 recorded rounds.
+
+    Matching is prefix-tolerant (the same ``_tokens_match`` the anchor uses),
+    so morphological variants like "confused"/"confusion" now fold rather than
+    sitting on the board as rivals.
     """
     bucket = board.get(cat, {})
     exact = _find(bucket, value)
@@ -521,12 +583,20 @@ def canonical_value(board: Board, cat: str, value: str) -> str:
     tokens = _content_tokens(value)
     if not tokens:
         return value
+    head = head_token(value)
     best, best_score = None, 0.0
     for existing in bucket:
         etok = _content_tokens(existing)
         if not etok:
             continue
-        inter = len(tokens & etok) / max(len(tokens), len(etok))
+        if value_extends(value, existing) or value_extends(existing, value):
+            continue  # a refinement pair — keep them distinct so an edge can form
+        if len(tokens) > 1 or len(etok) > 1:
+            ehead = head_token(existing)
+            if head is None or ehead is None or not _tokens_match(head, ehead):
+                continue
+        hits = sum(1 for x in tokens if any(_tokens_match(x, y) for y in etok))
+        inter = hits / max(len(tokens), len(etok))
         if inter > best_score:
             best, best_score = existing, inter
     if best is not None and best_score >= 0.5:

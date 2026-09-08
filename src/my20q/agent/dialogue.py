@@ -1594,13 +1594,19 @@ class Round:
             elif kind == "context" and h.get("slots"):
                 kept = facets.apply_context(kept, h["slots"])
 
-        # 2. Fresh, deliberately broad probes (profile-free; caregiver seed
-        #    context is kept — it is caregiver signal, not a guess-prior).
+        # 2. Fresh, deliberately broad probes. Caregiver seed context AND the
+        #    patient profile are both kept — they are caregiver signal, not
+        #    guess-priors. (The profile used to be blanked here. In the 09-01
+        #    trial that turned `who` from "Rob, Zach, Aaron, Julie, Ashley"
+        #    into "my husband / my caregiver / a doctor" the moment a round
+        #    got into trouble, and those generic relations drew four straight
+        #    no's — exactly the low-information questions the caregiver's
+        #    ordered name list exists to prevent. What a restart dumps is the
+        #    no/kinda SCORE history, never the identity prior. See §1d C5.)
         fresh: dict[str, list[str]] = {}
         if self._reasoner is not None:
             try:
                 ctx = self._reasoner_ctx()
-                ctx["profile_context"] = ""
                 fresh = await self._reasoner.seed_board(
                     seed_universal_wants=self.topic.seed_universal_wants, **ctx
                 )

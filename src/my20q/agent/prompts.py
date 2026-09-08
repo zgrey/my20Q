@@ -176,17 +176,36 @@ OUTPUT — STRICT JSON, nothing else:
 - It SHOULD restate what was asked before — this is a deliberate
   double-check, not a new question. Short, everyday words; no either/or; no
   reasoning language.
+- NEVER describe the KIND of detail you are checking. Words like "the
+  subject", "the thing", "the place", "the timing", "the reason", "the
+  action", "the value" or "you want to discuss" are the engine's own
+  vocabulary — the person hears this question read aloud and those words mean
+  nothing to them. Name the value in ordinary speech instead.
 No medical advice, URLs, markup, or emoji.
 """
 
-#: Plain-language meaning of each slot, for the verify instruction.
+#: What each slot means — GUIDANCE for the model, never words to reuse in the
+#: question. Handing these to the model as a label got them read aloud to the
+#: patient verbatim ("Is the subject you want to discuss tingling?", "Is the
+#: place you want is the right side?"), so each now ships with a natural
+#: example of what the question should sound like instead. See §1d C3.
 _SLOT_PHRASE = {
-    "who": "the other person involved",
-    "what": "the thing or subject",
-    "when": "the timing",
-    "where": "the place",
-    "why": "the reason",
-    "how": "the action wanted",
+    "who": "a person",
+    "what": "a thing or subject",
+    "when": "a time",
+    "where": "a place",
+    "why": "a reason",
+    "how": "an action wanted",
+}
+
+#: One natural phrasing per slot, so the model has a shape to copy.
+_SLOT_EXAMPLE = {
+    "who": 'Is it Rob you want to talk to?',
+    "what": 'Do you mean the dishes?',
+    "when": 'Do you mean this afternoon?',
+    "where": 'Is it in the kitchen?',
+    "why": 'Is it because you are cold?',
+    "how": 'Do you want him to move it?',
 }
 
 
@@ -199,13 +218,19 @@ def verify_messages(
     """Ask for a double-check question for one locked (category, value) pair.
 
     The verify turn's one-shot call — tiny on purpose (no board, no history):
-    it re-asks a single settled detail, so the only inputs are the pair and
-    what the slot means.
+    it re-asks a single settled detail, so the only inputs are the pair, the
+    kind of detail it is, and an example of how that sounds in plain speech.
     """
-    instruction = (
-        f"DETAIL TO DOUBLE-CHECK:\n"
-        f'  {_SLOT_PHRASE.get(category, category)}: "{value}"\n\n'
-    )
+    kind = _SLOT_PHRASE.get(category, category)
+    example = _SLOT_EXAMPLE.get(category)
+    instruction = f'DETAIL TO DOUBLE-CHECK — this is {kind}:\n  "{value}"\n\n'
+    if example:
+        instruction += (
+            f"Ask about it the way this example asks about its own value:\n"
+            f"  {example}\n"
+            f'Say "{value}" out loud in the question. Do NOT say '
+            f'"{kind}" or any other description of the KIND of detail.\n\n'
+        )
     if corrections:
         joined = "\n".join(f"  - {c}" for c in corrections)
         instruction += f"YOUR PREVIOUS ATTEMPT WAS REJECTED:\n{joined}\n\n"

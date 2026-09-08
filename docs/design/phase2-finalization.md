@@ -88,7 +88,7 @@ re-prioritizes everything below.
 §1d](convergence-plan.md). It found a regression, so it *did* re-prioritize
 everything below: **W2-K is now inserted ahead of F2** (see §3).
 
-### F1.5 · W2-K — value identity *(PROPOSED 09-08, inserted by the F1 result)*
+### F1.5 · W2-K — value identity — ✅ **DONE (09-08)**
 The one defect F1 surfaced that cannot wait for the bench.
 `facets.canonical_value` folds every laterality-bearing body part onto
 "right side"; `facets.mentions` credits a multi-token value when a *single*
@@ -97,9 +97,16 @@ make this a gate rather than a queue item: it caps the board at seed-level
 granularity, it has silently disabled **W3-H** since it shipped (`board.edges`
 is empty in all 8 recorded rounds), and it writes the wrong value into
 `yes_memory` — i.e. into the recorded dataset — every session it survives.
-Reproducible with no LLM and unit-testable without a bench. Spec: W2-K in
-`convergence-plan.md`. **Iterate with the owner before implementing**, per the
-repo protocol.
+Reproducible with no LLM and unit-testable without a bench. Spec and the full
+causal chain: W2-K in `convergence-plan.md`.
+
+**Landed 09-08.** The mechanism turned out to be one step deeper than first
+recorded: the fold also destroyed the model's explicit `refines` tag by making
+child and parent identical, which is why `board.edges` was empty everywhere.
+A replay of the 09-01 sequence now builds `right side › right leg › right
+thigh` and weaves the fine value. **W2-L** (verify wording) and **W2-N**
+(restart keeps the profile prior) rode along. `220 passed / 2 skipped`, ruff
+clean.
 
 ### F2 · W2-G — the noise bench *(PROPOSED, scripts-only)*
 The validation instrument, and the most valuable remaining item. Every claim
@@ -167,7 +174,9 @@ Concretely, nothing merges until:
 
 - [x] **F1** — one fresh trial session on the current stack, recorded.
       *(08-31 / 09-01; autopsy in `convergence-plan.md` §1d.)*
-- [ ] **F1.5** — W2-K lands, with unit tests, after owner iteration.
+- [x] **F1.5** — W2-K lands, with unit tests, after owner iteration.
+      *(09-08. Drill-down restored and verified by replay; W2-L wording and
+      W2-N rode along. 220 passed / 2 skipped, ruff clean.)*
 - [ ] **F2** — W2-G bench lands and reproduces the §1 metrics on a fixture
       (needs W2-O first).
 - [ ] **F3** — W2-E lands, with a measured delta on the bench.

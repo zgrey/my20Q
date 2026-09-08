@@ -315,3 +315,90 @@ def test_facet_view_shape() -> None:
     assert who["contenders"][0] == {"value": "Zach", "score": 1.0, "parent": None}
     when = next(v for v in view if v["category"] == "when")
     assert when["contenders"] == [] and when["focus"] is False
+
+
+# --------------------------------------------- W2-K · value identity (09-01)
+# Regressions from the 2026-09-01 trial: every fine body part collapsed onto
+# "right side", which capped the board at seed granularity, silently disabled
+# refinement links, and wrote the wrong value into the recorded dataset.
+# See docs/design/convergence-plan.md §1d C1.
+
+
+def test_shared_modifier_does_not_collapse_distinct_heads() -> None:
+    board = {"where": {"right side": 7.0}}
+    for sibling in ("right leg", "right thigh", "right arm", "right calf"):
+        assert facets.canonical_value(board, "where", sibling) == sibling
+
+
+def test_a_refinement_is_never_folded_onto_its_parent() -> None:
+    # "a phone call" ⊃ "a call": parent and child, not two spellings of one
+    # value — folding them collapses the structure W3-H drills through.
+    board = {"what": {"a call": 3.0}}
+    assert facets.canonical_value(board, "what", "a phone call") == "a phone call"
+
+
+def test_morphological_variants_still_fold() -> None:
+    # 08-31 ended with confusion +2.0 beside confused −1.0, worried +1.0
+    # beside worry −0.5 — one concept, four contenders.
+    board = {"what": {"confusion": 2.0, "worry": 1.0}}
+    assert facets.canonical_value(board, "what", "confused") == "confusion"
+    assert facets.canonical_value(board, "what", "worried") == "worry"
+
+
+def test_rewordings_still_fold() -> None:
+    board = {"what": {"a picture": 2.0}}
+    assert facets.canonical_value(board, "what", "the picture") == "a picture"
+
+
+def test_multi_token_value_needs_its_head_not_just_any_token() -> None:
+    # q024 "Is the pain you are feeling happening RIGHT now?" credited
+    # where=right side off the word "right".
+    assert not facets.mentions(
+        "Is the pain you are feeling happening right now?", "right side"
+    )
+    assert not facets.mentions(
+        "Is the feeling you are having located in your right thigh?", "right side"
+    )
+    assert facets.mentions("Is the place you want the right side?", "right side")
+    # 08-31 q007 "Are you feeling lonely?" put −1.0 on why=feeling overwhelmed.
+    assert not facets.mentions("Are you feeling lonely?", "feeling overwhelmed")
+
+
+def test_single_token_values_still_match_loosely() -> None:
+    assert facets.mentions("Are you feeling any tingling in your feet?", "tingling")
+    assert facets.mentions("Is it hurting?", "hurt")
+
+
+def test_vacuous_placeholders_never_become_contenders() -> None:
+    # `what: feeling` reached +3.0 in the 09-01 round, within 1.0 of leading
+    # the slot against the real answer.
+    board = facets.update(facets.empty_board(), {"what": "feeling"}, "yes")
+    assert board["what"] == {}
+    # ...but a value that merely CONTAINS the word is fine.
+    board = facets.update(facets.empty_board(), {"what": "feeling cold"}, "yes")
+    assert board["what"] == {"feeling cold": 1.0}
+
+
+def test_drill_down_chain_forms_and_the_frontier_reaches_the_fine_value() -> None:
+    """The end-to-end 09-01 failure: the whole point of W2-K.
+
+    The model tagged the fine value AND named its parent; the fold made child
+    and parent identical, so reasoner._anchored_refines dropped the edge and
+    `board.edges` came back empty in all 8 recorded rounds.
+    """
+    board = facets.apply_context(facets.empty_board(), {"where": ["right side"]})
+    tags: list[tuple[str, str, str]] = []
+    for child, parent in (("right leg", "right side"), ("right thigh", "right leg")):
+        credited = facets.canonical_value(board, "where", child)
+        assert credited == child, "the fine value must survive as its own contender"
+        canonical_parent = facets.canonical_value(board, "where", parent)
+        assert canonical_parent != credited, "parent and child must stay distinct"
+        board = facets.update(board, {"where": credited}, "yes")
+        tags.append(("where", credited, canonical_parent))
+
+    edges = facets.derive_edges(board, tags)
+    assert edges["where"] == {
+        "right leg": "right side",
+        "right thigh": "right leg",
+    }
+    assert facets.frontier(board, "where", edges) == ("right thigh", 1.0)

@@ -40,6 +40,24 @@ _META_PHRASES = (
     "yes/no",
     "slot",
     "category",
+    # The verify turn's slot glosses. These reached a patient's ears through
+    # TTS in the 09-01 trial — "Is the subject you want to discuss tingling?",
+    # "Is the place you want is the right side?" — because the gloss was
+    # handed to the model as a label and echoed back. The prompt no longer
+    # does that (prompts._SLOT_PHRASE); this is the backstop that keeps a
+    # leak off the screen even when the model ignores it.
+    # Deliberately narrow: multi-word forms that only occur when the gloss
+    # leaked, so a natural question mentioning "the place" or "the reason"
+    # still passes. Over-blocking here costs a re-prompt, and re-prompt
+    # pressure is what drives fail-loop restarts.
+    "the subject",
+    "the thing or subject",
+    "the action wanted",
+    "the other person",
+    "you want to discuss",
+    "the place you want",
+    "the time you want",
+    "the reason you want",
 )
 
 #: Similarity at or above this ratio counts as a reworded repeat.

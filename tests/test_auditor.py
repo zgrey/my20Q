@@ -31,6 +31,23 @@ def test_audit_flags_leaked_reasoning_language() -> None:
     assert not audit_query("Is this question about the patient feeling cold?").ok
 
 
+def test_audit_blocks_verify_slot_glosses_reaching_the_patient() -> None:
+    # These three were spoken aloud through TTS in the 09-01 trial, because
+    # the verify prompt handed the model its slot gloss as a label and the
+    # model echoed it back. The prompt no longer does that; this is the
+    # backstop. See docs/design/convergence-plan.md §1d C3.
+    for leaked in (
+        "Is the subject you want to discuss tingling?",
+        "Is the place you want is the right side?",
+        "The subject is pain? Is that correct?",
+    ):
+        assert not audit_query(leaked).ok, leaked
+    # The plain phrasings the prompt now asks for must still pass.
+    assert audit_query("Do you mean the dishes?").ok
+    assert audit_query("Is it Rob you want to talk to?").ok
+    assert audit_query("Is it in your right thigh?").ok
+
+
 # ----------------------------------------------------------- the repeat gate
 
 
