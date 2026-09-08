@@ -20,14 +20,24 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 
 ## Status
 
-> **Parked 2026-08-12.** Work is paused on the `phase2-cockpit` branch (62
+> **Unparked 2026-09-08.** Work continues on the `phase2-cockpit` branch (66
 > commits ahead of `main`, 0 behind; 211 tests / ruff / cockpit typecheck all
 > green). Phase 2 is feature-complete but **not yet merged** — the merge bar
-> and the four remaining gates are in
+> and the remaining gates are in
 > [`docs/design/phase2-finalization.md`](docs/design/phase2-finalization.md).
 > **Resume there**, not from `docs/ROADMAP.md` (its Phase 2 entry is stale).
-> Next action: **F1** — one fresh trial session; the engine has not been
-> exercised since 2026-06-13.
+>
+> **F1 is closed.** Trial sessions were sat on 2026-08-31 and 2026-09-01; the
+> autopsy is [`convergence-plan.md`
+> §1d](docs/design/convergence-plan.md). The banner era works — one round
+> synthesized cleanly in 18 queries — but the trial surfaced a reproducible
+> defect in the facet board's **value identity**: fine values collapse onto
+> their coarse incumbent ("right thigh" becomes "right side"), which caps the
+> board at seed granularity, has silently disabled refinement links since they
+> shipped, and writes wrong values into the recorded dataset.
+>
+> Next action: **W2-K** (gate F1.5) — proposed, awaiting owner iteration before
+> any implementation. The bar is now **F1 → F1.5 → F2 → F3 → F4 → merge**.
 
 - **Phase 1 — backend MVP** ✓ Dialogue engine, topics, Ollama client, safety
   layer, and a Rich-based CLI harness.
