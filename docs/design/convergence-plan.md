@@ -759,7 +759,7 @@ who-contenders alongside a named leader.
 "come over today" case passes the gate; verbatim/reword repeats stay
 blocked.
 
-### W2-G · Noise bench — Status: PROPOSED
+### W2-G · Noise bench — Status: IMPLEMENTED (09-08) · gate F2
 
 **Problem (audit G5).** Every claim above is currently judged by single live
 trials. The autopsy in §1 was hand-made; it should be a script output.
@@ -796,6 +796,67 @@ fixes show a measured Δ on the dishes fixture.
 > fixtures are all pre-W2-O recordings, so a `--compare` baseline drawn from
 > them still cannot report the instrumented metrics. Replaying a fixture
 > through the current engine can.
+
+**Landed 09-08.** `scripts/bench_reasoning.py` gained `--noise`, `--compare`,
+`--scenarios`, `--seed`, a `convergence metrics` table, and 15 tests (it had
+none). Three decisions, all owner-approved before building:
+
+1. **The right-thigh fixture is a synthetic analogue**, `leg-laterality`, not
+   the real round. That round was a real-patient session and its clinical
+   detail must never be committed; what regressed was the *mechanism* (a
+   laterality-bearing part folding onto its coarse parent), so any need with
+   the shape *side → limb → part of limb* exercises it identically.
+2. **`--compare` diffs two `--json` files**, not two git revisions — it works
+   on an uncommitted tree, needs no worktree dance, and `bench_*.json` is
+   already gitignored.
+3. **The caregiver's accept is never noised.** The confirm call is the run's
+   ground-truth oracle, so "converged" keeps meaning *converged to the right
+   need despite noise* and a delta stays attributable to the engine.
+
+**Metrics are computed from `build_round_record`, not from the live `Round`** —
+the same artifact `dump_recording.py` reads. That is deliberate: every number
+the bench prints is then provably obtainable from a real recorded session, and
+it is what makes W2-O the precondition rather than a nice-to-have.
+
+**Two defects in the instrument itself, found by running it:**
+
+- *The accept gate was unreachable for a whole class of needs.* The driver only
+  offered the draft when `banner.ready` lit. `physical_health` gates readiness
+  on **what + where**, and a non-localized need (thirst) has no body location —
+  the topic YAML says so outright and expects the caregiver to ✗-mute `where`
+  or accept pre-ready. Those rounds could not converge *by construction*. The
+  driver now offers the draft whenever it changes; `ready` is still recorded
+  per query and reported, it is just no longer the gate.
+- *The simulator was answering with the zero-information answer.* `_SIM_SYSTEM`
+  mapped "unrelated to your need" → `not_sure`, which scores **0**. A thirsty
+  persona asked about tingling therefore gave the board nothing, and one round
+  took ten such answers in a row before any signal reached it. A persona handed
+  its need outright should answer `no` — it knows. `not_sure` now means
+  genuinely cannot tell, and is documented as rare. *(This changes what the
+  bench measures. It is one prompt string and trivially revertible.)*
+
+**First results — the bench's output, not an argument.** `gemma4:e4b` converged
+**0 of 6** rounds across `thirsty`, `leg-laterality`, `cold` and `lonely` at
+caps of 12–20 queries. Two findings fall straight out, both pre-existing and
+both for the queue rather than for F2 (which is scripts-only by design):
+
+- **W2-P, confirmed and quantified.** The focus histograms are lopsided —
+  `what=20 / how=12 / why=8` on one run, `what=12 / where=4` on another — and
+  the transcripts show the enumeration the repeat gate cannot catch: nine
+  consecutive delivery-mechanism questions ("carry it to you", "hand it to
+  you", "set it down"), every one answered `not_sure` because the scenario's
+  need does not specify a delivery mechanism at all.
+- **A new one — the draft does not follow the leader.** In the `cold` round the
+  `what` slot climbed *an object → keeps you warm → fabric → wrap yourself in →
+  blanket*, but the banner text never moved off "an object": the values sat
+  tied at +1.0 with no refinement edge between them (they are not lexically
+  nested, and the model tagged no `refines`), so `frontier` kept returning the
+  incumbent. The draft was offered to the caregiver **once in 20 queries**.
+  Adjacent to W2-E/W3-H; wants its own queue entry.
+
+Caveat on reading one run: `--compare` of two *identical* configurations back to
+back still moved `gate_rejections` 5 → 0 and mean latency by 1.2 s. Single-
+scenario runs are noisy — a real comparison wants the full scenario set.
 
 ### W2-K · Value identity — anchoring and folding — Status: IMPLEMENTED (09-08)
 
@@ -1032,6 +1093,31 @@ category rotation after N misses, independent of pair identity. **Note:** W2-K
 partly re-arms `FUTILE_STREAK` on its own — re-measure after W2-K before
 building the axis guard.
 
+### W2-R · The draft does not follow the leader — Status: PROPOSED (09-08, found by the W2-G bench)
+
+**Problem.** In a bench `cold` round the `what` slot climbed *an object → keeps
+you warm → fabric → wrap yourself in → blanket* across five confirmed yeses,
+and the banner text stayed on **"an object"** the whole way. Each value scored
++1.0 from a single yes, so they sat tied with no leader; none was lexically
+nested in another, and the model tagged no `refines`, so `edges` stayed empty
+and `facets.frontier` kept returning the incumbent family. Consequence: the
+draft was offered to the caregiver **once in twenty queries**, and the round
+could not converge no matter how well the questioning went.
+
+This is the *other* half of W2-K. W2-K fixed the case where a fine value was
+wrongly folded ONTO its parent; this is the case where a fine value is
+correctly kept separate but never linked, so the draft cannot see it. W3-H
+supplies the link when the model tags `refines` or the values nest lexically —
+neither holds for a semantic ladder like object → fabric → blanket.
+
+**Proposal (sketch, not yet iterated).** Some combination of: break the
+frontier tie toward the most RECENTLY confirmed member rather than the
+incumbent; ask the reasoner for a `refines` tag more insistently when the focus
+slot already has a confirmed leader; or a cheap semantic-narrowing check to
+link a new value under an existing one. Wants a bench delta, which now exists.
+**Touches:** `facets.frontier` / `dialogue._weave`. **Risks:** real — it
+changes what the banner says, so it needs the bench on both sides.
+
 ### W2-Q · `yes_memory` integrity and same-session read-back — Status: PROPOSED (09-08, §1d C7)
 
 **Problem.** 09-01 r2 confirmed *tingling in toes*; r4, same topic, minutes
@@ -1187,7 +1273,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W1-F | The synthesis editor (selectable segments · candidates · ⟳ Restate) | **IMPLEMENTED** (06-11/12, owner-designed; ✗-note UI retired, free-text path hardened) |
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (§1d C2: **fifth sighting** — toes, right thigh, "hurting" all wasted on established tags). Ordered after W2-K |
 | W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11) — but see W2-L: §1d found it unsafe in production |
-| W2-G | Noise bench | PROPOSED · gate **F2** — **now unblocked** (amended 09-08: local `gemma4:e4b` simulator, right-thigh fixture; W2-O landed 09-08) |
+| **W2-G** | **Noise bench** | **IMPLEMENTED (09-08)** — gate **F2**: ε-noise, `--compare`, §1 metrics read off the round record, 15 tests. Fixed two defects in the instrument (unreachable accept gate, `not_sure`-biased simulator) |
 | **W2-K** | **Value identity — anchoring + folding** | **IMPLEMENTED (09-08)** — drill-down restored; verified by replay (`right side › right leg › right thigh`) |
 | W2-L | Verify-turn safety | **PARTLY IMPLEMENTED (09-08)** — wording fixed; the verify-no scoring question stays open (owner-decided, wants the bench) |
 | W2-M | Caregiver-note fidelity | PROPOSED (09-08, §1d C4) |
@@ -1195,6 +1281,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | **W2-O** | **Autopsy instrumentation** | **IMPLEMENTED (09-08)** — record carries seed context, per-query banner/timing/rejections, restart positions, pending question; **F2 precondition cleared** |
 | W2-P | Focus/content gate + enumeration-axis guard | PROPOSED (09-08, §1d C7) — re-measure after W2-K |
 | W2-Q | `yes_memory` integrity + same-session read-back | PROPOSED (09-08, §1d C7) |
+| W2-R | Draft does not follow the leader (tied `what` values, no edges) | PROPOSED (09-08) — **found by the bench**; the other half of W2-K |
 | W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | PROPOSED |

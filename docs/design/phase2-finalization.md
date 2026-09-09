@@ -18,7 +18,7 @@ the first time. *(Counts refreshed 2026-09-08; the three added commits are the
 
 | Check | Result |
 |---|---|
-| `pytest` | 237 passed, 2 skipped *(211 → 220 with W2-K, → 237 with W2-O)* |
+| `pytest` | 252 passed, 2 skipped *(211 → 220 W2-K → 237 W2-O → 252 W2-G)* |
 | `ruff check .` | clean |
 | `npm run typecheck` (web) | clean |
 
@@ -138,6 +138,14 @@ honestly moving anything from IMPLEMENTED to VALIDATED.
 > instrumented metrics — replaying them through the current engine is what
 > produces a comparable run. (a), (b) and (d) remain F2's own work.
 
+> **F2 closed 09-08.** The bench exists and reproduces the §1 table. Read its
+> first results before starting F3: `gemma4:e4b` converged **0 of 6** rounds,
+> W2-P is now confirmed *with numbers* (`what=20 / how=12 / why=8`), and a new
+> defect **W2-R** turned up — the banner draft stays on the first `what` value
+> while the slot narrows beneath it, so a round can question well and still
+> never offer an acceptable draft. W2-R may matter more than F3 does; that is
+> an open owner decision now that there is an instrument to settle it with.
+
 ### F3 · W2-E — candidates + tag rescue + pronoun folding *(PROPOSED)*
 The cheapest remaining engine win, and now on its **fifth sighting**: q93's
 dishes yes, the right-leg yes in the body round, the who-fragmentation (Rob
@@ -187,9 +195,11 @@ Concretely, nothing merges until:
 - [x] **F1.5** — W2-K lands, with unit tests, after owner iteration.
       *(09-08. Drill-down restored and verified by replay; W2-L wording and
       W2-N rode along. 220 passed / 2 skipped, ruff clean.)*
-- [ ] **F2** — W2-G bench lands and reproduces the §1 metrics on a fixture.
-      *(Its W2-O precondition landed 09-08 — the record now carries the
-      metrics. F2 itself is untouched and is the next action.)*
+- [x] **F2** — W2-G bench lands and reproduces the §1 metrics on a fixture.
+      *(09-08. `--noise`, `--compare`, `--scenarios`, the convergence-metrics
+      table computed from `build_round_record`, and 15 tests where there were
+      none. Its first run converged 0/6 and immediately confirmed W2-P with
+      numbers and turned up a new defect, **W2-R**.)*
 - [ ] **F3** — W2-E lands, with a measured delta on the bench.
 - [ ] **F4** — ROADMAP Phase 2 rewritten; §12 checklist reconciled.
 
