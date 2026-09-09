@@ -138,13 +138,33 @@ honestly moving anything from IMPLEMENTED to VALIDATED.
 > instrumented metrics — replaying them through the current engine is what
 > produces a comparable run. (a), (b) and (d) remain F2's own work.
 
-> **F2 closed 09-08.** The bench exists and reproduces the §1 table. Read its
-> first results before starting F3: `gemma4:e4b` converged **0 of 6** rounds,
-> W2-P is now confirmed *with numbers* (`what=20 / how=12 / why=8`), and a new
-> defect **W2-R** turned up — the banner draft stays on the first `what` value
-> while the slot narrows beneath it, so a round can question well and still
-> never offer an acceptable draft. W2-R may matter more than F3 does; that is
-> an open owner decision now that there is an instrument to settle it with.
+> **F2 closed 09-08.** The bench exists and reproduces the §1 table. Its first
+> results re-ordered what comes next: `gemma4:e4b` converged **0 of 6** rounds,
+> W2-P is confirmed *with numbers* (`what=20 / how=12 / why=8`), and a new
+> defect **W2-R** turned up.
+>
+> **W2-R was taken ahead of F3 (owner, 09-09) and landed the same day.** The
+> reason it outranks W2-E: running the mechanism down showed the stale draft
+> was only the symptom. A slot whose confirmations fragment across singleton
+> families can never satisfy `family_confident`, so the board never reaches
+> readiness, the LLM weave never runs, and the round is **unwinnable however
+> well it questions**. Rescuing a tag onto a board that cannot reach readiness
+> buys nothing — the same argument that put W2-K ahead of the bench. Full
+> writeup and the star-vs-chain experiment: `convergence-plan.md` W2-R.
+>
+> This is the first engine change **measured** rather than argued about — a
+> full nine-scenario run before and after, diffed with `--compare`. The result
+> is honest and partial: round health improved consistently (farming yeses to
+> zero, diagnostics halved, informative yeses 11 → 23) while **convergence and
+> readiness both stayed at 0/9**. Kept because it is correct, tested and
+> regresses nothing; *not* claimed as a convergence win. That distinction is
+> only available because F2 exists.
+>
+> **The wall has moved to readiness.** No round in either run reached the point
+> where the draft becomes a woven sentence, so no round could be accepted. Two
+> things now cap the measurement independently of the engine — the confirm
+> oracle rejected a draft that plainly captured the need, and W2-P's
+> enumeration is still unaddressed. Worth settling before F3 is judged.
 
 ### F3 · W2-E — candidates + tag rescue + pronoun folding *(PROPOSED)*
 The cheapest remaining engine win, and now on its **fifth sighting**: q93's

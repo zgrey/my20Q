@@ -331,6 +331,11 @@ class Round:
             entry["verify"] = True
         if pending.kind == "query" and pending.refines:
             entry["refines"] = dict(pending.refines)
+        # What the controller was drilling into (W2-R). Recorded on every drill,
+        # answered or not — it is a fact about the question, and an autopsy
+        # wants to see the ladder the controller was trying to walk.
+        if pending.kind == "query" and pending.drill_parent:
+            entry["drill_parent"] = pending.drill_parent
         # Autopsy instrumentation (W2-O): what the turn cost, and which gates
         # rejected earlier attempts at it. Both were discarded before.
         if pending.timings:
@@ -1149,6 +1154,19 @@ class Round:
             exploratory=exploratory,
             **self._reasoner_ctx(),
         )
+        # W2-R: a `drill` is the controller asking to NARROW a slot that
+        # already has a positive leader, so a yes to the resulting question is
+        # a refinement of the value the draft is currently showing — the
+        # frontier, not the leader. (Parenting to the leader builds a star, and
+        # the frontier of a star is an arbitrary depth-1 child; parenting to
+        # the frontier builds the ladder the round actually walked.) Captured
+        # HERE, at ask time, because the frontier is a fact about the board as
+        # it stood before the answer — deriving it during replay would be
+        # circular, since the frontier is itself read off the edges.
+        if directive == "drill" and action.kind == "query":
+            top = facets.frontier(board, focus, self._edges)
+            if top is not None:
+                action.drill_parent = top[0]
         # Classify the question's intent direction (person topics) — pure
         # code; replay uses the stored label to credit/flip the buckets.
         if self.topic.direction and action.kind == "query":
@@ -1812,7 +1830,9 @@ class Round:
         if upto is None:
             # Keep the refinement edges in lockstep with the live board
             # (derived, never stored — undo stays pop-and-recompute).
-            self._edges = facets.derive_edges(board, self._refine_tags())
+            self._edges = facets.derive_edges(
+                board, self._refine_tags(), self._drill_tags()
+            )
         return board
 
     def _refine_tags(self) -> list[tuple[str, str, str]]:
@@ -1829,6 +1849,27 @@ class Round:
                 child = slots.get(cat)
                 if child and isinstance(parent, str):
                     tags.append((cat, child, parent))
+        return tags
+
+    def _drill_tags(self) -> list[tuple[str, str, str]]:
+        """Drill-inferred (category, child, parent) links — W2-R's last resort.
+
+        A `drill` asks to narrow the focus slot, so a YES to it makes the
+        asserted value a refinement of the draft value being drilled. Only
+        yeses count (a no narrows nothing) and only the focus category (a
+        question may assert other slots in passing; those are not what was
+        being drilled). Applied after the explicit tags and the lexical
+        fallback, so the model's own answer always wins.
+        """
+        tags: list[tuple[str, str, str]] = []
+        for h in self._history:
+            if h.get("kind") != "query" or h.get("answer") != Answer.YES.value:
+                continue
+            parent = h.get("drill_parent")
+            cat = h.get("focus")
+            child = (h.get("slots") or {}).get(cat or "")
+            if parent and cat and child:
+                tags.append((cat, child, parent))
         return tags
 
     def _family_confident(self, board: facets.Board, cat: str) -> bool:

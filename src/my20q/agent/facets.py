@@ -273,28 +273,51 @@ def _is_ancestor(cat_edges: Mapping[str, str], node: str, of: str) -> bool:
     return False
 
 
-def derive_edges(board: Board, tags: list[tuple[str, str, str]]) -> Edges:
-    """Child→parent edges from explicit tags + a lexical-subset fallback.
+def _attach(edges: Edges, board: Board, cat: str, child: str, parent: str) -> None:
+    """Attach one child→parent edge if it is legal on this board.
 
-    Explicit ``(cat, child, parent)`` tags (history order, first one wins)
-    attach only when BOTH values already exist on the board — a tag can link
-    contenders, never resurrect or invent them. The fallback links an
-    untagged value to the largest OLDER value whose content tokens it wholly
-    contains ("upper thigh" ⊃ "thigh"; "a specific cleanup task" ⊃ "a task")
-    — insertion order makes that acyclic by construction; synonym
-    refinements (tingling → discomfort) need the explicit tag.
+    Both values must already exist (an edge can link contenders, never
+    resurrect or invent them), the child must not already be attached (first
+    writer wins, which is what tiers the three sources below), and the link
+    must not cycle.
+    """
+    if cat not in board:
+        return
+    ck = _find(board[cat], child)
+    pk = _find(board[cat], parent)
+    if ck is None or pk is None or ck == pk or ck in edges[cat]:
+        return
+    if _is_ancestor(edges[cat], ck, pk):
+        return  # would cycle
+    edges[cat][ck] = pk
+
+
+def derive_edges(
+    board: Board,
+    tags: list[tuple[str, str, str]],
+    inferred: list[tuple[str, str, str]] | None = None,
+) -> Edges:
+    """Child→parent edges, from three sources in descending confidence.
+
+    1. Explicit ``(cat, child, parent)`` tags the model emitted (history
+       order, first one wins).
+    2. A lexical-subset fallback: an untagged value attaches to the largest
+       OLDER value whose content tokens it wholly contains ("upper thigh" ⊃
+       "thigh"; "a specific cleanup task" ⊃ "a task") — insertion order makes
+       that acyclic by construction.
+    3. ``inferred`` — drill-inferred links (W2-R), applied LAST so they only
+       fill in where neither of the above spoke. Synonym and semantic
+       refinements (tingling → discomfort, blanket → an object) reach the
+       board through this tier when the model declines to tag them.
+
+    Without tier 3 a semantic ladder fragments: five yeses narrowing one slot
+    become five singleton families of mass 1.0 rather than one family of 5.0,
+    so ``family_confident`` can never fire, the board never reaches readiness,
+    and the draft stays frozen on whichever value happened to be scored first.
     """
     edges = empty_edges()
     for cat, child, parent in tags:
-        if cat not in board:
-            continue
-        ck = _find(board[cat], child)
-        pk = _find(board[cat], parent)
-        if ck is None or pk is None or ck == pk or ck in edges[cat]:
-            continue
-        if _is_ancestor(edges[cat], ck, pk):
-            continue  # would cycle
-        edges[cat][ck] = pk
+        _attach(edges, board, cat, child, parent)
     for cat in CATEGORIES:
         keys = list(board.get(cat, {}))
         for i, child in enumerate(keys):
@@ -313,6 +336,8 @@ def derive_edges(board: Board, tags: list[tuple[str, str, str]]) -> Edges:
                     best, best_size = parent, len(ptok)
             if best is not None and not _is_ancestor(edges[cat], child, best):
                 edges[cat][child] = best
+    for cat, child, parent in inferred or ():
+        _attach(edges, board, cat, child, parent)
     return edges
 
 

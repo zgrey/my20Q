@@ -133,6 +133,11 @@ class ReasonerAction:
     #: MORE SPECIFIC version of that existing contender ("tingling" refines
     #: "discomfort"). Anchored to the board: the parent must already exist.
     refines: dict[str, str] = field(default_factory=dict)
+    #: The draft value this question was drilling into, set by the CONTROLLER
+    #: (not the model) when it issued a `drill` directive — the focus slot's
+    #: frontier at ask time. A yes makes the asserted value a refinement of it
+    #: when the model tagged none itself (W2-R).
+    drill_parent: str = ""
     #: Autopsy instrumentation (W2-O) — per-phase milliseconds, LLM
     #: round-trips and gate attempts for the turn that produced this action.
     timings: dict = field(default_factory=dict)

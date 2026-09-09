@@ -244,3 +244,21 @@ def test_the_regression_fixture_is_synthetic(bench) -> None:
     scenario = next(s for s in bench.SCENARIOS if s.name == "leg-laterality")
     assert scenario.topic_id == "physical_health"
     assert "right" in scenario.need and "left" in scenario.need
+
+
+def test_readiness_metrics_are_not_conditioned_on_convergence(bench) -> None:
+    # Reaching readiness is the ENGINE's milestone — the point where the draft
+    # becomes a woven sentence instead of the code template — and it happens in
+    # rounds the caregiver never accepts. Scoping it to converged rounds made a
+    # run read "—" for both, which would hide exactly the effect the W2-R fix
+    # was measured for.
+    ready_but_lost = bench.round_metrics(_record(outcome="abandoned"))
+    assert ready_but_lost["converged"] is False
+    assert ready_but_lost["ready_at_query"] == 3
+
+    agg = bench.aggregate_metrics([ready_but_lost])
+    assert agg["converged"] == 0
+    assert agg["reached_ready"] == 1        # counted despite not converging
+    assert agg["ready_at_query"] == 3.0
+    assert agg["queries_after_ready"] == 1.0
+    assert agg["queries_to_converge"] is None  # this one IS conditional

@@ -1707,3 +1707,144 @@ async def test_restart_records_its_position(topics: list[Topic]) -> None:
     assert len(restarts) == 1
     assert restarts[0]["reason"] == "no-streak"
     assert restarts[0]["after_query"] == SOFT_RESET_NO_STREAK + 1
+
+
+def _ladder_backend(ladder: list[str]) -> MockBackend:
+    """A mock that answers whichever slot the controller ASKED for.
+
+    `drill` (priority 4) only becomes available once every core slot has a
+    positive leader — priority-1 PROBE outranks it until then. A mock that
+    only ever tags `what` therefore never reaches the drill path at all, so
+    this one reads the focus out of the format prompt: non-target slots get a
+    distinct filler value each time (so the repeat gate stays happy) and the
+    target slot walks `ladder`, tagging NO `refines`.
+    """
+    state = {"q": 0, "filler": 0}
+    fillers = _SUBJECTS[6:]  # distinct enough for the content-overlap gate
+
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "starting GUESSES" in system:
+            return json.dumps({**SEED_SLOTS, "what": [ladder[0]]})
+        if "pin down the ONE specific" in system:
+            return "thinking"
+        if "DOUBLE-CHECK" in system:
+            m = re.search(r':\s+"(.+)"', messages[1]["content"])
+            return json.dumps({"question": f"Can you confirm {m.group(1)}?"})
+        if "Convert a drafted question" in system:
+            m = re.search(r"Focus slot: (\w*)", messages[1]["content"])
+            cat = m.group(1) if m else "what"
+            if cat != "what":
+                word = fillers[state["filler"] % len(fillers)]
+                state["filler"] += 1
+                return json.dumps(
+                    {"question": f"Is it about {word}?", "slots": {cat: word},
+                     "preface": "", "rationale": "probe"}
+                )
+            # Past the end of the ladder, keep emitting values distinct ENOUGH
+            # for the repeat gate, which matches on content overlap — so
+            # "another thing 3"/"another thing 4" would collide.
+            i = state["q"]
+            state["q"] += 1
+            word = ladder[i] if i < len(ladder) else _SUBJECTS[i % len(_SUBJECTS)]
+            return json.dumps(
+                {"question": f"Is it about {word}?", "slots": {"what": word},
+                 "preface": "", "rationale": "drill"}  # note: no `refines`
+            )
+        return json.dumps({"utterance": "I would like a blanket."})
+
+    return MockBackend(responder=responder)
+
+
+async def _drive(rnd: Round, answers: list[Answer]) -> None:
+    """Answer in sequence, pressing Retry through any diagnostic card."""
+    for a in answers:
+        for _ in range(3):
+            if rnd.is_terminal:
+                return
+            if rnd._pending is not None:
+                break
+            await rnd.retry()
+        else:
+            return
+        await rnd.answer(a)
+
+
+async def test_drill_ladder_builds_edges_and_moves_the_draft(
+    topics: list[Topic],
+) -> None:
+    # W2-R end to end: the controller drills the `what` slot, the model tags no
+    # `refines` and the values are not lexically nested, so before this fix the
+    # board fragmented and the banner froze on the first value.
+    ladder = ["an object", "keeps you warm", "fabric", "a blanket"]
+    rnd = Round(_topic(topics, "general"), llm=_ladder_backend(ladder),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await _drive(rnd, [Answer.YES] * 10)
+
+    board = rnd._replay_board()
+    assert rnd._edges["what"], "a drilled ladder must link, even with no refines tag"
+
+    # The load-bearing claim: the evidence ACCUMULATES instead of fragmenting
+    # into one singleton family per confirmed value. Mass is the sum of the
+    # ladder values that were actually reached (verify turns and the other
+    # core slot's probes consume some of the budget).
+    confirmed = [
+        v for v in ladder
+        if any(
+            h.get("answer") == Answer.YES.value
+            and (h.get("slots") or {}).get("what") == v
+            for h in rnd.history
+        )
+    ]
+    assert len(confirmed) >= 2, "the mock should have walked into the ladder"
+    fams = facets.families(board, "what", rnd._edges)
+    assert len(fams) == 1, f"the slot fragmented into {len(fams)} families"
+    assert fams[0][1] >= float(len(confirmed))
+
+    # And the draft follows the answers DOWN the ladder rather than freezing on
+    # the value that happened to be scored first.
+    top = facets.frontier(board, "what", rnd._edges)[0]
+    assert top == confirmed[-1] != ladder[0]
+    assert any(p["value"] == top for p in rnd.banner()["parts"])
+
+
+async def test_a_probe_never_infers_a_refinement(topics: list[Topic]) -> None:
+    # Only a `drill` means "narrow this". A probe opens an empty slot, so its
+    # yes is a first value, not a refinement of anything.
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    first = rnd.history[0]
+    assert "drill_parent" not in first
+
+
+async def test_drill_parent_is_recorded_for_the_autopsy(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "general"),
+                llm=_ladder_backend(["an object", "keeps you warm", "a blanket"]),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await _drive(rnd, [Answer.YES] * 10)
+    drills = [h for h in rnd.history if h.get("drill_parent")]
+    assert drills, "the ladder the controller walked must be recoverable"
+    assert all(isinstance(h["drill_parent"], str) for h in drills)
+
+
+async def test_a_no_to_a_drill_infers_nothing(topics: list[Topic]) -> None:
+    # A drill that misses narrows nothing — the rejected value must not be
+    # chained under the value it failed to refine.
+    rnd = Round(_topic(topics, "general"),
+                llm=_ladder_backend(["an object", "keeps you warm", "a blanket"]),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    for i in range(8):
+        if rnd.is_terminal:
+            break
+        await rnd.answer(Answer.YES if i < 2 else Answer.NO)
+    for h in rnd.history:
+        if h.get("drill_parent") and h.get("answer") == Answer.NO.value:
+            child = (h.get("slots") or {}).get(h.get("focus") or "")
+            assert rnd._edges.get(h["focus"], {}).get(child) != h["drill_parent"]

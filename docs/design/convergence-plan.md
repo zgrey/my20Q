@@ -1093,7 +1093,7 @@ category rotation after N misses, independent of pair identity. **Note:** W2-K
 partly re-arms `FUTILE_STREAK` on its own — re-measure after W2-K before
 building the axis guard.
 
-### W2-R · The draft does not follow the leader — Status: PROPOSED (09-08, found by the W2-G bench)
+### W2-R · The draft does not follow the leader — Status: IMPLEMENTED (09-09)
 
 **Problem.** In a bench `cold` round the `what` slot climbed *an object → keeps
 you warm → fabric → wrap yourself in → blanket* across five confirmed yeses,
@@ -1110,13 +1110,117 @@ correctly kept separate but never linked, so the draft cannot see it. W3-H
 supplies the link when the model tags `refines` or the values nest lexically —
 neither holds for a semantic ladder like object → fabric → blanket.
 
-**Proposal (sketch, not yet iterated).** Some combination of: break the
-frontier tie toward the most RECENTLY confirmed member rather than the
-incumbent; ask the reasoner for a `refines` tag more insistently when the focus
-slot already has a confirmed leader; or a cheap semantic-narrowing check to
-link a new value under an existing one. Wants a bench delta, which now exists.
-**Touches:** `facets.frontier` / `dialogue._weave`. **Risks:** real — it
-changes what the banner says, so it needs the bench on both sides.
+**The sketch above was wrong about the primary cause, and running the mechanism
+down (09-09, no LLM) corrected it.** "Break the frontier tie by recency" is
+neither sufficient nor necessary. The visible symptom is the stale draft; the
+load-bearing defect is one level down:
+
+| | no edges (before) | one chain (after) |
+|---|---|---|
+| `families` | 5 singletons @ 1.0 | one family @ **5.0** |
+| `family_confident` | **False** (1.0 < ready 2.0) | **True** |
+| `frontier` | `an object` — first inserted | `blanket` |
+
+Because the slot never becomes confident, the **board never reaches
+readiness**, so `_refresh_draft` never calls the LLM weave and the caregiver is
+shown the raw code template for the whole round. That is why the round could
+not converge — not merely why the text was stale. A fragmented slot is
+*unwinnable*, however well the questioning goes.
+
+**Landed 09-09 (owner-approved before building).** `derive_edges` gains a third
+tier, applied **last**, so the model's explicit `refines` tag still wins and
+lexical nesting still wins after it — inference only fills the gap where
+neither spoke. The link comes from the controller, not the model: a **`drill`**
+directive *is* the controller saying "narrow this slot", so a yes to the
+resulting question refines the value being drilled.
+
+**The parent is the slot's FRONTIER, not its leader** — this is the whole
+design, and the experiment is unambiguous:
+
+```
+parent = leader   →  a STAR:  frontier = "keeps you warm"   ✗ confident, wrong value
+parent = frontier →  a CHAIN: frontier = "blanket"          ✓ confident, right value
+```
+
+Parenting to the leader accumulates mass correctly but leaves an arbitrary
+depth-1 child as the frontier. Parenting to the frontier builds the ladder the
+round actually walked — and it is the honest reading: the caregiver was looking
+at draft value X, the controller drilled X, the patient said yes to a narrower
+Y, so Y refines X.
+
+Captured at **ask time** (`_propose_question` → `action.drill_parent` → the
+history entry → `_drill_tags`), because deriving it during replay would be
+circular: the frontier is itself read off the edges. It is recorded on every
+drill, answered or not, so an autopsy can see the ladder the controller was
+trying to walk; `dump_recording.py` renders it as `DRILLING '<value>'`.
+
+**Guarding (owner decision): lean on what already exists.** Only a `drill`
+infers — never `probe` (an empty slot has no frontier), never `split`
+(separating tied alternatives is the opposite of narrowing), never `pin`. Only
+a **yes** infers. `_attach` applies the same legality rules as an explicit tag:
+both values must already be on the board, first writer wins, no cycles. Beyond
+that, a wrong chain is caught by the mechanisms already in place —
+verify-on-lock double-checks a thin lock, the ✗-edit bans a wrong value, and
+`frontier` RETREATS to the parent if the child loses support.
+
+**One constraint worth knowing:** `drill` is priority 4, so it only becomes
+available once **every core slot has a positive leader** — priority-1 PROBE
+outranks it until then. The inference therefore cannot fire in a round's
+opening phase, which is the correct scope (there is nothing to narrow yet) but
+also means a test whose mock only ever tags one category never reaches this
+code at all.
+
+**Touches:** `facets.derive_edges` (+ `_attach`), `dialogue._propose_question` /
+`answer` / `_drill_tags` / `_replay_board`, `reasoner.ReasonerAction`,
+`dump_recording.py`, `web/src/types.ts`, tests.
+
+#### Measured on the bench — the first engine change that was
+
+Nine scenarios, `gemma4:e4b`, cap 15, seed 7, identical command both sides.
+**This is a partial result and the headline metric did not move.**
+
+| metric | before | after | Δ |
+|---|---|---|---|
+| **converged** | **0 / 9** | **0 / 9** | **0** |
+| **reached readiness** | **0 / 9** | **0 / 9** | **0** |
+| diagnostics per round | 2.22 | 1.11 | **−1.11** |
+| restarts per round | 2.89 | 2.44 | −0.45 |
+| gate rejections per round | 7.89 | 7.11 | −0.78 |
+| informative-yes ratio | 0.79 | **1.00** | +0.21 |
+| latency per question | 5.73 s | 6.25 s | +0.51 s |
+
+Round health improved consistently and in the predicted direction — informative
+yeses **11 → 23** in total, farming yeses to **zero in every round** (three
+rounds had one before), rounds ending early on a diagnostic **5 → 2**. That is
+exactly what un-fragmenting a slot should do: a yes now lands on a coherent
+family instead of re-establishing another singleton.
+
+**But no round reached readiness, so no round could converge.** A one-off
+`cold` round run separately *did* reach readiness at q13 and wove a genuinely
+good sentence — *"I need help getting a blanket over me right now"* against the
+hidden need *"I am too cold and want a blanket"* — which the confirm oracle
+then rejected. So readiness is reachable post-W2-R and was not pre-W2-R in any
+observed round, but it is rare enough that nine rounds did not catch one.
+
+**Two things this measurement exposed, neither of them W2-R:**
+
+1. *A defect in the bench itself.* `aggregate_metrics` scoped
+   `queries_after_ready` to CONVERGED rounds, so a run where the board reached
+   readiness but the caregiver never accepted would have reported "—" for both
+   sides and hidden the whole effect. Fixed, with a test: `reached_ready` and
+   `ready_at_query` are now first-class and unconditioned. *(It did not in fact
+   mask anything here — readiness was genuinely zero on both sides — but it
+   would have.)*
+2. *The confirm oracle is too strict.* It rejected a draft that plainly
+   captured the need. While that holds, `converged` is capped below what the
+   engine deserves and is the wrong metric to steer by; `reached_ready` is the
+   honest primary for now. Queue this with the W2-G simulator notes.
+
+**Verdict.** Kept: correct by construction (proven with no LLM), unit-tested,
+improves every secondary metric, regresses nothing but ~0.5 s of latency. Not
+claimed: any convergence win. The wall is now *readiness*, and the next thing
+worth measuring is why a slot that has stopped fragmenting still rarely gets
+two clear points ahead of its rival.
 
 ### W2-Q · `yes_memory` integrity and same-session read-back — Status: PROPOSED (09-08, §1d C7)
 
@@ -1281,7 +1385,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | **W2-O** | **Autopsy instrumentation** | **IMPLEMENTED (09-08)** — record carries seed context, per-query banner/timing/rejections, restart positions, pending question; **F2 precondition cleared** |
 | W2-P | Focus/content gate + enumeration-axis guard | PROPOSED (09-08, §1d C7) — re-measure after W2-K |
 | W2-Q | `yes_memory` integrity + same-session read-back | PROPOSED (09-08, §1d C7) |
-| W2-R | Draft does not follow the leader (tied `what` values, no edges) | PROPOSED (09-08) — **found by the bench**; the other half of W2-K |
+| **W2-R** | **Draft does not follow the leader** | **IMPLEMENTED (09-09)** — drill-inferred edges, parented to the FRONTIER. Measured on the bench: round health up (farming yeses to zero, diagnostics halved), **convergence and readiness unmoved at 0/9**. Kept, not claimed as a win |
 | W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | PROPOSED |

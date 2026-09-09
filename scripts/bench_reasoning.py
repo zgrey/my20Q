@@ -348,19 +348,34 @@ def _mean(values: list[float]) -> float | None:
 def aggregate_metrics(rounds: list[dict]) -> dict:
     """Mean the per-round metrics over a run — the compare mode's unit.
 
-    Convergence-conditional metrics (queries, questions-after-ready) average
-    over the CONVERGED rounds only: a round that hit the query cap would
-    otherwise flatter or punish the mean depending on where the cap sits.
+    ``queries_to_converge`` is convergence-conditional and averages over the
+    CONVERGED rounds only: a round that hit the query cap would otherwise
+    flatter or punish the mean depending on where the cap sits.
+
+    ``reached_ready`` and ``queries_after_ready`` are deliberately NOT
+    conditioned on convergence. Reaching readiness is the engine's own
+    milestone — the point where the draft becomes a woven sentence instead of
+    the code template — and it is reachable in a round the caregiver never
+    accepts. Scoping them to converged rounds made both read "—" for a run
+    where the board reached readiness in a third of its rounds, which hid the
+    entire effect of the W2-R fix on its first measurement.
     """
     if not rounds:
         return {}
     conv = [m for m in rounds if m.get("converged")]
-    ready = [m["queries_after_ready"] for m in conv if m.get("queries_after_ready") is not None]
+    got_ready = [m for m in rounds if m.get("ready_at_query") is not None]
+    ready = [
+        m["queries_after_ready"]
+        for m in got_ready
+        if m.get("queries_after_ready") is not None
+    ]
     yes_total = sum(m["informative_yes"] + m["farming_yes"] for m in rounds)
     lat = [m["latency"]["mean_ms"] for m in rounds if m.get("latency")]
     return {
         "rounds": len(rounds),
         "converged": len(conv),
+        "reached_ready": len(got_ready),
+        "ready_at_query": _mean([float(m["ready_at_query"]) for m in got_ready]),
         "queries_to_converge": _mean([float(m["queries"]) for m in conv]),
         "queries_after_ready": _mean([float(x) for x in ready]),
         "informative_yes_ratio": (
@@ -656,6 +671,7 @@ def _render_summary(reports: list[ModelReport], n_scen: int) -> None:
 #: --compare arrows; convergence is handled separately (higher is better).
 _LOWER_IS_BETTER = {
     "queries_to_converge",
+    "ready_at_query",
     "queries_after_ready",
     "restarts",
     "diagnostics",

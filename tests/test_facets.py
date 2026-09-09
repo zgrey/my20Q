@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 from my20q.agent import facets
 
 
@@ -402,3 +404,79 @@ def test_drill_down_chain_forms_and_the_frontier_reaches_the_fine_value() -> Non
         "right thigh": "right leg",
     }
     assert facets.frontier(board, "where", edges) == ("right thigh", 1.0)
+
+
+# ------------------------------------- W2-R: drill-inferred refinement edges
+
+
+def test_drill_inference_stops_a_slot_fragmenting() -> None:
+    # The bench's `cold` round: five yeses each narrowing the last, none
+    # tagged and none lexically nested. Without an inferred link they become
+    # five singleton families of mass 1.0, so family_confident can NEVER fire
+    # and the draft freezes on whichever value was scored first.
+    seq = ["an object", "keeps you warm", "fabric", "wrap yourself in", "blanket"]
+    board = facets.seed_board({"what": ["an object"]})
+    for v in seq:
+        board = facets.update(board, {"what": v}, "yes")
+
+    bare = facets.derive_edges(board, [])
+    assert facets.families(board, "what", bare) == [(v, 1.0) for v in seq]
+    assert facets.frontier(board, "what", bare) == ("an object", 1.0)
+    assert not facets.family_confident(
+        board, "what", bare, ready_points=2.0, margin=1.0
+    )
+
+    # Each drill parents to the frontier the caregiver was looking at, which
+    # builds the ladder the round actually walked.
+    drills = [("what", c, p) for p, c in itertools.pairwise(seq)]
+    edges = facets.derive_edges(board, [], drills)
+    assert facets.families(board, "what", edges) == [("an object", 5.0)]
+    assert facets.frontier(board, "what", edges) == ("blanket", 1.0)
+    assert facets.family_confident(
+        board, "what", edges, ready_points=2.0, margin=1.0
+    )
+
+
+def test_drill_inference_to_the_leader_would_build_a_star() -> None:
+    # Why the parent is the FRONTIER and not the leader: parenting every drill
+    # to the leader accumulates mass correctly but leaves an arbitrary
+    # depth-1 child as the frontier, so the draft still shows the wrong value.
+    seq = ["an object", "keeps you warm", "fabric", "wrap yourself in", "blanket"]
+    board = facets.seed_board({"what": ["an object"]})
+    for v in seq:
+        board = facets.update(board, {"what": v}, "yes")
+    star = facets.derive_edges(board, [], [("what", c, "an object") for c in seq[1:]])
+    assert facets.families(board, "what", star) == [("an object", 5.0)]
+    assert facets.frontier(board, "what", star) != ("blanket", 1.0)
+
+
+def test_explicit_tags_and_lexical_nesting_outrank_inference() -> None:
+    # Inference is the LAST resort — it must never overwrite what the model
+    # said or what the words plainly show.
+    board = facets.seed_board({"what": ["discomfort", "a task"]})
+    board = facets.update(board, {"what": "tingling"}, "yes")
+    board = facets.update(board, {"what": "a specific cleanup task"}, "yes")
+    edges = facets.derive_edges(
+        board,
+        [("what", "tingling", "discomfort")],          # explicit
+        [                                               # inference, contradicting
+            ("what", "tingling", "a task"),
+            ("what", "a specific cleanup task", "discomfort"),
+        ],
+    )
+    assert edges["what"]["tingling"] == "discomfort"            # explicit won
+    assert edges["what"]["a specific cleanup task"] == "a task"  # lexical won
+
+
+def test_inferred_edges_obey_the_same_legality_rules() -> None:
+    board = facets.seed_board({"what": ["discomfort"]})
+    board = facets.update(board, {"what": "tingling"}, "yes")
+    # A parent that is not on the board cannot be invented.
+    assert facets.derive_edges(board, [], [("what", "tingling", "ghost")])["what"] == {}
+    # And a cycle is refused.
+    edges = facets.derive_edges(
+        board,
+        [],
+        [("what", "tingling", "discomfort"), ("what", "discomfort", "tingling")],
+    )
+    assert edges["what"] == {"tingling": "discomfort"}

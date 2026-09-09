@@ -183,6 +183,11 @@ def dump(path: str) -> None:
                     )
                 if q.get("mute"):
                     flags.append(f"MUTE {q['mute']}")
+                if q.get("drill_parent"):
+                    # W2-R: the draft value the controller was narrowing. A yes
+                    # links the asserted value under it, so the ladder a round
+                    # walked is readable even when the model tagged no refines.
+                    flags.append(f"DRILLING {q['drill_parent']!r}")
                 if flags:
                     print(f"             {'  '.join(flags)}")
                 # W2-O instrumentation.

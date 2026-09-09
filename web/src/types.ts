@@ -71,6 +71,9 @@ export interface HistoryEntry {
   // scripts/dump_recording.py and the noise bench; the cockpit does not
   // render it. Absent on recordings written before W2-O.
   banner?: { ready: boolean; text: string; parts: BannerPart[] };
+  // The draft value the controller was narrowing on a drill turn (W2-R); a
+  // "yes" links the asserted value beneath it.
+  drill_parent?: string;
   timing?: { total_ms: number; llm_calls: number; attempts: number } & Record<
     string,
     number
