@@ -20,14 +20,14 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 
 ## Status
 
-> **Parked 2026-09-08, mid-merge-bar.** `phase2-cockpit` is 68 commits ahead of
-> `main`, 0 behind, and pushed. All green: **220 tests / 2 skipped**, ruff and
-> cockpit typecheck clean. Phase 2 is feature-complete but **not yet merged** —
-> the bar and the remaining gates are in
+> **Parked 2026-09-09, awaiting a live trial.** `phase2-cockpit` is 73 commits
+> ahead of `main`, 0 behind, and pushed. All green: **276 tests / 2 skipped**,
+> ruff and cockpit typecheck clean. Phase 2 is feature-complete but **not yet
+> merged** — the bar and the remaining gates are in
 > [`docs/design/phase2-finalization.md`](docs/design/phase2-finalization.md).
 > **Resume there**, not from `docs/ROADMAP.md` (its Phase 2 entry is stale).
 >
-> The bar is **F1 → F1.5 → F2 → F3 → F4 → merge**. Two gates are cleared:
+> The bar is **F1 → F1.5 → F2 → F3 → F4 → merge**. Three gates are cleared:
 >
 > - **F1 ✓** — trials sat 08-31 / 09-01; autopsy in
 >   [`convergence-plan.md` §1d](docs/design/convergence-plan.md).
@@ -38,12 +38,25 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 >   **Refinement links had therefore never once engaged in production.** Fixed
 >   and verified by replay; **W2-L** (verify wording) and **W2-N** (restart
 >   keeps the profile prior) rode along.
+> - **F2 ✓** — **W2-G**, the noise bench, after its **W2-O** precondition
+>   (autopsy instrumentation) landed. Engine changes are now *measured* rather
+>   than argued about.
 >
-> **Next: F2, the noise bench** — but land **W2-O** (autopsy instrumentation)
-> first: recordings carry no proposal state, no per-call latency, no restart
-> positions and no gate-rejection reasons, so the bench cannot score honestly
-> until they do. Bench simulator defaults to local `gemma4:e4b`; add the
-> 09-01 body-region round as a canonical fixture.
+> **The next action is a live trial, not code.** Six behavioural changes have
+> landed since the last session and none has been seen by a person. The stack
+> was verified trial-ready on 09-09: profile loads, cloud backend refused,
+> recording armed, cockpit rebuilt (its bundle had been stale since June).
+>
+> **Watch `reached_ready`, not `converged`.** The bench's confirm oracle
+> rejected a draft that plainly captured the need, so convergence is capped
+> below what the engine deserves; whether the board ever reaches readiness — the
+> point where the draft becomes a woven sentence rather than the code template —
+> is the honest measure. Across nine simulated rounds it never once did.
+>
+> Then **F3** (W2-E, tag rescue) and **F4** (doc reconciliation) → merge. Still
+> open and unaddressed: **W2-P** (the questioning marches down one axis),
+> **W2-M** (typed notes garbled), **W2-Q** (confirmed answers never read back),
+> and the owner call on **W2-L**'s verify-no scoring.
 
 - **Phase 1 — backend MVP** ✓ Dialogue engine, topics, Ollama client, safety
   layer, and a Rich-based CLI harness.
@@ -246,9 +259,40 @@ key detail flipped — and waits for an answer to *that*.
 | `MY20Q_KOKORO_VOICES` | — | kokoro voices `.bin` path |
 | `MY20Q_KOKORO_VOICE` | `af_heart` | kokoro voice name |
 
+## Developer tools
+
+Three scripts, all read-only or dry-run by default. None is part of the
+cockpit; they exist for trial autopsies and engine work.
+
+```bash
+# Read a recorded session back, with its autopsy summary per round: the query
+# at which the board turned propose-ready (and how many were asked after),
+# restart reasons AND positions, gate rejections, per-question latency, the
+# seed context, and any question left unanswered.
+python scripts/dump_recording.py patient_data/<patient>/<session>.jsonl
+
+# Drive real rounds against a simulated answerer and report the §1 metrics.
+# --noise adds ε-noise (yes↔no flipped with probability ε); --compare diffs two
+# runs, i.e. two engine revisions. Metrics are read off the round RECORD, so
+# anything it reports is obtainable from a real recorded session.
+python scripts/bench_reasoning.py --models gemma4:e4b --json before.json
+python scripts/bench_reasoning.py --compare before.json after.json
+
+# Drop demo rounds (opened, seeded, nothing answered) and archive old sessions
+# out of the cockpit picker. Dry run unless --apply; backs up first; rounds it
+# KEEPS are written back byte-identical. `emergency` rounds are exempt.
+python scripts/prune_recordings.py                       # dry run
+python scripts/prune_recordings.py --archive-before 2026-07 --apply
+```
+
+`scripts/serve_cerberus.sh [start|logs|status|stop]` runs the cockpit under
+tmux for remote trials. It wires `MY20Q_PROFILE` automatically — launching
+`python -m my20q.api` bare gives you **no profile and therefore no recording**.
+
 ## Tests
 
 ```bash
 pytest
 ruff check .
+cd web && npm run typecheck
 ```
