@@ -422,6 +422,88 @@ dataset every session it survives.
 
 ---
 
+## 1e. Evidence — the 09-09 trial: the stack converges with a real person
+
+Two sessions, `gemma4:e4b`, on the post-W2-K/L/N/O/G/R stack. **Three rounds
+synthesized and accepted**, at 7, 4 and 11 queries.
+
+| | 08-31 / 09-01 | 09-09 |
+|---|---|---|
+| accepted | 1 of 8 rounds | **3** |
+| queries to accept | 18 | **7 / 4 / 11** |
+| `reached_ready` | never | **3 of 3** |
+| diagnostics | 2 | **0** |
+| restarts | 4 | **1** |
+| queries after ready | — | 2 / 0 / 1 |
+
+The drafts are genuine LLM weaves, not the code template — *"I need Zach to
+come over soon so he can help me with a task and share my feelings"*, and an
+11-query `mental_health` round producing *"I worry right now that I am going to
+feel like a burden to others, especially when I think about the future."* Two
+`emergency` rounds fired the short-circuit.
+
+**W2-R is visibly working in production**: `DRILLING 'Zach'` on q3/q4, with
+`who: Zach +4.0` accumulating instead of fragmenting into singletons.
+
+**The bench got W2-R wrong, and the owner called it.** W2-R measured as a null
+result (0/9 converged, 0/9 reached-ready) and was kept only because it was
+correct and non-regressing. With a real person answering it is part of a stack
+that converges three times in four attempts. The standing instruction —
+*"tests with an oracle are less useful than the real thing"* — is now
+evidence-backed: **`reached_ready` is the honest bench metric, but a live
+session is the honest verdict.**
+
+### The latency finding
+
+24 instrumented questions: mean **10.2s**, median 7.1s, and **deliberate is 86%
+of every turn**. The distribution is the story:
+
+- clean first attempt: **6.1s** (n=14)
+- needed a gate re-ask: **16.0s** (n=10)
+- **re-asks cost 99s of the 245s total — 40% of the caregiver's waiting**
+
+Rejections by cause across the W2-O-era records: 4 repeat-gate, 4
+zero-information, 3 either/or, 2 no-anchored-slots.
+
+### W2-S · Prompt-side re-ask reduction — Status: TRIED AND REJECTED (09-09)
+
+**The idea.** Gate 4 rejects a question asserting only established pairs, but
+`established` was never passed into `deliberate_messages` at all — the board
+shows raw points and leaves the model to infer the threshold. It was being
+penalised for a rule it could not see, at ~10s a turn. Adding an ALREADY
+SETTLED block, plus restating the three gates as a checklist immediately before
+the ask, looked like free money.
+
+**Measured, three ways, same seed and command (9 scenarios each):**
+
+| variant | queries | rejections/question | diagnostics | rounds ending early |
+|---|---|---|---|---|
+| baseline | 119 | **0.538** | **10** | **2/9** |
+| settled + checklist | 97 | 0.433 | 20 | 4/9 |
+| settled block only | 103 | **0.553** | 17 | 4/9 |
+
+**Rejected, and the reason is worth keeping.** Constraining the model *more*
+made it fail *harder*: both variants doubled the diagnostics and doubled the
+rounds that died early. Told to avoid asked ground AND settled ground, it gets
+stuck repeating itself and hits the retry wall sooner — and **a diagnostic card
+is a worse experience for the caregiver than a slow question.**
+
+Two process notes, both mistakes made here:
+
+1. *The per-round rejection count is a trap.* The combined variant's headline
+   −34% was largely an artifact of **shorter rounds** — fewer questions asked
+   means fewer chances to be rejected. Only the per-QUESTION rate is honest.
+2. *Two changes at once cannot be attributed.* Split, the result inverted the
+   hypothesis: the settled block alone is **worse than baseline**, and the
+   checklist was doing the useful work and masking it. Change one thing.
+
+**So the latency lever is not prompt-side.** The re-ask rate did not yield to
+more instruction. What remains: cap or restructure the deliberate phase (86% of
+the turn), a faster model, or reduce how often the controller asks for
+something the model cannot deliver — which is W2-P territory.
+
+---
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -1387,5 +1469,6 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W2-Q | `yes_memory` integrity + same-session read-back | PROPOSED (09-08, §1d C7) |
 | **W2-R** | **Draft does not follow the leader** | **IMPLEMENTED (09-09)** — drill-inferred edges, parented to the FRONTIER. Measured on the bench: round health up (farming yeses to zero, diagnostics halved), **convergence and readiness unmoved at 0/9**. Kept, not claimed as a win |
 | W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |
+| W2-S | Prompt-side re-ask reduction | **TRIED AND REJECTED (09-09)** — measured 3 ways; constraining the model more doubled diagnostics and early-ending rounds. Latency lever is not prompt-side. See §1e |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | PROPOSED |
