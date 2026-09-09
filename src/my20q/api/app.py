@@ -117,6 +117,9 @@ def _maybe_record(state, handle: _RoundHandle) -> None:
             model=state.model_label,
             emotional_state=rnd.emotional_state,
             board=rnd.board_record(),
+            seed_context=rnd.seed_context,
+            seed_ms=rnd.seed_ms,
+            pending_question=rnd.pending_question,
         )
         handle.recorded = True
 
@@ -645,6 +648,9 @@ def _register_routes(app: FastAPI) -> None:
                     model=state.model_label,
                     emotional_state=r.emotional_state,
                     board=r.board_record(),
+                    seed_context=r.seed_context,
+                    seed_ms=r.seed_ms,
+                    pending_question=r.pending_question,
                 )
             )
         if format == "md":

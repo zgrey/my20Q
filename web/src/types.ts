@@ -67,6 +67,15 @@ export interface HistoryEntry {
   text: string;
   answer: Answer | null;
   rationale: string;
+  // Autopsy instrumentation (W2-O) — written by the engine, read by
+  // scripts/dump_recording.py and the noise bench; the cockpit does not
+  // render it. Absent on recordings written before W2-O.
+  banner?: { ready: boolean; text: string; parts: BannerPart[] };
+  timing?: { total_ms: number; llm_calls: number; attempts: number } & Record<
+    string,
+    number
+  >;
+  rejections?: string[];
 }
 
 // One woven slot of the live draft, with its confidence band.
@@ -156,4 +165,15 @@ export interface RoundRecord {
   board?: Record<string, unknown>;
   model: string;
   recorded_at: string;
+  // Autopsy instrumentation (W2-O), all optional: the caregiver's
+  // round-opening context, what board-seeding cost, and the question left
+  // unanswered when a round was abandoned on a topic switch.
+  seed_context?: string;
+  seed_ms?: number;
+  pending_question?: {
+    text: string;
+    rationale: string;
+    focus?: string;
+    slots?: Record<string, string>;
+  };
 }

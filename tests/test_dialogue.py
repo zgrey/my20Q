@@ -1547,3 +1547,163 @@ async def test_exploration_decays_as_yeses_accrue(topics: list[Topic]) -> None:
     assert seen[1] is True
     await rnd.answer(Answer.YES)  # next at yeses=2 -> p=0.296 < 0.4 -> no explore
     assert seen[2] is False
+
+
+# ------------------------------------------- autopsy instrumentation (W2-O)
+
+
+async def test_banner_snapshot_rides_every_answered_entry(
+    topics: list[Topic],
+) -> None:
+    # The record carried no banner state, so an autopsy could not say WHEN a
+    # board turned propose-ready -- the metric separating "the round needed 18
+    # questions" from "it was answerable at q9 and asked nine more".
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    entry = rnd.history[-1]
+    assert entry["banner"]["parts"], "the answered entry carries the live weave"
+    assert entry["banner"]["text"]
+    # A single yes is below board-readiness; the flag is honest about that.
+    assert entry["banner"]["ready"] is False
+
+
+async def test_banner_ready_transition_is_recoverable(topics: list[Topic]) -> None:
+    # physical_health gates readiness on BOTH core slots (what + where), so the
+    # mock feeds one then the other; facet_ready_points=1 makes a single yes
+    # enough, keeping the false -> true edge inside a two-question round.
+    state = {"q": 0}
+    asks = [
+        ("Is it about a drink?", {"what": "a drink"}),
+        ("Is it about your left hand?", {"where": "your left hand"}),
+    ]
+
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "starting GUESSES" in system:
+            return json.dumps(SEED_SLOTS)
+        if "pin down the ONE specific" in system:
+            return "thinking"
+        if "DOUBLE-CHECK" in system:  # a thin lock draws verify-on-lock
+            m = re.search(r':\s+"(.+)"', messages[1]["content"])
+            return json.dumps({"question": f"Can you confirm {m.group(1)}?"})
+        if "Convert a drafted question" in system:
+            question, slots = asks[min(state["q"], len(asks) - 1)]
+            state["q"] += 1
+            return json.dumps(
+                {"question": question, "slots": slots,
+                 "preface": "", "rationale": "x"}
+            )
+        return json.dumps({"utterance": "I would like a drink."})
+
+    rnd = Round(
+        _topic(topics, "physical_health"),
+        llm=MockBackend(responder=responder),
+        tuning=ReasoningTuning(facet_ready_points=1.0),
+        rng=_FixedRandom(0.99),
+    )
+    await rnd.open()
+    for _ in range(3):  # what, its double-check, then where
+        await rnd.answer(Answer.YES)
+    flags = [h["banner"]["ready"] for h in rnd.history if h.get("banner")]
+    # The edge itself is the metric: the record now says which query it was.
+    assert flags[0] is False and flags[-1] is True
+    assert flags.index(True) == len(flags) - 1  # exactly one false -> true edge
+
+
+async def test_banner_is_stamped_even_when_the_next_question_fails(
+    topics: list[Topic],
+) -> None:
+    # A live gemma4:e4b run left one answered query with no banner: the answer
+    # landed, then the NEXT ask failed the repeat gate and the failure path
+    # returned before the stamp. An answer that tips the board into readiness
+    # must not go unrecorded because of what happened after it.
+    state = {"q": 0}
+
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "starting GUESSES" in system:
+            return json.dumps(SEED_SLOTS)
+        if "pin down the ONE specific" in system:
+            return "thinking"
+        if "Convert a drafted question" in system:
+            state["q"] += 1
+            if state["q"] == 1:
+                return json.dumps(
+                    {"question": "Is it about a drink?", "slots": {"what": "a drink"},
+                     "preface": "", "rationale": "x"}
+                )
+            return "not json at all"  # every later ask fails -> diagnostic
+        return json.dumps({"utterance": "x"})
+
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=MockBackend(responder=responder), rng=_FixedRandom(0.99))
+    await rnd.open()
+    event = await rnd.answer(Answer.YES)
+    assert event.kind == "diagnostic"  # the next question could not be made
+    answered = next(h for h in rnd.history if h["kind"] == "query")
+    assert answered["banner"]["parts"], "the answer's board state was recorded"
+
+
+async def test_open_does_not_stamp_a_banner(topics: list[Topic]) -> None:
+    # open() advances with an empty history -- the stamp must not blow up.
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    assert rnd.history == []
+
+
+async def test_query_entries_carry_timing_and_the_round_carries_seed_ms(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    timing = rnd.history[-1]["timing"]
+    assert timing["llm_calls"] >= 1
+    assert timing["attempts"] >= 1
+    assert timing["total_ms"] >= 0.0
+    assert rnd.seed_ms >= 0.0  # the round's fixed pre-first-question cost
+
+
+async def test_pending_question_survives_an_abandon(topics: list[Topic]) -> None:
+    # A round abandoned on a topic switch leaves a question hanging; the record
+    # used to drop it, so "ran out of questions" and "the caregiver walked away
+    # mid-question" looked identical.
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    event = await rnd.open()
+    rnd.abandon()
+    assert rnd.outcome == "abandoned"
+    assert rnd.pending_question is not None
+    assert rnd.pending_question["text"] == event.text
+    assert rnd.pending_question["slots"]
+
+
+async def test_no_pending_question_when_the_round_converged(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    rnd.accept()
+    # accept() consumed the pending question into the synthesis entry.
+    assert rnd.pending_question is None
+
+
+async def test_restart_records_its_position(topics: list[Topic]) -> None:
+    # Restart markers are stripped from the recorded conversation, which lost
+    # WHERE each restart happened; after_query carries the position instead.
+    tuning = ReasoningTuning(stall_window=0)
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                tuning=tuning, rng=_FixedRandom(0.99))
+    await rnd.open()
+    for _ in range(SOFT_RESET_NO_STREAK + 1):
+        await rnd.answer(Answer.NO)
+    restarts = rnd.board_record()["restarts"]
+    assert len(restarts) == 1
+    assert restarts[0]["reason"] == "no-streak"
+    assert restarts[0]["after_query"] == SOFT_RESET_NO_STREAK + 1

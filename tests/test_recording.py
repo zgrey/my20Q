@@ -173,6 +173,78 @@ def test_round_record_drops_internal_markers() -> None:
     assert "diagnostic" in kinds  # the failure the caregiver saw IS kept
 
 
+# ------------------------------------------- autopsy instrumentation (W2-O)
+
+
+async def test_record_carries_the_seed_context(tmp_path, topics: list[Topic]) -> None:
+    # The caregiver's round-opening note steered every question in the round;
+    # a record without it is a round read blind. (It used to be probed off
+    # `job_b` — a float — so the dumper's branch never once fired.)
+    topic = find_topic(topics, "physical_health")
+    assert topic is not None
+    rnd = Round(topic, llm=_reasoning_backend(), seed_context="She slept badly.")
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    rnd.accept()
+
+    recorder = Recorder(tmp_path, "patient_x")
+    recorder.record_round(
+        session_id="s1", round_id="r1", topic_id=topic.id, engine=rnd.engine,
+        history=rnd.history, outcome=rnd.outcome,
+        final_utterance=rnd.final_utterance, model="mock",
+        seed_context=rnd.seed_context, seed_ms=rnd.seed_ms,
+    )
+    record = json.loads(
+        (tmp_path / "patient_x" / "s1.jsonl").read_text(encoding="utf-8").strip()
+    )
+    assert record["seed_context"] == "She slept badly."
+    # Per-query instrumentation rode along on the history entries.
+    q = next(e for e in record["queries"] if e["kind"] == "query")
+    assert q["timing"]["llm_calls"] >= 1
+    assert "banner" in q
+
+
+def test_optional_instrumentation_is_omitted_when_empty() -> None:
+    # Every W2-O field is additive and absent by default, so pre-W2-O
+    # recordings and no-context rounds keep exactly the old shape.
+    from my20q.recording import build_round_record
+
+    record = build_round_record(
+        session_id="s", round_id="r", topic_id="general", engine="reasoning",
+        history=[], outcome=None, final_utterance="", model="m",
+    )
+    for field in ("seed_context", "seed_ms", "pending_question"):
+        assert field not in record
+
+
+async def test_pending_question_is_recorded_without_perturbing_metrics(
+    tmp_path, topics: list[Topic]
+) -> None:
+    # A topic switch abandons the round with a question on screen. It is a
+    # TOP-LEVEL field, never a history entry, so query_count and job_b are
+    # exactly what they were before W2-O.
+    topic = find_topic(topics, "physical_health")
+    assert topic is not None
+    rnd = Round(topic, llm=_reasoning_backend())
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    unanswered = rnd.pending_question
+    rnd.abandon()
+
+    from my20q.recording import build_round_record
+
+    common = dict(
+        session_id="s", round_id="r", topic_id=topic.id, engine=rnd.engine,
+        history=rnd.history, outcome=rnd.outcome,
+        final_utterance=rnd.final_utterance, model="mock",
+    )
+    record = build_round_record(**common, pending_question=rnd.pending_question)
+    baseline = build_round_record(**common)
+    assert record["pending_question"]["text"] == unanswered["text"]
+    assert record["query_count"] == baseline["query_count"] == 1
+    assert record["job_b"] == baseline["job_b"]
+
+
 def test_round_record_carries_the_board() -> None:
     from my20q.recording import build_round_record
 

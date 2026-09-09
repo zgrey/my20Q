@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -72,6 +73,41 @@ class ReasonerError(RuntimeError):
 
 
 @dataclass
+class CallStats:
+    """Per-turn LLM instrumentation — autopsy/bench data (W2-O).
+
+    Threaded explicitly through the call helpers rather than stashed on the
+    Reasoner: the API serves concurrent sessions off one Reasoner, so a
+    shared mutable counter would interleave turns.
+    """
+
+    #: Cumulative milliseconds per phase ("deliberate", "format", …).
+    ms: dict[str, float] = field(default_factory=dict)
+    #: LLM round-trips made this turn (retries included).
+    calls: int = 0
+    #: Gate attempts made this turn (≤ MAX_AUDIT_RETRIES + 1).
+    attempts: int = 0
+    #: Wall clock at construction — the turn's start.
+    started: float = field(default_factory=time.perf_counter)
+
+    def record(self, phase: str, elapsed_ms: float) -> None:
+        self.ms[phase] = round(self.ms.get(phase, 0.0) + elapsed_ms, 1)
+        self.calls += 1
+
+    def as_dict(self) -> dict:
+        """Flat, JSON-safe timings for the history entry.
+
+        ``total_ms`` is wall clock for the whole turn — gate checks and JSON
+        parsing included — not just the sum of the model phases.
+        """
+        out: dict = {f"{phase}_ms": ms for phase, ms in self.ms.items()}
+        out["total_ms"] = round((time.perf_counter() - self.started) * 1000, 1)
+        out["llm_calls"] = self.calls
+        out["attempts"] = self.attempts
+        return out
+
+
+@dataclass
 class ReasonerAction:
     kind: Literal["query", "synthesis"]
     content: str
@@ -97,6 +133,12 @@ class ReasonerAction:
     #: MORE SPECIFIC version of that existing contender ("tingling" refines
     #: "discomfort"). Anchored to the board: the parent must already exist.
     refines: dict[str, str] = field(default_factory=dict)
+    #: Autopsy instrumentation (W2-O) — per-phase milliseconds, LLM
+    #: round-trips and gate attempts for the turn that produced this action.
+    timings: dict = field(default_factory=dict)
+    #: Why earlier attempts this turn were rejected — the gate messages that
+    #: used to be discarded, so an autopsy can see which gate fired.
+    rejections: list[str] = field(default_factory=list)
 
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
@@ -114,6 +156,23 @@ def _extract_json(raw: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _why(corrections: list[str]) -> str:
+    """Render the gate rejections into a ReasonerError message (W2-O).
+
+    "could not produce a usable question" told an autopsy — and the caregiver's
+    diagnostic card — nothing about WHICH gate fired. The reason string is
+    truncated to 300 chars downstream, so keep it compact: dedupe, and cap.
+    """
+    seen: list[str] = []
+    for c in corrections:
+        c = c.strip()
+        if c and c not in seen:
+            seen.append(c)
+    if not seen:
+        return ""
+    return " — rejected: " + "; ".join(seen[:3])
+
+
 class Reasoner:
     def __init__(self, llm: LLMBackend) -> None:
         self.llm = llm
@@ -121,19 +180,29 @@ class Reasoner:
     # --------------------------------------------------------------- helpers
 
     async def _chat_json(
-        self, messages: list, max_tokens: int, *, think: bool | None = False
+        self,
+        messages: list,
+        max_tokens: int,
+        *,
+        think: bool | None = False,
+        stats: CallStats | None = None,
+        phase: str = "format",
     ) -> dict:
         # Structured-JSON calls (seed, format, expand, synthesize) force thinking
         # OFF by default: on a thinking model a rich prompt makes the chain-of-
         # thought eat the whole num_predict budget before the JSON is emitted, so
         # Ollama returns empty content. Free-form reasoning belongs in ask()'s
         # separate `deliberate` phase.
+        t0 = time.perf_counter()
         try:
             raw = await self.llm.chat(
                 messages, max_tokens=max_tokens, json_mode=True, think=think
             )
         except LLMUnavailable as exc:
             raise ReasonerError(f"llm unreachable: {exc}") from exc
+        finally:
+            if stats is not None:
+                stats.record(phase, (time.perf_counter() - t0) * 1000)
         try:
             data = json.loads(raw)
             if isinstance(data, dict):
@@ -145,7 +214,9 @@ class Reasoner:
             raise ReasonerError(f"invalid JSON from LLM: {raw!r}")
         return data
 
-    async def _deliberate(self, draft_messages: list) -> str:
+    async def _deliberate(
+        self, draft_messages: list, *, stats: CallStats | None = None
+    ) -> str:
         """Phase 1 of the ask: free-form reasoning toward the next question.
 
         Uncapped so a thinking model can reason to completion; a non-thinking
@@ -153,13 +224,18 @@ class Reasoner:
         spends its whole budget thinking and returns empty, retry once with
         thinking OFF so we still get text; only a genuinely down backend raises.
         """
+        t0 = time.perf_counter()
         try:
             draft = await self.llm.chat(
                 draft_messages, max_tokens=DELIBERATE_MAX_TOKENS, json_mode=False
             )
         except LLMUnavailable:
             draft = ""
+        finally:
+            if stats is not None:
+                stats.record("deliberate", (time.perf_counter() - t0) * 1000)
         if not draft.strip():
+            t0 = time.perf_counter()
             try:
                 draft = await self.llm.chat(
                     draft_messages,
@@ -169,10 +245,18 @@ class Reasoner:
                 )
             except LLMUnavailable as exc:
                 raise ReasonerError(f"llm unreachable: {exc}") from exc
+            finally:
+                if stats is not None:
+                    stats.record("deliberate", (time.perf_counter() - t0) * 1000)
         return draft
 
     async def _format_question(
-        self, board: facets.Board, focus: str, draft: str
+        self,
+        board: facets.Board,
+        focus: str,
+        draft: str,
+        *,
+        stats: CallStats | None = None,
     ) -> dict:
         """Phase 2 of the ask: format the draft into strict question JSON.
 
@@ -185,6 +269,8 @@ class Reasoner:
                 prompts.format_question_messages(board, focus, draft),
                 max_tokens=FORMAT_MAX_TOKENS,
                 think=False,
+                stats=stats,
+                phase="format",
             )
         except ReasonerError:
             data = {}
@@ -274,7 +360,9 @@ class Reasoner:
         established = established or set()
         corrections: list[str] = []
         best: ReasonerAction | None = None
+        stats = CallStats()
         for attempt in range(MAX_AUDIT_RETRIES + 1):
+            stats.attempts = attempt + 1
             if on_phase is not None:
                 on_phase("re-asking" if attempt else "thinking")
             draft = await self._deliberate(
@@ -296,14 +384,15 @@ class Reasoner:
                     banned=banned,
                     vetoed=vetoed,
                     caregiver_hint=caregiver_hint,
-                )
+                ),
+                stats=stats,
             )
             if not draft.strip():
                 corrections.append(
                     "the reasoning produced no question; state one plainly"
                 )
                 continue
-            data = await self._format_question(board, focus, draft)
+            data = await self._format_question(board, focus, draft, stats=stats)
             question = data.get("question", "")
             cleaned = (
                 sanitize_llm_text(question) if isinstance(question, str) else ""
@@ -371,14 +460,20 @@ class Reasoner:
                     f"about something not yet established (the '{focus}' slot)"
                 )
                 continue
+            action.rejections = list(corrections)
+            action.timings = stats.as_dict()
             return action
 
         # Retries exhausted. A clean, novel question with no scorable slots
         # still beats stalling the round — accept it; the answer scores nothing.
         if best is not None:
             best.rationale = f"(best-effort) {best.rationale}".strip()
+            best.rejections = list(corrections)
+            best.timings = stats.as_dict()
             return best
-        raise ReasonerError("ask: could not produce a usable question")
+        raise ReasonerError(
+            f"ask: could not produce a usable question{_why(corrections)}"
+        )
 
     async def expand_slots(
         self,
@@ -505,13 +600,17 @@ class Reasoner:
                 f'must ask about "{facets.DIRECTION_BUCKETS[mirror]}" instead.'
             )
         corrections: list[str] = []
-        for _ in range(MAX_AUDIT_RETRIES + 1):
+        stats = CallStats()
+        for attempt in range(MAX_AUDIT_RETRIES + 1):
+            stats.attempts = attempt + 1
             data = await self._chat_json(
                 prompts.flip_messages(
                     question, direction_note=note, corrections=corrections
                 ),
                 max_tokens=FLIP_MAX_TOKENS,
                 think=False,
+                stats=stats,
+                phase="flip",
             )
             out = data.get("question", "")
             cleaned = sanitize_llm_text(out) if isinstance(out, str) else ""
@@ -537,8 +636,12 @@ class Reasoner:
                 slots=slots,
                 focus=focus,
                 flipped_from=question,
+                timings=stats.as_dict(),
+                rejections=list(corrections),
             )
-        raise ReasonerError("flip: could not produce a flipped question")
+        raise ReasonerError(
+            f"flip: could not produce a flipped question{_why(corrections)}"
+        )
 
     async def verify(
         self,
@@ -562,11 +665,15 @@ class Reasoner:
         if on_phase is not None:
             on_phase("double-checking")
         corrections: list[str] = []
-        for _ in range(MAX_AUDIT_RETRIES + 1):
+        stats = CallStats()
+        for attempt in range(MAX_AUDIT_RETRIES + 1):
+            stats.attempts = attempt + 1
             data = await self._chat_json(
                 prompts.verify_messages(category, value, corrections=corrections),
                 max_tokens=VERIFY_MAX_TOKENS,
                 think=False,
+                stats=stats,
+                phase="verify",
             )
             out = data.get("question", "")
             cleaned = sanitize_llm_text(out) if isinstance(out, str) else ""
@@ -591,8 +698,12 @@ class Reasoner:
                 slots={category: facets.canonical_value(board, category, value)},
                 focus=category,
                 verify=True,
+                timings=stats.as_dict(),
+                rejections=list(corrections),
             )
-        raise ReasonerError("verify: could not produce a double-check question")
+        raise ReasonerError(
+            f"verify: could not produce a double-check question{_why(corrections)}"
+        )
 
     def _ask_action(
         self, question: str, slots: dict[str, str], data: dict, focus: str

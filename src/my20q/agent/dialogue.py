@@ -46,6 +46,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -218,6 +219,12 @@ class Round:
         self._outcome: str | None = None
         self._final_utterance = ""
         self._opened = False
+        # Autopsy instrumentation (W2-O). The seed call is the round's fixed
+        # cost before the first question, so it is timed once and recorded at
+        # round level rather than charged to q1; the question on screen when a
+        # round is abandoned is captured so the record shows what was unanswered.
+        self._seed_ms: float = 0.0
+        self._abandoned_pending: ReasonerAction | None = None
         # Optional progress hook — the API wires this to the SSE channel.
         self.on_phase: Callable[[str], None] | None = None
 
@@ -245,6 +252,36 @@ class Round:
     @property
     def query_count(self) -> int:
         return sum(1 for h in self._history if h["kind"] == "query")
+
+    @property
+    def seed_ms(self) -> float:
+        """Wall-clock milliseconds the board-seeding call took (W2-O).
+
+        A round's fixed cost before its first question — invisible in the
+        per-query timings, and the difference between "the model is slow" and
+        "the model was still loading".
+        """
+        return self._seed_ms
+
+    @property
+    def pending_question(self) -> dict | None:
+        """The unanswered question on screen — the one the round ended on (W2-O).
+
+        A round abandoned on a topic switch leaves a question hanging, and the
+        record used to drop it — so an autopsy could not tell a round that ran
+        out of questions from one the caregiver walked away from mid-question.
+        For a still-live round (the conversation export serves those too) this
+        is simply the question currently awaiting an answer.
+        """
+        action = self._pending or self._abandoned_pending
+        if action is None or action.kind != "query":
+            return None
+        out: dict = {"text": action.content, "rationale": action.rationale}
+        if action.focus:
+            out["focus"] = action.focus
+        if action.slots:
+            out["slots"] = dict(action.slots)
+        return out
 
     # ------------------------------------------------------- lifecycle
 
@@ -294,6 +331,12 @@ class Round:
             entry["verify"] = True
         if pending.kind == "query" and pending.refines:
             entry["refines"] = dict(pending.refines)
+        # Autopsy instrumentation (W2-O): what the turn cost, and which gates
+        # rejected earlier attempts at it. Both were discarded before.
+        if pending.timings:
+            entry["timing"] = dict(pending.timings)
+        if pending.rejections:
+            entry["rejections"] = list(pending.rejections)
         # An INFORMATIVE yes moved the board (some asserted pair was not yet
         # established); a yes that merely re-confirms established leaders
         # earns its points but does NOT advance the synthesis gates —
@@ -370,6 +413,10 @@ class Round:
         """
         if self._outcome is None:
             self._outcome = "abandoned"
+            # Keep the question that was on screen — the record needs to show
+            # what went unanswered (W2-O). Cleared from _pending either way, so
+            # nothing treats the terminal round as still awaiting an answer.
+            self._abandoned_pending = self._pending
             self._pending = None
 
     async def undo(self) -> RoundEvent:
@@ -468,10 +515,14 @@ class Round:
         try:
             # Seed the facet board once, on the first advance.
             if self._seed_values is None:
-                seeds = await self._reasoner.seed_board(
-                    seed_universal_wants=self.topic.seed_universal_wants,
-                    **self._reasoner_ctx(),
-                )
+                t0 = time.perf_counter()
+                try:
+                    seeds = await self._reasoner.seed_board(
+                        seed_universal_wants=self.topic.seed_universal_wants,
+                        **self._reasoner_ctx(),
+                    )
+                finally:
+                    self._seed_ms = round((time.perf_counter() - t0) * 1000, 1)
                 self._seed_values = self._inject_direction_buckets(seeds)
 
             # A long run of "no" — or a stretch of questioning in which no
@@ -534,7 +585,49 @@ class Round:
         self._pending = action
         # Keep the banner's draft current (cheap: re-weaves only on change).
         await self._refresh_draft(board)
+        self._stamp_banner(board)
         return self._event_for(action, facets.facet_view(board, focus, self._edges))
+
+    def _stamp_banner(self, board: facets.Board | None = None) -> None:
+        """Snapshot the banner onto the entry that just moved it (W2-O).
+
+        The record carried no banner state at all, so an autopsy could not say
+        WHEN the board became propose-ready — the metric that separates "the
+        round needed 18 questions" from "the round was answerable at q9 and
+        asked nine more". Called from every path that consumes an answer,
+        the failure paths included: an answer that tipped the board into
+        readiness must not go unrecorded just because the NEXT question failed
+        to generate. Pass the replayed board when one is already in hand
+        (``_advance`` has just refreshed the weave against it); otherwise it is
+        replayed here. Re-stamped on undo/retry — the freshest snapshot wins.
+        """
+        if self._seed_values is None:
+            return  # a round that never got its seeds
+        # The target is the answer/note that produced this board state. The
+        # failure path interposes its own markers (a restart, then the
+        # diagnostic) between that entry and here, so skip those — but stop at
+        # anything else, so a snapshot is never misattributed across a
+        # caregiver edit or a synthesis.
+        last: dict | None = None
+        for h in reversed(self._history):
+            kind = h.get("kind")
+            if kind in ("query", "context"):
+                last = h
+                break
+            if kind not in ("restart", "reseed", "diagnostic"):
+                return
+        if last is None:
+            return
+        if board is None:
+            board = self._replay_board()
+        snap = self._banner_for(board)
+        # `state` is derivable from `parts`; bans/mutes already ride on the
+        # `edit` entries — keep the per-entry snapshot to what only it knows.
+        last["banner"] = {
+            "ready": snap["ready"],
+            "text": snap["text"],
+            "parts": snap["parts"],
+        }
 
     # ---------------------------------------- the living proposal banner
 
@@ -645,6 +738,14 @@ class Round:
         the research audit). Bans and mutes ride along so the cockpit can
         strike / dim them.
         """
+        return self._banner_for(self._replay_board())
+
+    def _banner_for(self, board: facets.Board) -> dict:
+        """``banner()`` against an already-replayed board.
+
+        Split out so the per-entry snapshot (``_stamp_banner``) can reuse the
+        board ``_advance`` already holds instead of replaying it again.
+        """
         bans = self._edit_bans()
         base = {
             "state": "pending",
@@ -664,7 +765,6 @@ class Round:
             or self._seed_values is None
         ):
             return base
-        board = self._replay_board()
         weave = self._weave(board)
         if not any(c in weave for c in self._core_facets()):
             return base  # nothing real to draft from yet
@@ -1471,11 +1571,24 @@ class Round:
         edges = {cat: dict(m) for cat, m in self._edges.items() if m}
         if edges:
             record["edges"] = edges
-        restarts = [
-            {"reason": h.get("reason", ""), "board": h.get("board") or {}}
-            for h in self._history
-            if h.get("kind") == "restart"
-        ]
+        # Restart markers are stripped from the recorded `queries` (they are
+        # belief control, not conversation), which used to lose WHERE each
+        # restart happened. `after_query` carries the position instead — the
+        # information without putting an internal marker in front of a
+        # caregiver reading the transcript. (W2-O)
+        restarts: list[dict] = []
+        asked = 0
+        for h in self._history:
+            if h.get("kind") == "query":
+                asked += 1
+            elif h.get("kind") == "restart":
+                restarts.append(
+                    {
+                        "reason": h.get("reason", ""),
+                        "after_query": asked,
+                        "board": h.get("board") or {},
+                    }
+                )
         if restarts:
             record["restarts"] = restarts
         return record
@@ -1809,6 +1922,7 @@ class Round:
                     f"(recovered after a context restart) {action.rationale}".strip()
                 )
                 self._pending = action
+                self._stamp_banner(board)
                 return self._event_for(action, facets.facet_view(board, focus, self._edges))
 
         if unreachable:
@@ -1828,6 +1942,9 @@ class Round:
                 "The model could not produce a usable question. Press Retry, "
                 "add a context note to steer it, or switch models."
             )
+        # Stamp before the diagnostic entry lands, so the snapshot rides the
+        # ANSWER that preceded the failure rather than being lost with it.
+        self._stamp_banner()
         self._history.append(
             {"kind": "diagnostic", "text": reason[:300], "answer": None}
         )

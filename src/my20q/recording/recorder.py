@@ -54,6 +54,9 @@ def build_round_record(
     model: str,
     emotional_state: dict | None = None,
     board: dict | None = None,
+    seed_context: str = "",
+    seed_ms: float = 0.0,
+    pending_question: dict | None = None,
 ) -> dict:
     """The canonical per-round training record.
 
@@ -61,13 +64,18 @@ def build_round_record(
     dataset) and the caregiver conversation export (which serves the same
     shape) — so recorded data and exported data are one uniform corpus.
     See docs/design/beta-retool.md §8.
+
+    The last three arguments are autopsy instrumentation (W2-O): the
+    caregiver's round-opening context, what the board-seeding call cost, and
+    the question left unanswered when a round was abandoned. All three are
+    optional and omitted when empty, so older records stay readable.
     """
     # Internal belief-control markers (a restart, or a legacy reseed) are not
     # conversation — drop them from the human-facing / training record.
     # Diagnostic entries ARE kept: a failure the caregiver saw is part of the
     # round's honest trace (and what trial autopsies need most).
     history = [h for h in history if h.get("kind") not in ("reseed", "restart")]
-    return {
+    record = {
         "session_id": session_id,
         "round_id": round_id,
         "topic_id": topic_id,
@@ -84,6 +92,19 @@ def build_round_record(
         "model": model,
         "recorded_at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
     }
+    # The guiding context the caregiver typed when opening the round. It steered
+    # every question in it, so a round read without it is a round read blind —
+    # and mid-round `context` notes are already recorded, so this just gives the
+    # opening note the same standing.
+    if seed_context:
+        record["seed_context"] = seed_context
+    if seed_ms:
+        record["seed_ms"] = seed_ms
+    # Set only for a round abandoned with a question still on screen (a topic
+    # switch) — distinguishing that from a round that simply ran out.
+    if pending_question:
+        record["pending_question"] = pending_question
+    return record
 
 
 class Recorder:
@@ -105,6 +126,9 @@ class Recorder:
         model: str,
         emotional_state: dict | None = None,
         board: dict | None = None,
+        seed_context: str = "",
+        seed_ms: float = 0.0,
+        pending_question: dict | None = None,
     ) -> None:
         """Append one finalized round to its session's JSONL file."""
         self.patient_dir.mkdir(parents=True, exist_ok=True)
@@ -119,6 +143,9 @@ class Recorder:
             model=model,
             emotional_state=emotional_state,
             board=board,
+            seed_context=seed_context,
+            seed_ms=seed_ms,
+            pending_question=pending_question,
         )
         path = self.patient_dir / f"{session_id}.jsonl"
         with path.open("a", encoding="utf-8") as fh:

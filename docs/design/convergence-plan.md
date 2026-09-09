@@ -786,6 +786,16 @@ fixes show a measured Δ on the dishes fixture.
 > cannot report restarts, gate rejections, latency or banner state on
 > recordings that do not carry them. The bench also has **zero test
 > coverage** today; add some.
+>
+> **W2-O landed 09-08, so this is unblocked.** The bench can now read, per
+> round: `seed_context`, `seed_ms`, `pending_question`, and per query
+> `banner` (hence the ready-transition and questions-asked-after-ready
+> metrics), `timing` (per-phase ms, LLM calls, gate attempts) and
+> `rejections`; restart *positions* come from `board.restarts[].after_query`.
+> Note this is only true of rounds recorded from here on — the four canonical
+> fixtures are all pre-W2-O recordings, so a `--compare` baseline drawn from
+> them still cannot report the instrumented metrics. Replaying a fixture
+> through the current engine can.
 
 ### W2-K · Value identity — anchoring and folding — Status: IMPLEMENTED (09-08)
 
@@ -952,7 +962,7 @@ dumps is the *no/kinda score history*, not the *identity prior* — and carry
 tests. **Risks:** low; the profile prior scores nothing by itself, it only
 shapes seeds.
 
-### W2-O · Autopsy instrumentation — Status: PROPOSED (09-08, §1d C6) · F2 precondition
+### W2-O · Autopsy instrumentation — Status: IMPLEMENTED (09-08) · F2 precondition, cleared
 
 **Problem.** §1d had to be reconstructed partly from engine source. The record
 carries no `seed_context` (so `dump_recording.py`'s probe for it can never
@@ -969,6 +979,42 @@ record a pending question on abandon. **Touches:** `recording.recorder`,
 `dialogue` (history entries), `reasoner` (rejection reasons),
 `scripts/dump_recording.py`, tests. **Risks:** record-schema change — older
 recordings must still dump (the dumper already handles legacy fields).
+
+**Landed 09-08**, with two owner decisions that changed the proposal above:
+
+1. **Restart position, not restart markers.** Keeping `restart` in `queries`
+   would push an internal belief-control marker into the two *caregiver-facing*
+   surfaces that render entries with an `else → "Question N"` fallthrough
+   (`transcript.to_markdown`, `web/src/review.tsx`). `board.restarts` entries
+   carry **`after_query`** instead — same information, no consumer churn, and
+   the transcript a caregiver reads stays conversation-only.
+2. **No token counts.** Ollama returns `prompt_eval_count`/`eval_count` and
+   `chat()` throws them away, but capturing them means widening
+   `LLMBackend.chat`'s return type across every backend; a `last_usage`
+   side-channel is unsafe because the API serves concurrent sessions off one
+   backend. Latency and call/attempt counts only. Deferred, not refused.
+
+The record gained `seed_context`, `seed_ms`, `pending_question`, per-entry
+`banner` / `timing` / `rejections`, and `board.restarts[].after_query` — all
+additive and omitted when empty, so every pre-W2-O recording still dumps
+(verified against the 06-11, 08-31 and 09-01 files). `ReasonerError` from
+`ask` / `flip` / `verify` now names the gate that fired, which reaches the
+caregiver's diagnostic card as well as the record.
+
+**One correction to the spec while implementing.** Stamping the banner only on
+the success path lost the snapshot exactly where it matters most: a live
+`gemma4:e4b` round left an answered query with no banner because the answer
+landed and then the *next* ask failed the repeat gate, returning before the
+stamp. The stamp now runs on the failure paths too, walking back past the
+restart/diagnostic markers the failure path interposes — but stopping at a
+caregiver edit or a synthesis, so a snapshot is never misattributed.
+
+**What it already shows.** A single instrumented `gemma4:e4b` round:
+`no-streak@q004` (restart position), 9.1 s mean per question but **19.1 s on a
+3-attempt question vs 5.6 s clean** (the deliberate/format split makes the cost
+of a gate re-ask visible for the first time), and 3 gate rejections across 6
+questions — 2 of them the model writing either/or questions. All of it is
+`--compare`-able the moment W2-G exists.
 
 ### W2-P · Focus/content divergence gate + enumeration-axis guard — Status: PROPOSED (09-08, §1d C7)
 
@@ -1141,12 +1187,12 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W1-F | The synthesis editor (selectable segments · candidates · ⟳ Restate) | **IMPLEMENTED** (06-11/12, owner-designed; ✗-note UI retired, free-text path hardened) |
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (§1d C2: **fifth sighting** — toes, right thigh, "hurting" all wasted on established tags). Ordered after W2-K |
 | W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11) — but see W2-L: §1d found it unsafe in production |
-| W2-G | Noise bench | PROPOSED · gate **F2** (amended 09-08: local `gemma4:e4b` simulator, right-thigh fixture, needs W2-O) |
+| W2-G | Noise bench | PROPOSED · gate **F2** — **now unblocked** (amended 09-08: local `gemma4:e4b` simulator, right-thigh fixture; W2-O landed 09-08) |
 | **W2-K** | **Value identity — anchoring + folding** | **IMPLEMENTED (09-08)** — drill-down restored; verified by replay (`right side › right leg › right thigh`) |
 | W2-L | Verify-turn safety | **PARTLY IMPLEMENTED (09-08)** — wording fixed; the verify-no scoring question stays open (owner-decided, wants the bench) |
 | W2-M | Caregiver-note fidelity | PROPOSED (09-08, §1d C4) |
 | W2-N | Restart keeps the profile prior | **IMPLEMENTED (09-08)** — one line |
-| W2-O | Autopsy instrumentation | PROPOSED (09-08, §1d C6) — **F2 precondition** |
+| **W2-O** | **Autopsy instrumentation** | **IMPLEMENTED (09-08)** — record carries seed context, per-query banner/timing/rejections, restart positions, pending question; **F2 precondition cleared** |
 | W2-P | Focus/content gate + enumeration-axis guard | PROPOSED (09-08, §1d C7) — re-measure after W2-K |
 | W2-Q | `yes_memory` integrity + same-session read-back | PROPOSED (09-08, §1d C7) |
 | W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |

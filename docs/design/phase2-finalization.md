@@ -18,7 +18,7 @@ the first time. *(Counts refreshed 2026-09-08; the three added commits are the
 
 | Check | Result |
 |---|---|
-| `pytest` | 211 passed, 2 skipped |
+| `pytest` | 237 passed, 2 skipped *(211 → 220 with W2-K, → 237 with W2-O)* |
 | `ruff check .` | clean |
 | `npm run typecheck` (web) | clean |
 
@@ -127,6 +127,16 @@ honestly moving anything from IMPLEMENTED to VALIDATED.
 > no banner state, no per-call latency, no restart *position* and no gate
 > rejection reasons, so the bench cannot report the §1 metrics honestly on
 > recorded rounds until it does. (d) The bench has **zero test coverage**.
+>
+> **(c) is now closed — W2-O landed 09-08**, so F2 is unblocked and is the
+> next action. The record carries `seed_context`, `seed_ms`,
+> `pending_question`, per-query `banner` / `timing` / `rejections`, and
+> `board.restarts[].after_query`; `scripts/dump_recording.py` renders all of
+> it, including the ready-transition metric ("board ready at q009, 9 asked
+> after"). Caveat for the fixtures: the four canonical rounds are *pre*-W2-O
+> recordings, so a baseline read straight off them still lacks the
+> instrumented metrics — replaying them through the current engine is what
+> produces a comparable run. (a), (b) and (d) remain F2's own work.
 
 ### F3 · W2-E — candidates + tag rescue + pronoun folding *(PROPOSED)*
 The cheapest remaining engine win, and now on its **fifth sighting**: q93's
@@ -177,19 +187,20 @@ Concretely, nothing merges until:
 - [x] **F1.5** — W2-K lands, with unit tests, after owner iteration.
       *(09-08. Drill-down restored and verified by replay; W2-L wording and
       W2-N rode along. 220 passed / 2 skipped, ruff clean.)*
-- [ ] **F2** — W2-G bench lands and reproduces the §1 metrics on a fixture
-      (needs W2-O first).
+- [ ] **F2** — W2-G bench lands and reproduces the §1 metrics on a fixture.
+      *(Its W2-O precondition landed 09-08 — the record now carries the
+      metrics. F2 itself is untouched and is the next action.)*
 - [ ] **F3** — W2-E lands, with a measured delta on the bench.
 - [ ] **F4** — ROADMAP Phase 2 rewritten; §12 checklist reconciled.
 
 **Not gates, but raised by F1 and queued** (`convergence-plan.md` §3): **W2-L**
 verify-turn safety — patient-facing, and 2 of 3 verifies in the trial destroyed
-a correct belief; **W2-M** caregiver-note fidelity; **W2-N** restart keeps the
-profile prior; **W2-O** autopsy instrumentation (an F2 precondition, so it will
-in practice land before the bench); **W2-P** focus/content gate; **W2-Q**
-`yes_memory` integrity. Whether any of these should be promoted to a gate — W2-L
-has the strongest claim, being the only one with a patient-facing harm — is an
-open owner decision.
+a correct belief; **W2-M** caregiver-note fidelity; ~~**W2-N** restart keeps the
+profile prior~~ (landed 09-08); ~~**W2-O** autopsy instrumentation~~ (landed
+09-08, as predicted, ahead of the bench it gates); **W2-P** focus/content gate;
+**W2-Q** `yes_memory` integrity. Whether any of the remainder should be promoted
+to a gate — W2-L has the strongest claim, being the only one with a
+patient-facing harm — is an open owner decision.
 
 **Merge mechanics — DECIDED: a true merge commit**, as an explicit,
 documented exception to the squash-merge rule in `CLAUDE.md`. A 62-commit

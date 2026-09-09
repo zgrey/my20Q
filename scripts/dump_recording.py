@@ -6,6 +6,13 @@ v2/banner-aware: renders direction labels, informative flags, verify-on-lock
 double-checks, ⇄ flips, ✗-edits (bans/mutes), restart reasons — and closes
 each round with the autopsy summary (answer mix, focus histogram, farming
 yeses, verifies/flips/edits/restarts) that previously had to be hand-built.
+
+v3 (W2-O): renders the instrumentation the record now carries — the round's
+seed context and seeding cost, the per-query banner (with the query at which
+the board first turned propose-ready, and how many were asked after it), the
+gate rejections behind each re-ask, per-question latency, restart POSITIONS,
+and the question left unanswered when a round was abandoned. Recordings
+written before W2-O simply omit these fields and dump exactly as before.
 """
 
 import contextlib
@@ -50,6 +57,39 @@ def _summary(r: dict) -> None:
         f"             farming-yeses={farming}  verifies={verifies}  "
         f"flips={flips}  diagnostics={diags}  restarts={restarts}"
     )
+    # The banner metric (W2-O): the query at which the board first turned
+    # propose-ready, and how many were asked after that point. A round that
+    # was answerable at q9 and ran to q18 spent half its questions past the
+    # point where proposing WAS the best question.
+    ready_at = next(
+        (
+            i
+            for i, q in enumerate(queries, start=1)
+            if (q.get("banner") or {}).get("ready")
+        ),
+        None,
+    )
+    if ready_at is not None:
+        print(
+            f"             board ready at q{ready_at:03d} "
+            f"({len(queries) - ready_at} asked after)"
+        )
+    # Gate pressure and latency — how hard the model had to be pushed, and
+    # what it cost. Only present on W2-O-era records.
+    rejected = sum(1 for q in queries if q.get("rejections"))
+    timed = [q["timing"] for q in queries if q.get("timing")]
+    if rejected or timed:
+        bits = []
+        if rejected:
+            reasks = sum(len(q.get("rejections") or []) for q in queries)
+            plural = "question" if rejected == 1 else "questions"
+            bits.append(f"gate-rejections={reasks} (on {rejected} {plural})")
+        if timed:
+            total = sum(t.get("total_ms", 0.0) for t in timed)
+            bits.append(f"mean {total / len(timed) / 1000:.1f}s/question")
+            if r.get("seed_ms"):
+                bits.append(f"seed {r['seed_ms'] / 1000:.1f}s")
+        print("             " + "  ".join(bits))
     if bans:
         print("             bans:    " + "; ".join(f"{b['category']}≠{b['value']}" for b in bans))
     if mutes:
@@ -69,16 +109,30 @@ def dump(path: str) -> None:
             )
             if r.get("final_utterance"):
                 print(f"    FINAL: {r['final_utterance']!r}")
-            jb = r.get("job_b")
-            if isinstance(jb, dict) and jb.get("seed_context"):
-                print(f"    seed_context: {jb['seed_context']!r}")
+            # (Pre-W2-O this probed r["job_b"]["seed_context"] — job_b is a
+            # float, so it never once fired. The field is top-level now.)
+            if r.get("seed_context"):
+                print(f"    seed_context: {r['seed_context']!r}")
+            if r.get("pending_question"):
+                pq = r["pending_question"]
+                extra = f"  focus={pq['focus']}" if pq.get("focus") else ""
+                print(f"    UNANSWERED at end: {pq.get('text', '')!r}{extra}")
             board = r.get("board") or {}
             if board.get("seeds"):
                 for cat, vals in board["seeds"].items():
                     if vals:
                         print(f"    seed {cat:6s}: {', '.join(vals)}")
             if board.get("restarts"):
-                reasons = [x.get("reason", "?") for x in board["restarts"]]
+                # `after_query` is the position (W2-O); older records lack it.
+                reasons = [
+                    x.get("reason", "?")
+                    + (
+                        f"@q{x['after_query']:03d}"
+                        if x.get("after_query") is not None
+                        else ""
+                    )
+                    for x in board["restarts"]
+                ]
                 print(f"    restarts: {len(reasons)} ({', '.join(reasons)})")
             if board.get("edges"):
                 for cat, links in board["edges"].items():
@@ -131,6 +185,32 @@ def dump(path: str) -> None:
                     flags.append(f"MUTE {q['mute']}")
                 if flags:
                     print(f"             {'  '.join(flags)}")
+                # W2-O instrumentation.
+                banner = q.get("banner")
+                # An empty banner (nothing woven yet) is the normal early-round
+                # state — recorded, but not worth a line per query.
+                if banner and banner.get("parts"):
+                    mark = "READY" if banner.get("ready") else "draft"
+                    parts = " + ".join(
+                        f"{p['value']}({p['band'][:4]})"
+                        for p in banner["parts"]
+                    )
+                    print(f"             banner[{mark}]: {banner.get('text', '')!r}")
+                    print(f"             weave:   {parts}")
+                for why in q.get("rejections") or []:
+                    print(f"             rejected: {why}")
+                t = q.get("timing")
+                if t:
+                    phases = "  ".join(
+                        f"{k[:-3]}={v / 1000:.1f}s"
+                        for k, v in t.items()
+                        if k.endswith("_ms") and k != "total_ms"
+                    )
+                    print(
+                        f"             timing:  total={t.get('total_ms', 0) / 1000:.1f}s"
+                        f"  {phases}  calls={t.get('llm_calls')}"
+                        f"  attempts={t.get('attempts')}"
+                    )
                 # legacy fields (pre-2026-06-10 recordings)
                 if q.get("yes_ids"):
                     print(f"             yes_ids: {q['yes_ids']}")

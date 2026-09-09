@@ -102,6 +102,62 @@ async def test_slot_values_fold_onto_existing_contenders() -> None:
     assert action.slots["what"] == "a picture"  # folded onto the contender
 
 
+# ------------------------------------------- autopsy instrumentation (W2-O)
+
+
+async def test_ask_carries_the_gate_rejections_out() -> None:
+    # The gate messages used to be discarded, so an autopsy could see a
+    # question took three attempts but never WHY the first two were thrown
+    # away. Attempt 1 fails the yes/no gate; attempt 2 passes.
+    not_a_question = {"question": "Tell me about the picture.", "slots": {},
+                      "preface": "", "rationale": "x"}
+    good = {"question": "Is it a picture?", "slots": {"what": "a picture"},
+            "preface": "", "rationale": "x"}
+    action = await _ask(
+        MockBackend(responder=_format_responder([not_a_question, good]))
+    )
+    assert action.content == "Is it a picture?"
+    assert action.rejections  # the first attempt's gate reason survived
+    assert action.timings["attempts"] == 2
+
+
+async def test_ask_records_per_phase_timings() -> None:
+    good = {"question": "Is it a picture?", "slots": {"what": "a picture"},
+            "preface": "", "rationale": "x"}
+    action = await _ask(MockBackend(responder=_format_responder([good])))
+    t = action.timings
+    assert t["llm_calls"] == 2  # deliberate + format
+    assert t["attempts"] == 1
+    assert "deliberate_ms" in t and "format_ms" in t
+    # total_ms is wall clock for the whole turn — gates and parsing included.
+    assert t["total_ms"] >= 0.0
+
+
+async def test_exhausted_ask_names_the_gate_that_fired() -> None:
+    # "could not produce a usable question" told the caregiver's diagnostic
+    # card — and the record — nothing. The reason now carries the gate.
+    not_a_question = {"question": "Tell me about the picture.", "slots": {},
+                      "preface": "", "rationale": "x"}
+    mock = MockBackend(responder=_format_responder([not_a_question]))
+    with pytest.raises(ReasonerError) as exc:
+        await _ask(mock)
+    assert "rejected:" in str(exc.value)
+
+
+async def test_verify_and_flip_are_instrumented() -> None:
+    reasoner = Reasoner(
+        MockBackend(responder=lambda msgs: json.dumps(
+            {"question": "Do you mean a picture?", "slots": {"what": "a picture"}}
+        ))
+    )
+    verified = await reasoner.verify(category="what", value="a picture", board=_BOARD)
+    assert verified.timings["llm_calls"] == 1
+    flipped = await reasoner.flip(
+        question="Is it about moving the picture?", board=_BOARD, focus="what"
+    )
+    assert flipped.timings["attempts"] == 1
+
+
 async def test_action_values_tagged_what_are_refiled_to_how() -> None:
     # The gemma4 trial filed "help with tasks" under WHAT (+6) while HOW never
     # established, jamming the focus policy — verb-led values re-file to how.
