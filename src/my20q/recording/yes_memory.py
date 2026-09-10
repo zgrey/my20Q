@@ -37,9 +37,22 @@ class YesMemory:
     items: list[dict] = field(default_factory=list)
 
     def add(
-        self, *, question: str, needs: list[str], topic_id: str, round_id: str
+        self,
+        *,
+        question: str,
+        needs: list[str],
+        topic_id: str,
+        round_id: str,
+        session_id: str = "",
     ) -> None:
-        """Record one confirmed-yes answer (in memory + the dated file if any)."""
+        """Record one confirmed-yes answer (in memory + the dated file if any).
+
+        ``round_id`` is the same id the round recording carries, and
+        ``session_id`` names the session file, so a confirmed yes can be joined
+        back to the exact round it came from. Before W2-Q the round id here was
+        an ordinal ("r3") while the recording used a uuid, and there was no
+        session id at all — the two artifacts could not be related.
+        """
         rec = {
             "question": question,
             "needs": [n for n in needs if n],
@@ -47,6 +60,8 @@ class YesMemory:
             "round_id": round_id,
             "at": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
         }
+        if session_id:
+            rec["session_id"] = session_id
         self.items.append(rec)
         self._append_file(rec)
 
@@ -89,6 +104,11 @@ def dated_path(
 
     Lives in a ``memory/`` subdir, NOT directly under the patient dir, so it never
     collides with the session recordings the Recorder globs there (``*.jsonl``).
+
+    The day is **UTC**, matching the ``at`` timestamps written inside. It used to
+    be the LOCAL date while the entries were UTC, so an evening session filed
+    itself under the wrong day: ``yes_memory_2026-08-31.jsonl`` in this dataset
+    contains only ``2026-09-01T02:…`` timestamps. One clock, both places.
     """
-    day = (today or _dt.datetime.now().date()).isoformat()
+    day = (today or _dt.datetime.now(_dt.UTC).date()).isoformat()
     return Path(data_dir) / patient_id / "memory" / f"yes_memory_{day}.jsonl"

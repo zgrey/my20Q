@@ -127,7 +127,15 @@ def _make_simulator(name: str) -> LLMBackend:
         from my20q.llm.anthropic_client import AnthropicBackend
 
         return AnthropicBackend(api_key=key, model=name)
-    return OllamaBackend(model=name, timeout_s=60.0, temperature=0.0)
+    # think=False is load-bearing, not tidiness. The simulator's calls are
+    # tiny (max_tokens 4-8, one word expected), and gemma4 is a THINKING model:
+    # with thinking on, the budget is spent before any content is emitted and
+    # OllamaBackend salvages the chain-of-thought instead ("Thinking Process:
+    # 1. **Analyze the Goal:** ..."). `_simulate_confirm` checks
+    # `startswith("y")`, so it was returning False for EVERY draft — the bench's
+    # `converged` column was structurally zero rather than merely strict, in
+    # every run to date. Found by printing the raw response.
+    return OllamaBackend(model=name, timeout_s=60.0, temperature=0.0, think=False)
 
 
 @dataclass
@@ -206,13 +214,29 @@ EXAMPLES (for an example need "my left foot hurts"):
   "Did it start before lunchtime?"       -> not_sure
 """
 
+# This stands in for the caregiver pressing ✓, so it must judge by the standard
+# a caregiver actually applies: "said aloud, would this get me what I need?"
+# The earlier wording — "does that sentence correctly capture your need?" —
+# invited pedantry, and it rejected "I need help getting a blanket over me
+# right now" for the need "I am too cold and want a blanket". That is a draft a
+# person would happily have spoken for them; the real caregiver accepted three
+# drafts of exactly that character in the 09-09 trials. An oracle stricter than
+# the human it represents caps `converged` below what the engine deserves,
+# which is why reached_ready had to become the honest metric.
 _SIM_CONFIRM = """\
-The caregiver thinks you are trying to say:
+Someone is about to say this out loud on your behalf:
   "{utterance}"
 
-Your actual need is: {need}
-Does that sentence correctly capture your need? Reply EXACTLY one word:
-"yes" or "no". One word only.
+What you actually need is: {need}
+
+Would you be content to have that said for you? Judge it the way a person
+would, not word by word:
+- YES if saying it would get you what you need — even if it is worded
+  differently, leaves out a detail, or adds a reasonable one.
+- NO only if it would send someone after the wrong thing, or gets a specific
+  detail wrong (the wrong person, the wrong side of the body, the wrong item).
+
+Reply EXACTLY one word: "yes" or "no". One word only.
 """
 
 _ANSWER_WORDS = {a.value: a for a in Answer}
@@ -245,7 +269,7 @@ async def _simulate_confirm(sim: LLMBackend, need: str, utterance: str) -> bool:
         {"role": "user", "content": _SIM_CONFIRM.format(utterance=utterance, need=need)},
     ]
     try:
-        raw = await sim.chat(messages, max_tokens=4)
+        raw = await sim.chat(messages, max_tokens=8)
     except LLMUnavailable:
         return False
     return raw.strip().lower().startswith("y")

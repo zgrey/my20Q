@@ -262,3 +262,28 @@ def test_readiness_metrics_are_not_conditioned_on_convergence(bench) -> None:
     assert agg["ready_at_query"] == 3.0
     assert agg["queries_after_ready"] == 1.0
     assert agg["queries_to_converge"] is None  # this one IS conditional
+
+
+def test_the_simulator_never_runs_with_thinking_on(bench) -> None:
+    # Load-bearing, not tidiness. The simulator's calls are tiny (max_tokens
+    # 4-8, one word expected) and gemma4 is a THINKING model: with thinking on
+    # the budget is spent before any content is emitted, and OllamaBackend
+    # salvages the chain-of-thought instead ("Thinking Process: 1. **Analyze
+    # the Goal:** ..."). _simulate_confirm checks startswith("y"), so it
+    # returned False for EVERY draft and the bench's `converged` column was
+    # structurally zero in every run to date.
+    sim = bench._make_simulator("gemma4:e4b")
+    assert sim.think is False
+
+
+def test_the_confirm_oracle_judges_by_meaning(bench) -> None:
+    # It stands in for the caregiver pressing ✓, so its prompt must ask the
+    # question a caregiver actually asks — "would this get me what I need?" —
+    # not "does this sentence correctly capture it", which invited pedantry and
+    # rejected a draft the real caregiver would have accepted.
+    p = bench._SIM_CONFIRM
+    assert "content to have that said for you" in p
+    assert "leaves out a detail" in p  # paraphrase is acceptable
+    # It must still name the failures that MUST be rejected.
+    for wrong in ("wrong thing", "wrong person", "wrong side of the body"):
+        assert wrong in p

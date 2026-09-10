@@ -163,6 +163,7 @@ class Round:
         tuning: ReasoningTuning | None = None,
         yes_memory: YesMemory | None = None,
         round_id: str = "",
+        session_id: str = "",
         rng: random.Random | None = None,
     ) -> None:
         self.topic = topic
@@ -188,6 +189,9 @@ class Round:
         # recovered signal round-specific by construction.
         self._yes_memory = yes_memory if yes_memory is not None else YesMemory()
         self.round_id = round_id
+        #: The session this round belongs to — written into the yes-log so a
+        #: confirmed answer can be joined back to its recording (W2-Q).
+        self.session_id = session_id
         # Drives the (decaying) exploration coin-flip; injectable for tests.
         self._rng = rng or random.Random()
         self.engine: Engine = "reasoning" if llm is not None else "fallback"
@@ -1720,6 +1724,7 @@ class Round:
             needs=list(pending.slots.values()),
             topic_id=self.topic.id,
             round_id=self.round_id,
+            session_id=self.session_id,
         )
 
     async def _restart(self, reason: str) -> None:
@@ -2070,11 +2075,15 @@ class Session:
         llm: LLMBackend | None = None,
         config: Config | None = None,
         profile: PatientProfile | None = None,
+        session_id: str = "",
     ) -> None:
         self.topics = list(topics)
         self.llm = llm
         self.config = config
         self.profile = profile
+        #: The API's session id, so the yes-log can be joined to the recording
+        #: it came from (W2-Q). Empty for the CLI harness, which records nothing.
+        self.session_id = session_id
         self.rounds: list[Round] = []
         self.emotional_state: dict[str, float] = {}
         # One yes-memory per session, shared by every round it spawns. The
@@ -2089,7 +2098,15 @@ class Session:
             return YesMemory(path=dated_path(self.config.recording_dir, self.profile.id))
         return YesMemory()
 
-    def start_round(self, topic_id: str, *, seed_context: str = "") -> Round:
+    def start_round(
+        self, topic_id: str, *, seed_context: str = "", round_id: str = ""
+    ) -> Round:
+        """Open a round. ``round_id`` should be the id the RECORDING will use.
+
+        It defaults to an ordinal for the CLI harness, but the API passes the
+        uuid it records under — before W2-Q the two were generated separately,
+        so the yes-log's "r3" could never be joined to its own round.
+        """
         topic = find_topic(self.topics, topic_id)
         if topic is None:
             raise ValueError(f"Unknown topic: {topic_id!r}")
@@ -2104,7 +2121,8 @@ class Session:
             emotional_state=self.emotional_state,
             tuning=self.config.reasoning if self.config else None,
             yes_memory=self.yes_memory,
-            round_id=f"r{len(self.rounds) + 1}",
+            round_id=round_id or f"r{len(self.rounds) + 1}",
+            session_id=self.session_id,
         )
         self.rounds.append(round_)
         return round_

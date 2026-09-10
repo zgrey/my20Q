@@ -347,7 +347,13 @@ def _register_routes(app: FastAPI) -> None:
     def create_session() -> schemas.CreateSessionOut:
         sid = uuid.uuid4().hex
         state.sessions[sid] = Session(
-            state.topics, llm=state.llm, config=state.config, profile=state.profile
+            state.topics,
+            llm=state.llm,
+            config=state.config,
+            profile=state.profile,
+            # So the confirmed-yes log carries the id its recording is filed
+            # under, and the two artifacts can be joined (W2-Q).
+            session_id=sid,
         )
         return schemas.CreateSessionOut(session_id=sid)
 
@@ -360,12 +366,17 @@ def _register_routes(app: FastAPI) -> None:
             if prior.session_id == sid and not prior.round.is_terminal:
                 prior.round.abandon()
                 _maybe_record(state, prior)
+        # Minted BEFORE the round so the round, its recording and its
+        # confirmed-yes entries all carry the same id (W2-Q). They used to be
+        # generated separately, leaving the yes-log's "r3" unjoinable.
+        rid = uuid.uuid4().hex
         try:
-            rnd = session.start_round(body.topic_id, seed_context=body.seed_context)
+            rnd = session.start_round(
+                body.topic_id, seed_context=body.seed_context, round_id=rid
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         event = await rnd.open()
-        rid = uuid.uuid4().hex
         handle = _RoundHandle(round=rnd, last_event=event, session_id=sid, round_id=rid)
         rnd.on_phase = lambda phase: _publish(handle, {"phase": phase})
         state.rounds[rid] = handle
