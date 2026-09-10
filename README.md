@@ -20,53 +20,36 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 
 ## Status
 
-> **Parked 2026-09-09, awaiting a live trial.** `phase2-cockpit` is 78 commits
-> ahead of `main`, 0 behind, and pushed. All green: **283 tests / 2 skipped**,
-> ruff and cockpit typecheck clean. Phase 2 is feature-complete but **not yet
-> merged** — the bar and the remaining gates are in
-> [`docs/design/phase2-finalization.md`](docs/design/phase2-finalization.md).
-> **Resume there**, not from `docs/ROADMAP.md` (its Phase 2 entry is stale).
+> **Phase 2 is MERGED — 2026-09-10.** The caregiver cockpit is on `main`
+> (PR #1, a true merge commit: 83 commits, 93 files, +24,597 / −1,900). All
+> green on `main`: **290 tests / 2 skipped**, ruff and cockpit typecheck clean.
 >
-> The bar is **F1 → F1.5 → F2 → F3 → F4 → merge**. Three gates are cleared:
->
-> - **F1 ✓** — trials sat 08-31 / 09-01; autopsy in
->   [`convergence-plan.md` §1d](docs/design/convergence-plan.md).
-> - **F1.5 ✓** — **W2-K**, the value-identity fix. Fine values were collapsing
->   onto their coarse incumbent, which capped the board at seed granularity,
->   wrote wrong values into the recorded dataset, and — by making a tagged
->   child equal its own named parent — made every refinement edge get dropped.
->   **Refinement links had therefore never once engaged in production.** Fixed
->   and verified by replay; **W2-L** (verify wording) and **W2-N** (restart
->   keeps the profile prior) rode along.
-> - **F2 ✓** — **W2-G**, the noise bench, after its **W2-O** precondition
->   (autopsy instrumentation) landed. Engine changes are now *measured* rather
->   than argued about.
->
-> **The engine works.** Three trials on 09-09 converged repeatedly — the
-> afternoon session accepted **three rounds at 7, 4 and 11 queries**, against
-> one accept in eight rounds at 18 queries on 08-31/09-01, and the evening
-> session (post-W2-M/W2-P) accepted another with **zero restarts and zero
+> **The engine works, in the field.** Three sessions on 2026-09-09 converged
+> **four rounds at 7, 4, 11 and 12 queries**, against one accept in eight rounds
+> at 18 queries on 08-31/09-01. The last session had **zero restarts and zero
 > diagnostics**. Caregiver, unprompted: *"Much more robust and we quickly got to
-> the correct question."*
+> the correct question."* · *"Questions coming quicker."* · *"Questions being
+> asked aloud."* Autopsies: [`convergence-plan.md` §1d–§1g](docs/design/convergence-plan.md).
 >
-> **W2-M / W2-P / the iPad audio fix are all confirmed live** —
-> [`convergence-plan.md` §1f](docs/design/convergence-plan.md). Gate rejections
-> fell 0.54 → 0.36 per question, which is what *"questions coming quicker"*
-> actually was: the expensive turns are the re-asks (16.0s against 6.1s clean),
-> and W2-P cut them by fixing the controller's bookkeeping rather than by
-> instructing the model harder (that was **W2-S**, measured and rejected).
+> The merge bar was **F1 → F1.5 → F2 → F3 → F4**. F1 (a fresh trial) found the
+> regression that reordered everything after it; F1.5 fixed value identity —
+> refinement links had **never once engaged in production**; F2 built the bench;
+> **F3 was dropped** on re-measurement (the defect it targeted fell to 4%); F4
+> reconciled the docs. History: [`phase2-finalization.md`](docs/design/phase2-finalization.md).
 >
-> **Watch `reached_ready`, not `converged`.** The bench's confirm oracle rejects
-> drafts that plainly capture the need, so convergence is capped below what the
-> engine deserves; whether the board reaches readiness — the point where the
-> draft becomes a woven sentence rather than the code template — is the honest
-> measure. W2-P took it from **0/9 to 2/9**, the first non-zero in any bench run.
+> **Two cautions worth carrying.** *The bench is a good veto and a poor
+> endorser* — it correctly killed a change that looked like free latency (W2-S,
+> which doubled dead ends) and scored another as a null result when it was part
+> of the stack that then converged live (W2-R). And its `converged` column was
+> **structurally broken** until 2026-09-10, so every figure before then reads as
+> "not measured" (§1g). Steer by `reached_ready`, and confirm in a real session.
 >
-> Then **F3** (W2-E, tag rescue) and **F4** (doc reconciliation) → merge. Still
-> open: **W2-Q** (confirmed answers never read back), the owner call on
-> **W2-L**'s verify-no scoring, W2-P's unbuilt **enumeration-axis guard**, and
-> **latency** — 10.2s per question, 86% of it the deliberate phase, with
-> prompt-side fixes measured and rejected (**W2-S**).
+> **Open, none blocking:** **W2-Q**'s read-back half (it crosses the two-layer
+> persistence rule — an owner decision, not a refactor), **F5** (the `httpx2`
+> deprecation; `httpx` is a core runtime dep, so it is a real choice), and
+> **latency** at ~9.6 s/question with 86% in the deliberate phase — both cheap
+> levers are closed by measurement, leaving only the two-phase ask, which is
+> load-bearing.
 
 - **Phase 1 — backend MVP** ✓ Dialogue engine, topics, Ollama client, safety
   layer, and a Rich-based CLI harness.
