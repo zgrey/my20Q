@@ -200,4 +200,10 @@ class TTSStatusOut(BaseModel):
 
 
 class TTSIn(BaseModel):
-    text: str
+    #: Bounded because this is the one endpoint that spends unbounded CPU on
+    #: client input: piper synthesises in a subprocess, and a megabyte of text
+    #: would occupy it for as long as it took. Everything legitimately voiced
+    #: here is a question or an utterance, both already capped far below this
+    #: by `agent.safety` (240 / 200 chars) — so the limit only ever rejects
+    #: input the cockpit would not send.
+    text: str = Field(max_length=2000)

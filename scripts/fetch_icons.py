@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import httpx
+import httpx2
 
 from my20q.pictograms import load_catalog
 
@@ -39,11 +39,11 @@ def main() -> int:
     _DEST.mkdir(parents=True, exist_ok=True)
     manifest: list[dict] = []
 
-    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+    with httpx2.Client(timeout=30.0, follow_redirects=True) as client:
         for concept in catalog:
             try:
                 results = client.get(_SEARCH.format(query=concept.arasaac_query)).json()
-            except (httpx.HTTPError, ValueError) as exc:
+            except (httpx2.HTTPError, ValueError) as exc:
                 print(f"  ! {concept.id}: search failed ({exc})")
                 continue
             if not isinstance(results, list) or not results:

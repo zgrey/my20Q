@@ -25,7 +25,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import httpx
+import httpx2
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -301,7 +301,7 @@ def _register_routes(app: FastAPI) -> None:
             return schemas.ModelsOut(models=[], current=current, can_select=False)
         models: list[str] = []
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx2.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{backend.base_url}/api/tags")
                 resp.raise_for_status()
                 tags = resp.json().get("models", [])
@@ -310,7 +310,7 @@ def _register_routes(app: FastAPI) -> None:
                 for m in tags
                 if isinstance(m.get("name"), str) and "embed" not in m["name"]
             )
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             models = [current] if current else []
         return schemas.ModelsOut(models=models, current=current, can_select=True)
 
