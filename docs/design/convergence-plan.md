@@ -504,6 +504,67 @@ something the model cannot deliver — which is W2-P territory.
 
 ---
 
+## 1f. Evidence — the 09-09 evening trial: W2-M / W2-P / audio confirmed
+
+The first session on the post-W2-M/W2-P stack, and the first to carry the iPad
+audio fix. Caregiver's words, unprompted:
+
+> *"OK, this is excellent. Much more robust and we quickly got to the correct
+> question. All good."* · *"Questions coming quicker"* · *"Questions being
+> asked aloud"*
+
+All three are visible in the record. Comparing the two **instrumented** sessions
+(08-31/09-01 predates W2-O, so its rejection and latency columns are a
+measurement gap, not a zero — do not read an improvement against them):
+
+| | 09-09 pm (post K/O/G/R) | 09-09 eve (post M/P) |
+|---|---|---|
+| rounds / accepted | 9 / 3 | 4 / 1 |
+| gate rejections | 0.54 /q | **0.36 /q** |
+| mean latency | 10.2 s | **9.6 s** |
+| diagnostics | 0 | 0 |
+| **restarts** | 1 | **0** |
+
+**"Questions coming quicker" is the re-ask rate, not the model.** W2-S tried to
+buy this by telling the model more and was rejected for doubling the dead ends.
+W2-P bought it by fixing the controller's *bookkeeping* — a third fewer
+rejections, and rejections are the expensive turns (16.0s against 6.1s clean in
+§1e). Zero restarts and zero diagnostics across four rounds is the "robust"
+part: nothing stalled, so nothing had to be rebuilt or retried.
+
+**W2-P firing in production.** Six of 14 questions asserted a slot other than
+the one requested, and the record now says so:
+
+```
+asked-for how    -> recorded who     {'who': 'Julie'}
+asked-for how    -> recorded who     {'who': 'Julie'}
+asked-for how    -> recorded what    {'what': 'something'}
+asked-for how    -> recorded who     {'who': 'Julie'}
+asked-for what   -> recorded how     {'how': 'a phone call', 'who': 'Julie'}
+asked-for who    -> recorded why     {'why': 'to know about'}
+```
+
+The controller asked for `how` four times and got `who: Julie` three of them.
+Under the old bookkeeping all four would have recorded as `how` covered while
+`how` stayed empty — the starvation loop, caught live.
+
+The accepted round: `my_people`, 12 queries, ready at q10, two asked after,
+weaving *"I just want to spend time with Julie and tell her some information
+about the news."*
+
+**The audio fix is confirmed on the actual device.** It could only be verified
+in Chrome from here — Chrome grants playback activation to the document and so
+never reproduced the fault. *"Questions being asked aloud"* is the iPad
+confirming it, and it closes the loop on a defect that had the caregiver
+pressing Repeat on every single turn.
+
+*One number to not over-read:* focus concentration rose 29% → 43% between the
+two sessions, against the bench's 43% → 38%. This session is 14 questions in
+essentially one substantive `my_people` round, so the distribution is not
+comparable. Re-measure on a multi-topic session before drawing anything from it.
+
+---
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:

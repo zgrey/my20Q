@@ -42,16 +42,19 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 >   (autopsy instrumentation) landed. Engine changes are now *measured* rather
 >   than argued about.
 >
-> **The next action is a live trial, not code.** The 09-09 trial was the first
-> to converge repeatedly — **three rounds accepted at 7, 4 and 11 queries**,
-> against one accept in eight rounds at 18 queries on 08-31/09-01. Since then
-> **W2-M** (a caregiver note now credits only words it actually says — it could
-> credit `what: pain` from a note reading "right side paralysis", at a weight
-> that locks the slot instantly) and **W2-P** (the entry records the slot a
-> question actually asks about, so rotation stops re-picking a starved one) have
-> landed unseen by a person, along with the **iPad audio fix** — the question
-> was never read aloud because each readout built a new `Audio` element, and
-> iOS ties playback permission to the element.
+> **The engine works.** Three trials on 09-09 converged repeatedly — the
+> afternoon session accepted **three rounds at 7, 4 and 11 queries**, against
+> one accept in eight rounds at 18 queries on 08-31/09-01, and the evening
+> session (post-W2-M/W2-P) accepted another with **zero restarts and zero
+> diagnostics**. Caregiver, unprompted: *"Much more robust and we quickly got to
+> the correct question."*
+>
+> **W2-M / W2-P / the iPad audio fix are all confirmed live** —
+> [`convergence-plan.md` §1f](docs/design/convergence-plan.md). Gate rejections
+> fell 0.54 → 0.36 per question, which is what *"questions coming quicker"*
+> actually was: the expensive turns are the re-asks (16.0s against 6.1s clean),
+> and W2-P cut them by fixing the controller's bookkeeping rather than by
+> instructing the model harder (that was **W2-S**, measured and rejected).
 >
 > **Watch `reached_ready`, not `converged`.** The bench's confirm oracle rejects
 > drafts that plainly capture the need, so convergence is capped below what the
