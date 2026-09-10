@@ -213,8 +213,38 @@ def test_optional_instrumentation_is_omitted_when_empty() -> None:
         session_id="s", round_id="r", topic_id="general", engine="reasoning",
         history=[], outcome=None, final_utterance="", model="m",
     )
-    for field in ("seed_context", "seed_ms", "pending_question"):
+    for field in ("seed_context", "seed_ms", "pending_question", "clarifications"):
         assert field not in record
+
+
+def test_clarifications_are_recorded_without_perturbing_metrics() -> None:
+    # W2-T contradictions are a TOP-LEVEL field, never history entries, so the
+    # round's metrics are exactly what they were before it.
+    from my20q.recording import build_round_record
+
+    history = [
+        {"kind": "query", "text": "Tingling in your toes?", "answer": "yes",
+         "slots": {"what": "tingling"}},
+        {"kind": "query", "text": "Is it tingling?", "answer": "no",
+         "slots": {"what": "tingling"}, "verify": True, "contested": True},
+        {"kind": "query", "text": "Tingling in your toes, still?",
+         "answer": "yes", "slots": {"what": "tingling"}, "clarify": True},
+    ]
+    clarifications = [
+        {"category": "what", "value": "tingling",
+         "verify_question": "Is it tingling?",
+         "attempts": [{"text": "Tingling in your toes, still?", "answer": "yes"}],
+         "outcome": "confirmed"},
+    ]
+    common = dict(
+        session_id="s", round_id="r", topic_id="my_body", engine="reasoning",
+        history=history, outcome="synthesized", final_utterance="x", model="m",
+    )
+    record = build_round_record(**common, clarifications=clarifications)
+    baseline = build_round_record(**common)
+    assert record["clarifications"][0]["outcome"] == "confirmed"
+    assert record["query_count"] == baseline["query_count"] == 3
+    assert record["job_b"] == baseline["job_b"]
 
 
 async def test_pending_question_is_recorded_without_perturbing_metrics(

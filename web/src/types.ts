@@ -82,6 +82,12 @@ export interface HistoryEntry {
     number
   >;
   rejections?: string[];
+  // W2-T. `contested` marks a double-check the person answered "no" on: it
+  // scores NOTHING, because a bare re-ask drops the context that made the
+  // original confirmation mean something. `clarify` marks a question asked to
+  // resolve that contradiction, which is scored normally either way.
+  contested?: boolean;
+  clarify?: boolean;
 }
 
 // One woven slot of the live draft, with its confidence band.
@@ -182,4 +188,14 @@ export interface RoundRecord {
     focus?: string;
     slots?: Record<string, string>;
   };
+  // Contradictions the round opened and how each closed (W2-T). Record-only
+  // by owner decision — nothing here is surfaced during a session, and
+  // "unresolved" describes the DIALOGUE, never the person.
+  clarifications?: {
+    category: string;
+    value: string;
+    verify_question: string;
+    attempts: { text: string; answer: Answer | null }[];
+    outcome: "confirmed" | "disconfirmed" | "unresolved" | "open";
+  }[];
 }

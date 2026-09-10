@@ -360,6 +360,15 @@ def round_metrics(record: dict) -> dict:
         ],
         "diagnostics": sum(1 for e in entries if e.get("kind") == "diagnostic"),
         "verifies": sum(1 for e in queries if e.get("verify")),
+        # W2-T. Under ε-noise the bench manufactures exactly the event this
+        # mechanism exists for — a flipped answer to a double-check — so a
+        # noise sweep is the one place these are honestly measurable.
+        "contradictions": len(record.get("clarifications") or []),
+        "contradictions_unresolved": sum(
+            1
+            for c in (record.get("clarifications") or [])
+            if c.get("outcome") == "unresolved"
+        ),
         "ready_at_query": ready_at,
         "queries_after_ready": None if ready_at is None else len(queries) - ready_at,
         # Replaces the old `reasks` counter, which matched rationale prefixes
@@ -417,6 +426,10 @@ def aggregate_metrics(rounds: list[dict]) -> dict:
         ),
         "restarts": _mean([float(m["restarts"]) for m in rounds]),
         "diagnostics": _mean([float(m["diagnostics"]) for m in rounds]),
+        "contradictions": sum(m.get("contradictions", 0) for m in rounds),
+        "contradictions_unresolved": sum(
+            m.get("contradictions_unresolved", 0) for m in rounds
+        ),
         "gate_rejections": _mean([float(m["gate_rejections"]) for m in rounds]),
         "latency_ms": _mean(lat),
         "focus": dict(
@@ -570,6 +583,7 @@ async def _drive_round(
         seed_context=rnd.seed_context,
         seed_ms=rnd.seed_ms,
         pending_question=rnd.pending_question,
+        clarifications=rnd.clarifications,
     )
     return RoundResult(
         scenario=scenario.name,

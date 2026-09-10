@@ -10,6 +10,7 @@ import pytest
 
 from my20q.agent import facets
 from my20q.agent.dialogue import (
+    MAX_CLARIFY_QUERIES,
     SOFT_RESET_NO_STREAK,
     Answer,
     Round,
@@ -1389,10 +1390,188 @@ async def test_context_locked_pair_gets_a_double_check(
     ev = await rnd.answer(Answer.NO)  # the double-check is rejected
     entry = next(h for h in rnd.history if h.get("verify"))
     assert entry["answer"] == "no"
+    # W2-T: the contradiction is HELD, not scored. The pair keeps 1 + 2 = 3.0
+    # (it used to be knocked to 2.0 immediately) and the entry is marked
+    # contested, so the anchored clarification carries the real evidence.
+    assert entry["contested"] is True
     board = rnd._replay_board()
-    assert board["what"]["a drink"] == 2.0  # 1 + 2 − 1: normal scoring
-    # Still confident, but spent — the round moves on, no re-verification.
+    assert board["what"]["a drink"] == 3.0
+    # Never re-verified, and the round is now clarifying rather than moving on.
     assert rnd._pending is not None and not rnd._pending.verify
+    state = rnd._clarify_state()
+    assert state is not None
+    assert (state["category"], state["value"]) == ("what", "a drink")
+    assert state["attempts"] == 0 and state["unresolved"] is False
+
+
+# ------------------------------------------- W2-T · clarifying a contradiction
+
+
+def _clarify_backend(value: str = "a drink") -> MockBackend:
+    """A MockBackend that plays a CLARIFY turn as well as the normal protocol.
+
+    The deliberate phase stamps a marker into its draft when it sees the
+    CLARIFY directive; the formatter recognises the marker and re-asks the
+    contested value with its context restored (which is exactly what the
+    directive asks a real model for). Everything else stays the drill protocol.
+
+    Each clarify attempt restores a DIFFERENT context, because the repeat gate
+    still applies to a clarification's own earlier tries — a clarify turn may
+    return to the question the person confirmed, never nag with the same
+    re-ask twice.
+    """
+    state = {"q": 0, "c": 0}
+
+    def responder(messages: list) -> str:
+        system, user = messages[0]["content"], messages[1]["content"]
+        if "starting GUESSES" in system:  # seed
+            return json.dumps(SEED_SLOTS)
+        if "HIGH-TRUST" in system:  # expand (caregiver note)
+            return json.dumps({"slots": {"what": [value]}})
+        if "DOUBLE-CHECK" in system:  # verify-on-lock
+            return json.dumps({"question": f"Can you confirm it is {value}?"})
+        if "pin down the ONE specific" in system:  # deliberate
+            return "CLARIFY-DRAFT" if "CONTRADICTION TO CLARIFY" in user else "..."
+        if "Convert a drafted question" in system:  # format
+            if "CLARIFY-DRAFT" in user:
+                anchor = ["in the kitchen", "with your meal", "before you sleep"]
+                phrase = anchor[state["c"] % len(anchor)]
+                state["c"] += 1
+                return json.dumps(
+                    {"question": f"Is it {value} {phrase} you want?",
+                     "slots": {"what": value}, "preface": "", "rationale": "clarify"}
+                )
+            word = _SUBJECTS[state["q"] % len(_SUBJECTS)]
+            state["q"] += 1
+            return json.dumps(
+                {"question": f"Is it about {word}?", "slots": {"what": word},
+                 "preface": "", "rationale": "drill"}
+            )
+        return json.dumps({"utterance": _UTTERANCES[0]})
+
+    return MockBackend(responder=responder)
+
+
+async def _contradicted(topics: list[Topic], value: str = "a drink") -> Round:
+    """A round sitting on a fresh contradiction, with the clarify question pending."""
+    rnd = Round(
+        _topic(topics, "physical_health"),
+        llm=_clarify_backend(value),
+        rng=_FixedRandom(0.99),
+    )
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # confirms the seeded value at +1
+    # The note must SAY the value or W2-M drops it — that is the point of W2-M.
+    await rnd.add_context(f"she pointed at her cup — she wants {value}")  # +2
+    assert rnd._pending is not None and rnd._pending.verify  # the double-check
+    await rnd.answer(Answer.NO)  # …contradicted
+    return rnd
+
+
+async def test_clarify_holds_the_focus_and_restores_the_anchor(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    # The contradiction outranks every other directive: the very next question
+    # is a clarification on the contested slot, not a fresh drill elsewhere.
+    assert rnd._pending is not None
+    assert rnd._pending.clarify is True
+    assert rnd._pending.focus == "what"
+    assert "a drink" in rnd._pending.content
+    # …and it is NOT the bare double-check that just failed to land.
+    assert rnd._pending.content != "Can you confirm it is a drink?"
+
+
+async def test_clarify_closes_on_a_clean_yes_and_the_pair_survives(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    await rnd.answer(Answer.YES)
+    assert rnd._clarify_state() is None  # separated — the contradiction closed
+    # 1 (yes) + 2 (note) + 1 (clarified) — the double-check's "no" never scored.
+    assert rnd._replay_board()["what"]["a drink"] == 4.0
+    assert rnd.clarifications[0]["outcome"] == "confirmed"
+
+
+async def test_clarify_closes_on_a_clean_no_and_the_pair_is_debited(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    await rnd.answer(Answer.NO)
+    assert rnd._clarify_state() is None
+    # The anchored question is what carries the loss — 1 + 2 − 1, applied ONCE.
+    assert rnd._replay_board()["what"]["a drink"] == 2.0
+    assert rnd.clarifications[0]["outcome"] == "disconfirmed"
+
+
+async def test_clarify_gives_up_without_ending_anything(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    for _ in range(MAX_CLARIFY_QUERIES):  # "kinda" separates nothing
+        assert rnd._pending is not None and rnd._pending.clarify
+        await rnd.answer(Answer.KINDA)
+    state = rnd._clarify_state()
+    assert state is not None and state["unresolved"] is True
+    # Not terminal, not a diagnostic — the round simply goes back to work.
+    assert rnd.outcome is None
+    assert rnd._pending is not None and not rnd._pending.clarify
+    record = rnd.clarifications[0]
+    assert record["outcome"] == "unresolved"
+    assert len(record["attempts"]) == MAX_CLARIFY_QUERIES
+    # The record states a fact about the DIALOGUE, never about the person.
+    assert set(record) == {"category", "value", "verify_question", "attempts", "outcome"}
+
+
+async def test_undo_reopens_the_contradiction(topics: list[Topic]) -> None:
+    """Clarify state is DERIVED, so rewinding an answer rewinds the mode too."""
+    rnd = await _contradicted(topics)
+    await rnd.answer(Answer.YES)
+    assert rnd._clarify_state() is None
+    await rnd.undo()
+    state = rnd._clarify_state()
+    assert state is not None and state["attempts"] == 0
+
+
+def test_contested_no_neither_scores_nor_counts_as_a_no(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink"]}
+    rnd._history = [
+        {"kind": "query", "text": "Is it a drink you want?", "answer": "yes",
+         "slots": {"what": "a drink"}},
+        {"kind": "query", "text": "Is it a drink?", "answer": "no",
+         "slots": {"what": "a drink"}, "verify": True, "contested": True},
+    ]
+    assert rnd._replay_board()["what"]["a drink"] == 1.0  # the yes survives
+    assert rnd._consec_no_streak() == 0  # an ambiguity, not a no
+    # …and it must never mark its own value as an exhausted avenue, which would
+    # forbid the very question the clarification is about to ask.
+    seg = rnd._history * 2
+    assert rnd._futile_pair(seg) is None
+    # The lost anchor is recoverable: the fuller question that earned the yes.
+    state = rnd._clarify_state()
+    assert state is not None
+    assert state["question"] == "Is it a drink you want?"
+    assert state["verify_question"] == "Is it a drink?"
+
+
+def test_clarify_falls_back_to_the_caregiver_note_as_the_anchor(
+    topics: list[Topic],
+) -> None:
+    """`_verify_due` also fires on pairs a NOTE alone made confident."""
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink"]}
+    rnd._history = [
+        {"kind": "context", "text": "she pointed at her cup",
+         "answer": None, "slots": {"what": ["a drink"]}},
+        {"kind": "query", "text": "Is it a drink?", "answer": "no",
+         "slots": {"what": "a drink"}, "verify": True, "contested": True},
+    ]
+    state = rnd._clarify_state()
+    assert state is not None
+    assert state["question"] == "" and state["note"] == "she pointed at her cup"
 
 
 def test_futile_pair_bans_the_drilled_value(topics: list[Topic]) -> None:
@@ -1468,6 +1647,31 @@ def test_deliberate_messages_carry_focus_and_directive() -> None:
     assert "SPLIT the tie" in content
     assert '"a drink" vs "a snack"' in content
     assert "ALREADY ASKED" in content and "Is it about food?" in content
+
+
+def test_clarify_block_quotes_both_conflicting_questions() -> None:
+    from my20q.agent import facets as f
+
+    board = f.seed_board({"what": ["tingling"]})
+    clarify = {
+        "category": "what", "value": "tingling",
+        "question": "Is there tingling in your toes?", "note": "",
+        "verify_question": "Is it tingling?",
+    }
+    content = deliberate_messages(
+        "My body", board, [], focus="what", directive="clarify", clarify=clarify
+    )[1]["content"]
+    assert "CLARIFY a contradiction" in content
+    # The model cannot restore a context it was never shown, so BOTH questions
+    # go in verbatim — this is the whole mechanism.
+    assert "Is there tingling in your toes?" in content
+    assert "Is it tingling?" in content
+
+    # The payload is inert under any other directive.
+    other = deliberate_messages(
+        "My body", board, [], focus="what", directive="drill", clarify=clarify
+    )[1]["content"]
+    assert "CONTRADICTION TO CLARIFY" not in other
 
 
 def test_history_formatting_dumps_noise_after_restart() -> None:

@@ -57,6 +57,7 @@ def build_round_record(
     seed_context: str = "",
     seed_ms: float = 0.0,
     pending_question: dict | None = None,
+    clarifications: list[dict] | None = None,
 ) -> dict:
     """The canonical per-round training record.
 
@@ -65,10 +66,11 @@ def build_round_record(
     shape) — so recorded data and exported data are one uniform corpus.
     See docs/design/beta-retool.md §8.
 
-    The last three arguments are autopsy instrumentation (W2-O): the
-    caregiver's round-opening context, what the board-seeding call cost, and
-    the question left unanswered when a round was abandoned. All three are
-    optional and omitted when empty, so older records stay readable.
+    The last four arguments are autopsy instrumentation (W2-O, W2-T): the
+    caregiver's round-opening context, what the board-seeding call cost, the
+    question left unanswered when a round was abandoned, and the contradictions
+    the round opened with how each one closed. All are optional and omitted when
+    empty, so older records stay readable.
     """
     # Internal belief-control markers (a restart, or a legacy reseed) are not
     # conversation — drop them from the human-facing / training record.
@@ -104,6 +106,13 @@ def build_round_record(
     # switch) — distinguishing that from a round that simply ran out.
     if pending_question:
         record["pending_question"] = pending_question
+    # Contradictions and their resolutions (W2-T). Record-only by owner
+    # decision: this is where "a confirmed answer was denied under a
+    # double-check, and here is what three clarifying questions did about it"
+    # becomes readable — for trial autopsies and the noise bench, which can
+    # manufacture exactly this event with --noise.
+    if clarifications:
+        record["clarifications"] = clarifications
     return record
 
 
@@ -129,6 +138,7 @@ class Recorder:
         seed_context: str = "",
         seed_ms: float = 0.0,
         pending_question: dict | None = None,
+        clarifications: list[dict] | None = None,
     ) -> None:
         """Append one finalized round to its session's JSONL file."""
         self.patient_dir.mkdir(parents=True, exist_ok=True)
@@ -146,6 +156,7 @@ class Recorder:
             seed_context=seed_context,
             seed_ms=seed_ms,
             pending_question=pending_question,
+            clarifications=clarifications,
         )
         path = self.patient_dir / f"{session_id}.jsonl"
         with path.open("a", encoding="utf-8") as fh:

@@ -105,6 +105,13 @@ FUTILE_STREAK = 4
 #: the budget keeps verification from ever feeling like nagging.
 VERIFY_BUDGET = 2
 
+#: Clarifying questions allowed per contradiction (W2-T). A contradiction is
+#: closed by the first clarifying answer that SEPARATES — a clean yes or no;
+#: "kinda"/"not sure" separate nothing, and this bounds that loop. Running out
+#: is not a failure and never ends anything: the contradiction is recorded
+#: unresolved and the round goes back to normal questioning.
+MAX_CLARIFY_QUERIES = 3
+
 _NO_LLM_TEXT = (
     "No language model is configured, so questions cannot be generated. "
     "Start the backend with an LLM (e.g. Ollama) and retry."
@@ -337,6 +344,19 @@ class Round:
             entry["flipped_from"] = pending.flipped_from
         if pending.kind == "query" and pending.verify:
             entry["verify"] = True
+            # W2-T: a double-check answered "no" CONTRADICTS a pair the board
+            # holds confidently — `_verify_due` fires on nothing else. Scoring
+            # it erases the confirmation on the strength of a question that
+            # dropped the very context which made that confirmation mean
+            # something ("Is there tingling in your toes?" yes → "Is it
+            # tingling?" no, which halved the pair and killed the 09-01 round).
+            # Mark it CONTESTED instead: replay scores it as nothing, and the
+            # anchored clarification that follows carries the real evidence —
+            # in whichever direction it points.
+            if a is Answer.NO:
+                entry["contested"] = True
+        if pending.kind == "query" and pending.clarify:
+            entry["clarify"] = True
         if pending.kind == "query" and pending.refines:
             entry["refines"] = dict(pending.refines)
         # What the controller was drilling into (W2-R). Recorded on every drill,
@@ -1118,7 +1138,8 @@ class Round:
         assert self._reasoner is not None
         T = self.tuning
         board = self._replay_board()
-        focus, directive, split_pair = self._pick_focus(board, seg)
+        clarify = self._clarify_state()
+        focus, directive, split_pair = self._pick_focus(board, seg, clarify=clarify)
         # Exploration DECAYS as yeses accrue toward synthesis — probe a fresh
         # value (profile dropped) with probability explore_decay**(yeses+1).
         # The yes-count resets after each synthesis attempt and each restart,
@@ -1152,6 +1173,7 @@ class Round:
             focus=focus,
             directive=directive,
             split_pair=split_pair,
+            clarify=clarify if directive == "clarify" else None,
             history=self._history,
             edges=self._edges,
             asked=asked,
@@ -1214,22 +1236,28 @@ class Round:
         return action, board, focus
 
     def _pick_focus(
-        self, board: facets.Board, seg: list[dict]
+        self,
+        board: facets.Board,
+        seg: list[dict],
+        *,
+        clarify: dict | None = None,
     ) -> tuple[str, str, tuple[str, str] | None]:
         """Choose the focus slot + directive — the question-strategy policy.
 
         Priorities (code decides strategy; the model only does language):
-        0. PIN the weakest slot of a just-rejected utterance — a kinda/no on a
+        0. CLARIFY an open contradiction — the board is confidently WRONG about
+           a slot, which outranks every other kind of progress.
+        1. PIN the weakest slot of a just-rejected utterance — a kinda/no on a
            proposal means one of its details is off; target it instead of
            re-confirming the parts that already scored (this automates the
            "FOCUS on WHAT" note the caregiver had to type in two trials).
-        1. PROBE a core slot with no positively-led contender — coverage first,
+        2. PROBE a core slot with no positively-led contender — coverage first,
            so synthesis is never missing its essential pieces.
-        2. SPLIT a slot whose top two contenders are tied — matching scores
+        3. SPLIT a slot whose top two contenders are tied — matching scores
            carry no decision, so separate them.
-        3. Every core slot confident → PROBE an empty modifier slot (fresh
+        4. Every core slot confident → PROBE an empty modifier slot (fresh
            coverage beats re-drilling).
-        4. DRILL a LIVE slot — any slot with a positive leader, core or not,
+        5. DRILL a LIVE slot — any slot with a positive leader, core or not,
            that has not RETIRED. Core slots outrank modifiers; unestablished
            leaders outrank established ones (coverage first); then the
            topic's ``facet_priority`` order (data, not logic — e.g. my_people
@@ -1271,7 +1299,15 @@ class Round:
                     return c
             return None
 
-        # 0. After a rejected utterance: pin its weakest used slot until it is
+        # 0. An open contradiction (W2-T). Deliberately AHEAD of everything and
+        #    deliberately exempt from the rotation guard: the board is
+        #    confidently wrong about this slot, so there is no other progress
+        #    worth making, and MAX_CLARIFY_QUERIES already bounds the run. An
+        #    exhausted contradiction stops holding the focus and falls through.
+        if clarify is not None and not clarify["unresolved"]:
+            return clarify["category"], "clarify", None
+
+        # 1. After a rejected utterance: pin its weakest used slot until it is
         #    confident (then fall through to the normal policy).
         last_syn = next(
             (h for h in reversed(seg) if h.get("kind") == "synthesis"), None
@@ -1293,7 +1329,7 @@ class Round:
                 if fresh(cat):
                     return cat, "pin", None
 
-        # 1. Unestablished core slots — no family confirmed above zero yet.
+        # 2. Unestablished core slots — no family confirmed above zero yet.
         open_core = []
         for cat in core:
             fams = facets.families(board, cat, self._edges)
@@ -1303,13 +1339,13 @@ class Round:
         if cat is not None:
             return cat, "probe", None
 
-        # 2. Tied top contenders anywhere (core first) — split them.
+        # 3. Tied top contenders anywhere (core first) — split them.
         for cat in core + others:
             pair = facets.tied_top(board, cat, margin=T.facet_split_margin)
             if pair is not None and fresh(cat):
                 return cat, "split", (pair[0][0], pair[1][0])
 
-        # 3. Every core slot is confident → enrich an empty modifier slot.
+        # 4. Every core slot is confident → enrich an empty modifier slot.
         if all(self._family_confident(board, c) for c in core):
             open_other = []
             for c in others:
@@ -1320,7 +1356,7 @@ class Round:
             if alt is not None:
                 return alt, "probe", None
 
-        # 4. Drill a live slot (core or not; retired slots are out —
+        # 5. Drill a live slot (core or not; retired slots are out —
         #    re-drilling a settled answer is the metronome). Rank: core block
         #    first; within a block, UNESTABLISHED families (below ready) before
         #    established ones (coverage is information; refinement can wait);
@@ -1480,7 +1516,10 @@ class Round:
             if kind != "query":
                 continue
             answer = h.get("answer")
-            if answer == Answer.NOT_SURE.value:
+            if answer == Answer.NOT_SURE.value or h.get("contested"):
+                # W2-T: a contested double-check must never mark its own value
+                # as an exhausted avenue — that would forbid the very question
+                # the clarification is about to ask.
                 continue
             if answer != Answer.NO.value:
                 break
@@ -1562,6 +1601,120 @@ class Round:
             if pair not in verified and yes_counts.get(pair, 0) <= 1:
                 return pair
         return None
+
+    def _clarify_state(self) -> dict | None:
+        """The open contradiction the round is clarifying, if any (W2-T).
+
+        DERIVED from history and never stored — like `_verify_due` and
+        `_futile_pair` — so undo stays pop-and-recompute.
+
+        A contradiction opens when a double-check comes back "no". It CLOSES on
+        the first clarifying answer that actually separates the two readings: a
+        clean yes (the confirmation stands) or a clean no (the contradiction was
+        real). "kinda"/"not sure" separate nothing, which is what the attempt
+        budget bounds. Spending the budget is not a failure — the state is
+        returned `unresolved`, the focus policy stops holding the slot, and the
+        round carries on questioning (owner, 2026-09-10: not a terminal
+        condition; the interviewee quits when they please, not the engine).
+
+        Scoped to the live segment: a restart replaces the board wholesale, so a
+        contradiction about the pre-restart board no longer describes anything.
+        """
+        seg = self._segment()
+        opened = -1
+        for i, h in enumerate(seg):
+            if h.get("kind") == "query" and h.get("contested"):
+                opened = i
+        if opened < 0:
+            return None
+        entry = seg[opened]
+        cat, value = next(iter((entry.get("slots") or {}).items()), ("", ""))
+        if not cat or not value:
+            return None
+        attempts = 0
+        for h in seg[opened + 1 :]:
+            if h.get("kind") != "query" or not h.get("clarify"):
+                continue
+            attempts += 1
+            if h.get("answer") in (Answer.YES.value, Answer.NO.value):
+                return None  # separated — the contradiction is closed
+        state = {
+            "category": cat,
+            "value": value,
+            "verify_question": entry.get("text", ""),
+            "attempts": attempts,
+            "unresolved": attempts >= MAX_CLARIFY_QUERIES,
+        }
+        state.update(self._confirming_source(seg[:opened], cat, value))
+        return state
+
+    @staticmethod
+    def _confirming_source(prior: list[dict], cat: str, value: str) -> dict:
+        """The question or note that put `value` on the board — the lost anchor.
+
+        The most recent yes-answered query asserting the pair, else the most
+        recent caregiver note that credited it (`_verify_due` also fires on
+        pairs a note alone made confident, which the patient never confirmed).
+        Whichever it is, THIS is the context a bare double-check stripped, and
+        what the clarification has to put back.
+        """
+        key = value.casefold()
+        for h in reversed(prior):
+            kind = h.get("kind")
+            if kind == "query" and h.get("answer") == Answer.YES.value:
+                asserted = (h.get("slots") or {}).get(cat, "")
+                if isinstance(asserted, str) and asserted.casefold() == key:
+                    return {"question": h.get("text", ""), "note": ""}
+            elif kind == "context":
+                values = (h.get("slots") or {}).get(cat) or []
+                if any(v.casefold() == key for v in values if isinstance(v, str)):
+                    return {"question": "", "note": h.get("text", "")}
+        return {"question": "", "note": ""}
+
+    @property
+    def clarifications(self) -> list[dict]:
+        """Every contradiction this round opened, and how each one closed (W2-T).
+
+        Record-only by owner decision (2026-09-10): nothing is surfaced in the
+        cockpit mid-session. An unresolved entry states a fact about the
+        DIALOGUE — three clarifying questions did not separate — and never a
+        judgement about the person, which the engine has no standing to make and
+        could not distinguish from its own questions being bad.
+        """
+        out: list[dict] = []
+        for i, h in enumerate(self._history):
+            if h.get("kind") != "query" or not h.get("contested"):
+                continue
+            cat, value = next(iter((h.get("slots") or {}).items()), ("", ""))
+            attempts: list[dict] = []
+            outcome = ""
+            for later in self._history[i + 1 :]:
+                if later.get("kind") == "query" and later.get("contested"):
+                    break  # a fresh contradiction supersedes this one
+                if later.get("kind") != "query" or not later.get("clarify"):
+                    continue
+                answer = later.get("answer")
+                attempts.append({"text": later.get("text", ""), "answer": answer})
+                if answer == Answer.YES.value:
+                    outcome = "confirmed"
+                    break
+                if answer == Answer.NO.value:
+                    outcome = "disconfirmed"
+                    break
+            if not outcome:
+                outcome = (
+                    "unresolved" if len(attempts) >= MAX_CLARIFY_QUERIES else "open"
+                )
+            out.append(
+                {
+                    "category": cat,
+                    "value": value,
+                    "verify_question": h.get("text", ""),
+                    "attempts": attempts,
+                    "outcome": outcome,
+                }
+            )
+        return out
 
     @staticmethod
     def _confirmed_pairs(board: facets.Board) -> set[tuple[str, str]]:
@@ -1708,6 +1861,8 @@ class Round:
                 break
             if kind != "query":
                 continue  # caregiver context / diagnostics are transparent
+            if h.get("contested"):
+                continue  # W2-T: an ambiguity, not a no — see _replay_board
             answer = h.get("answer")
             if answer == Answer.NO.value:
                 streak += 1
@@ -1858,6 +2013,12 @@ class Round:
                                 board[cat][key] = facets.ELIMINATE_FLOOR
                         board = facets.apply_context(board, {cat: [new]})
             elif kind == "query":
+                # W2-T: a CONTESTED double-check scores nothing at all — not
+                # the pair, not the direction buckets. Its evidence is deferred
+                # to the clarification that follows, which asks the same thing
+                # with the context restored and is scored normally either way.
+                if h.get("contested"):
+                    continue
                 answer = h.get("answer")
                 slots = h.get("slots")
                 if answer and slots:

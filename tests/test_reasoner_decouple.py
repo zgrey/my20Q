@@ -202,6 +202,51 @@ async def test_gate4_exempts_split_questions() -> None:
     assert action.content == "Do you need Zach to move it?"
 
 
+async def test_gate4_exempts_clarify_questions() -> None:
+    # A clarification exists to re-ask an ESTABLISHED pair the person has just
+    # contradicted — the zero-information gate must stand down for it.
+    clarify_q = {"question": "Is it a picture of Zach you want?",
+                 "slots": {"what": "a picture"}, "preface": "", "rationale": "x"}
+    action = await _ask(
+        MockBackend(responder=_format_responder([clarify_q])),
+        directive="clarify",
+        clarify={"category": "what", "value": "a picture",
+                 "question": "Is it a picture of Zach you want?",
+                 "verify_question": "Is it a picture?"},
+        established={("what", "a picture")},
+    )
+    assert action.content == "Is it a picture of Zach you want?"
+    assert action.clarify is True
+
+
+async def test_clarify_may_return_to_the_confirming_question_only() -> None:
+    """The repeat gate forgets the CONFIRMING question, never the double-check."""
+    confirming = {"question": "Is it a picture of Zach you want?",
+                  "slots": {"what": "a picture"}, "preface": "", "rationale": "x"}
+    asked = ["Is it a picture of Zach you want?", "Is it a picture?"]
+    clarify = {"category": "what", "value": "a picture",
+               "question": "Is it a picture of Zach you want?",
+               "verify_question": "Is it a picture?"}
+    # Restoring the fuller question the person actually said yes to: allowed.
+    action = await _ask(
+        MockBackend(responder=_format_responder([confirming])),
+        directive="clarify", clarify=clarify, asked=asked,
+        established={("what", "a picture")},
+    )
+    assert action.content == "Is it a picture of Zach you want?"
+
+    # Re-emitting the stripped double-check that just failed to land: refused,
+    # right through the retry budget, so the engine recovers instead.
+    bare = {"question": "Is it a picture?", "slots": {"what": "a picture"},
+            "preface": "", "rationale": "x"}
+    with pytest.raises(ReasonerError, match="already asked"):
+        await _ask(
+            MockBackend(responder=_format_responder([bare])),
+            directive="clarify", clarify=clarify, asked=asked,
+            established={("what", "a picture")},
+        )
+
+
 async def test_repeat_gate_rejects_and_reprompts() -> None:
     repeat = {"question": "Is it a picture?", "slots": {"what": "a picture"},
               "preface": "", "rationale": "x"}

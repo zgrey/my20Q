@@ -120,6 +120,7 @@ def _maybe_record(state, handle: _RoundHandle) -> None:
             seed_context=rnd.seed_context,
             seed_ms=rnd.seed_ms,
             pending_question=rnd.pending_question,
+            clarifications=rnd.clarifications,
         )
         handle.recorded = True
 
@@ -662,6 +663,7 @@ def _register_routes(app: FastAPI) -> None:
                     seed_context=r.seed_context,
                     seed_ms=r.seed_ms,
                     pending_question=r.pending_question,
+                    clarifications=r.clarifications,
                 )
             )
         if format == "md":

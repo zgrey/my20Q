@@ -1155,7 +1155,16 @@ exception to "no engine change before the bench". It is deterministic and
 unit-testable without a bench, it silently disables an already-shipped feature,
 and it corrupts the recorded dataset every session it survives.
 
-### W2-L · Verify-turn safety — Status: PARTLY IMPLEMENTED (09-08)
+### W2-L · Verify-turn safety — Status: IMPLEMENTED (09-08 wording, 09-10 scoring)
+
+> **Closed 09-10 by W2-T.** The open half below — *"should a verify
+> disagreement erase the pair (−1.0) or open a split"* — is decided, and the
+> answer is neither: the disagreement now **scores nothing at all**, and the
+> split it opens is *anchored* (re-ask the confirmed question with its context
+> restored) rather than a free guess. What the entry below could not see is
+> **why** q006's "no" was noise-like: the double-check had stripped the anchor
+> the yes depended on. Owner-decided 09-10, reversing W2-F's "scoring is the
+> normal rule". See **W2-T**.
 
 > **Landed 09-08 — the wording half only.** `prompts.verify_messages` no
 > longer hands the model its slot gloss as a label to reuse: each slot now
@@ -1509,7 +1518,28 @@ claimed: any convergence win. The wall is now *readiness*, and the next thing
 worth measuring is why a slot that has stopped fragmenting still rarely gets
 two clear points ahead of its rival.
 
-### W2-Q · `yes_memory` integrity and same-session read-back — Status: PROPOSED (09-08, §1d C7)
+### W2-Q · `yes_memory` integrity and same-session read-back — Status: CLOSED (09-10) — integrity IMPLEMENTED, read-back DECLINED
+
+> **Integrity landed 09-10.** `round_id` is the recording's uuid, `session_id`
+> is written alongside it, and `dated_path` keys on the same **UTC** clock as
+> the `at` timestamps inside — one clock, both places. A confirmed yes now
+> joins back to the exact round it came from.
+>
+> **Read-back DECLINED (owner, 09-10): in-round contradictions only.** Feeding
+> logged yeses into the seed/ask prompts as established facts is the wrong side
+> of the two-layer boundary this entry flagged: injecting a logged yes as a
+> prior is precisely *letting last round's need predict this round's*, which
+> the dialogue philosophy forbids. The r2/r4 case is instead re-read as a
+> **contradiction**, and W2-T catches that class in-round — where noticing a
+> conflict produces a *question*, never a belief, and scores nothing until the
+> person answers.
+>
+> **Residual, stated plainly:** the literal 09-01 case was **cross-round** (r2
+> confirmed, r4 denied minutes later), and in-round-only does not catch it. A
+> yes confirmed in an earlier round of the same session and denied in this one
+> still passes unremarked. That is a deliberate cost of keeping the two-layer
+> rule intact, not an oversight — reopen it only with trial evidence that the
+> cross-round case recurs.
 
 **Problem.** 09-01 r2 confirmed *tingling in toes*; r4, same topic, minutes
 later, re-asked about tingling and got **no**. The log held the answer.
@@ -1606,6 +1636,108 @@ still wins on its own score); complexity. **Acceptance:** dishes-round
 replay weaves a specific value by the 3rd proposal; bench convergence Δ on
 all three fixtures; no honest-tile regression.
 
+### W2-T · Clarifying mode — Status: IMPLEMENTED (09-10)
+
+**Owner proposal, 2026-09-10.** *"When a double-check is proposed and the answer
+contradicts, CC should enter a 'clarifying mode' that merges all yes answers and
+walks through a deep dive on the 'yes'-specific context in an attempt to split.
+… If clarifying mode fails to clarify then perhaps it is because the interviewee
+is confused. This is not a terminal condition, the model should persist with
+questioning and attempting to build context until the user is happy. Fatigue is
+not an issue. The interviewee can quit when they please."*
+
+**Problem — the contradiction usually isn't one.** §1d's q006 is the case: a
+**yes** to *tingling in toes*, then one question later a **no** to a bare
+*tingling*, which halved the pair and killed the round. Those two answers do not
+conflict. **The verify turn re-asks the value stripped of the anchor that made
+the original yes mean anything.** W2-L fixed the *slot-gloss* leak in that
+question (§1d C3); it never touched the anchor-stripping, which is the larger
+half. A single noisy-looking "no" was then applied at full −1.0 against a
+confirmation the person had actually given.
+
+Reproduced live on gemma4 while building this, unprompted by any fixture:
+
+```
+Q1  "Are you feeling any pain right now?"        -> yes   {what: pain, when: right now}
+    caregiver note: "she keeps pointing — it is definitely pain"   (what: pain = 3.0)
+Q2  "Do you mean pain?"                          -> NO    <- the anchor is gone
+```
+
+**The mechanism.** A double-check answered "no" opens a *contradiction*:
+
+1. **The verify-no is CONTESTED, not scored** (owner decision, 09-10 —
+   deliberately reversing W2-F's "scoring is the normal rule"). Replay skips it
+   entirely: no points, no direction buckets. It is also transparent to
+   `_consec_no_streak` and excluded from `_futile_pair`, which would otherwise
+   mark the contested value as an exhausted avenue and forbid the very question
+   the clarification is about to ask. A bare re-ask that contradicts is an
+   **ambiguity**, and an ambiguity is not evidence.
+2. **The clarification restores the anchor.** A new `clarify` directive at
+   focus-policy **priority 0** — ahead of pin/probe/split/drill, and exempt from
+   the rotation guard, because a board that is *confidently wrong* about a slot
+   has no other progress worth making. The prompt is handed both questions
+   verbatim (`_clarify_block`) plus the caregiver note when the pair was
+   note-established, because a model cannot restore a context it was never
+   shown.
+3. **The evidence is whatever the anchored question gets.** Scored normally: a
+   yes restores and credits the pair, a no debits it once — and it is now a
+   *well-anchored* no, worth far more than the bare one.
+4. **It closes on the first answer that separates** — a clean yes or no.
+   `kinda`/`not sure` separate nothing, which is what `MAX_CLARIFY_QUERIES = 3`
+   bounds. Running out is recorded `unresolved`, releases the focus, and the
+   round goes straight back to normal questioning. **Nothing here is terminal.**
+
+Two gates relax for a clarify turn, and only two: the zero-information gate
+stands down (re-asking an established pair is the point), and the repeat gate
+forgets the **original confirming question** — never the double-check, so the
+model may return to the fuller question but can never re-emit the bare one that
+just failed to land. A clarify turn is still subject to the repeat gate for its
+*own* earlier attempts: three tries means three genuinely different ways of
+restoring the context, not the same re-ask three times.
+
+Live end-to-end, same round as above:
+
+```
+Q3  "Is the pain you are pointing to happening right now?"  -> yes   what: pain = 4.0
+    clarifications: [{what: pain, outcome: confirmed}]      outcome: None (still live)
+```
+
+The model restored **both** anchors — the caregiver's note *and* the original
+`when: right now`. The clarification is a visibly better question than the
+double-check that caused the problem.
+
+**On "diagnosing confusion" — owner decision: record only, no cockpit surface.**
+An exhausted contradiction is recorded as a fact about the **dialogue**
+(`outcome: unresolved`, with the attempts), never as a judgement about the
+person. The engine cannot distinguish "the interviewee is confused" from "my
+questions are bad", and in every trial recorded so far the answer has been the
+latter — the slot-gloss leak, the fabricated `what: pain`, the bare verify. A
+cognitive claim about a real patient does not belong in the dataset on that
+evidence. The cockpit already has the honest channel for it: the caregiver's
+**Confused ↔ Clear** slider (`components.tsx`), which feeds every prompt through
+`_context_block` — a human making the judgement, not the engine.
+
+**What this closes.** W2-L's parked half (*"should a verify disagreement erase
+the pair or open a split"*) — answered: neither erases, the split is anchored
+rather than free. W2-Q's parked half — see its entry; the read-back is
+**declined**, and the in-round contradiction is caught by this instead.
+
+**Not claimed.** No bench number. `--noise` manufactures flipped answers, but
+`_verify_due` only fires on a pair made confident by a **caregiver note**, which
+the bench never produces — a live ε=0.25 run recorded `verifies: 0`. The bench
+now carries `contradictions` / `contradictions_unresolved` columns, so a future
+fixture *with* notes could measure it; today the evidence is the unit tests
+(11 new) plus the live trace above. Watch on the next trial: whether the
+contradiction rate is high enough to matter at all, given verifies currently
+fire once in ~38 questions.
+
+**Touches:** `reasoner` (`clarify` flag + two gate relaxations), `prompts`
+(`_DIRECTIVE_NOTE["clarify"]`, `_clarify_block`), `dialogue`
+(`_clarify_state`/`_confirming_source`/`clarifications`, priority 0, contested
+replay), `recorder` + `api` (record field), `dump_recording`, `bench`,
+`web/types.ts`, 11 tests. **Replay-safe:** every bit of clarify state is
+DERIVED from history, so undo stays pop-and-recompute — asserted by test.
+
 ### W3-I · Mass-scaled confidence checks — Status: PROPOSED
 
 **Problem (audit F1/F2; A5).** Absolute thresholds (ready 2.0 / margin 1.0 /
@@ -1622,10 +1754,25 @@ construction), then let the bench pick defaults for long rounds.
 W2-G existing so the change is measured, not vibed. **Acceptance:** bench:
 fewer late-round fail-loops at unchanged early-round behavior.
 
-### W4-J · Fatigue-aware stopping — Status: PROPOSED
+### W4-J · Fatigue-aware stopping — Status: REJECTED (owner, 09-10)
 
-**Problem (audit G6).** "Never self-end" is right, but the engine happily
-asks 95 questions; fatigue is a clinical cost the policy never sees.
+> **Rejected 09-10, owner decision.** *"This is not a terminal condition, the
+> model should persist with questioning and attempting to build context until
+> the user is happy. Fatigue is not an issue. The interviewee can quit when
+> they please."*
+>
+> The premise below — that fatigue is a clinical cost the policy must model —
+> is declined for this patient: **the caregiver and patient end the session,
+> and the engine has no standing to anticipate that for them.** The parts of
+> the proposal that were actually about question *quality* rather than stopping
+> already shipped anyway: W1-B retirement stops re-drilling a settled slot, and
+> W1-C's ready-glow is exactly the "ready to propose" cue, without the stopping
+> logic attached. The query cap stays the only terminator, and it stays off by
+> default. Reopen only if a caregiver asks for it.
+
+**Problem (audit G6) — the rejected premise.** "Never self-end" is right, but
+the engine happily asks 95 questions; fatigue is a clinical cost the policy
+never sees.
 
 **Proposal.** Once every non-retired core slot is confident and the weave is
 stable (W1-C's comparison), modifier questions must justify themselves: stop
@@ -1666,14 +1813,15 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11) — but see W2-L: §1d found it unsafe in production |
 | **W2-G** | **Noise bench** | **IMPLEMENTED (09-08)** — gate **F2**: ε-noise, `--compare`, §1 metrics read off the round record, 15 tests. Fixed two defects in the instrument (unreachable accept gate, `not_sure`-biased simulator) |
 | **W2-K** | **Value identity — anchoring + folding** | **IMPLEMENTED (09-08)** — drill-down restored; verified by replay (`right side › right leg › right thigh`) |
-| W2-L | Verify-turn safety | **PARTLY IMPLEMENTED (09-08)** — wording fixed; the verify-no scoring question stays open (owner-decided, wants the bench) |
+| **W2-L** | **Verify-turn safety** | **IMPLEMENTED** — wording 09-08; the scoring half closed 09-10 by W2-T (a verify-no scores nothing and opens an anchored split) |
 | **W2-M** | **Caregiver-note fidelity** | **IMPLEMENTED (09-09)** — the note is the anchor, never the board; half the spec was already fixed by W2-K |
 | W2-N | Restart keeps the profile prior | **IMPLEMENTED (09-08)** — one line |
 | **W2-O** | **Autopsy instrumentation** | **IMPLEMENTED (09-08)** — record carries seed context, per-query banner/timing/rejections, restart positions, pending question; **F2 precondition cleared** |
 | **W2-P** | **Focus/content divergence** | **IMPLEMENTED (09-09)** — re-attribution, NOT the specified gate (see W2-S). First bench run ever to reach readiness (2/9). Axis guard still unbuilt |
-| W2-Q | `yes_memory` integrity + same-session read-back | PROPOSED (09-08, §1d C7) |
+| **W2-Q** | **`yes_memory` integrity + same-session read-back** | **CLOSED (09-10)** — integrity implemented (uuid round id, session id, one UTC clock); read-back **DECLINED** by owner as a two-layer violation, in-round contradictions covered by W2-T. Cross-round case knowingly left uncaught |
 | **W2-R** | **Draft does not follow the leader** | **IMPLEMENTED (09-09)** — drill-inferred edges, parented to the FRONTIER. Measured on the bench: round health up (farming yeses to zero, diagnostics halved), **convergence and readiness unmoved at 0/9**. Kept, not claimed as a win |
 | W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |
 | W2-S | Prompt-side re-ask reduction | **TRIED AND REJECTED (09-09)** — measured 3 ways; constraining the model more doubled diagnostics and early-ending rounds. Latency lever is not prompt-side. See §1e |
+| **W2-T** | **Clarifying mode** | **IMPLEMENTED (09-10)** — a contradicted double-check scores NOTHING and opens an anchored clarification at focus priority 0; never terminal; contradictions recorded, not surfaced. Owner-proposed; closes W2-L and W2-Q |
 | W3-I | Mass-scaled confidence | PROPOSED |
-| W4-J | Fatigue-aware stopping | PROPOSED |
+| W4-J | Fatigue-aware stopping | **REJECTED (owner, 09-10)** — fatigue is not a cost this engine models; the caregiver and patient end the session |
