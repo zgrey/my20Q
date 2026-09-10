@@ -565,6 +565,75 @@ comparable. Re-measure on a multi-topic session before drawing anything from it.
 
 ---
 
+## 1g. The bench oracle was broken, and what that means
+
+**`converged` has never been measured.** Not "too strict", as §1e recorded —
+`_simulate_confirm` was returning False for *every* draft, in every bench run
+ever made. gemma4 is a thinking model and the confirm call had a 4-token
+budget, so the budget was spent before any content appeared and
+`OllamaBackend` salvaged the chain-of-thought instead:
+
+```
+max_tokens=  4 -> 'Thinking'
+max_tokens= 64 -> 'Thinking Process:\n\n1.  **Analyze the Goal:** The user…'
+```
+
+`startswith("y")` never matches that. Found by printing the raw response
+rather than reasoning about it — the same trap that was *hypothesised and
+correctly disproved* for `_simulate_answer` earlier the same day, which is
+exactly why it had to be checked rather than assumed. Fixed with `think=False`
+on the simulator backend.
+
+**Then the fix over-corrected, and the bench caught it.** With a loosened
+prompt the sweep reported a triumphant **6/9 converged** — on these:
+
+```
+q=1  'I need pain.'                    for  "My left foot hurts."
+q=2  'I need overwhelmed.'             for  "I feel lonely…"
+q=3  'I need something for someone.'   for  "…help me move a large picture"
+```
+
+Those are the engine's pre-readiness *template stubs*. The calibration set that
+passed this change had seven cases, all well-formed sentences, and never tested
+the actual failure mode — so loosening the oracle simply manufactured
+convergence. The set now includes the real stubs as required rejections
+(12/12), and the prompt names them explicitly.
+
+**Every past `converged` figure should be read as "not measured."** No
+conclusion in §1e or §1f depends on one: `reached_ready` was already the metric
+being steered by, precisely because `converged` looked broken.
+
+### Model comparison — no change warranted
+
+First sweep with a working oracle (9 scenarios, seed 7, cap 15):
+
+| model | converged | q/conv | rejections/q | diagnostics | ms/q |
+|---|---|---|---|---|---|
+| **gemma4:e4b** | **2/9** | 8.0 | **0.396** | 16 | **4391** |
+| gemma3:12b | 0/9 | — | 0.491 | 15 | 5753 |
+
+`gemma4:e4b` wins on every axis, including latency despite being the smaller
+model. **The latency-via-model lever is closed**; with prompt-side closed by
+W2-S, what remains is the two-phase ask itself (86% of a turn is `deliberate`),
+which is load-bearing — it exists because a thinking model starves single-call
+JSON.
+
+### The gap that matters
+
+The bench converges **2 of 9** while the same engine, in the same week,
+converged **4 rounds across 2 live sessions** with the caregiver accepting each
+weave. The simulated answerer plus the oracle are a far harsher environment
+than a real caregiver — and the two drafts the oracle *did* accept above are
+template output a caregiver would have pressed ⟳ Restate on.
+
+So the standing instruction holds, now with a mechanism behind it: **the bench
+is a good veto and a poor endorser.** It correctly killed W2-S. It scored W2-R
+as a null result when W2-R was part of the stack that then converged live. Use
+it to reject changes, not to bless them — and do not tune it further toward a
+number, which is how instruments get bent toward the answer you wanted.
+
+---
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
