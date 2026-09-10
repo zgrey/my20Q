@@ -1,0 +1,21 @@
+{
+  "name": "my20q-cockpit",
+  "version": "0.1.0-beta",
+  "private": true,
+  "type": "module",
+  "description": "Caregiver cockpit for my20Q — Preact + Vite",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "preact": "^10.25.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

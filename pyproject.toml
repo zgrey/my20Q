@@ -24,6 +24,22 @@ api = [
     "fastapi>=0.133.0",
     "uvicorn[standard]>=0.30",
 ]
+trials = [
+    "anthropic>=0.49",
+]
+tts = [
+    # Local text-to-speech (piper). Provides the `piper` entry point used
+    # by src/my20q/tts/piper_tts.py. A voice model (.onnx + .onnx.json)
+    # must also be downloaded and pointed at via MY20Q_PIPER_MODEL.
+    "piper-tts>=1.2",
+]
+kokoro = [
+    # Local text-to-speech (Kokoro-82M) — warmer/less robotic than piper.
+    # Used by src/my20q/tts/kokoro_tts.py. The model (.onnx) and voices (.bin)
+    # files must also be downloaded; see that module's header. Pulls numpy +
+    # onnxruntime transitively.
+    "kokoro-onnx>=0.4",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -37,7 +53,9 @@ my20q = "my20q.cli:main"
 packages = ["src/my20q"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/my20q/taxonomy/data" = "my20q/taxonomy/data"
+"src/my20q/topics/data" = "my20q/topics/data"
+"src/my20q/profiles/data" = "my20q/profiles/data"
+"src/my20q/pictograms/data" = "my20q/pictograms/data"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

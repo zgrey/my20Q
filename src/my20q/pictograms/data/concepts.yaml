@@ -1,0 +1,136 @@
+# Curated AAC concept catalog.
+#
+# Each concept maps query/synthesis text to one ARASAAC pictogram.
+# `keywords` drive retrieval (matched against the text); `arasaac_query`
+# is the search term scripts/fetch_icons.py resolves against the ARASAAC
+# API to download assets/arasaac/<id>.png. Edit freely — add concepts as
+# the topic list grows.
+
+- id: pain
+  label: Pain
+  keywords: [pain, hurt, hurts, hurting, ache, aching, sore]
+  arasaac_query: pain
+- id: tired
+  label: Tired
+  keywords: [tired, sleepy, exhausted, fatigue]
+  arasaac_query: tired
+- id: hungry
+  label: Hungry
+  keywords: [hungry, hunger, eat, eating, food, meal]
+  arasaac_query: hungry
+- id: thirsty
+  label: Thirsty
+  keywords: [thirsty, thirst, drink, drinking, water]
+  arasaac_query: thirsty
+- id: bathroom
+  label: Bathroom
+  keywords: [bathroom, toilet, restroom]
+  arasaac_query: toilet
+- id: medicine
+  label: Medicine
+  keywords: [medicine, medication, pills]
+  arasaac_query: medicine
+- id: cold
+  label: Cold
+  keywords: [cold, chilly, freezing]
+  arasaac_query: cold
+- id: hot
+  label: Hot
+  keywords: [hot, warm, overheated]
+  arasaac_query: hot
+- id: happy
+  label: Happy
+  keywords: [happy, glad, joy, joyful]
+  arasaac_query: happy
+- id: sad
+  label: Sad
+  keywords: [sad, unhappy, upset, crying]
+  arasaac_query: sad
+- id: worried
+  label: Worried
+  keywords: [worried, worry, worrying, anxious, nervous]
+  arasaac_query: worried
+- id: scared
+  label: Scared
+  keywords: [scared, afraid, frightened, fear]
+  arasaac_query: afraid
+- id: lonely
+  label: Lonely
+  keywords: [lonely, alone]
+  arasaac_query: lonely
+- id: confused
+  label: Confused
+  keywords: [confused, confusing, lost]
+  arasaac_query: confused
+- id: angry
+  label: Angry
+  keywords: [angry, mad, frustrated]
+  arasaac_query: angry
+- id: calm
+  label: Calm
+  keywords: [calm, relaxed, peaceful, comfortable]
+  arasaac_query: calm
+- id: family
+  label: Family
+  keywords: [family, relative, relatives]
+  arasaac_query: family
+- id: mother
+  label: Mother
+  keywords: [mother, mom, mum]
+  arasaac_query: mother
+- id: father
+  label: Father
+  keywords: [father, dad]
+  arasaac_query: father
+- id: daughter
+  label: Daughter
+  keywords: [daughter]
+  arasaac_query: daughter
+- id: son
+  label: Son
+  keywords: [son]
+  arasaac_query: son
+- id: wife
+  label: Wife
+  keywords: [wife]
+  arasaac_query: wife
+- id: husband
+  label: Husband
+  keywords: [husband]
+  arasaac_query: husband
+- id: sister
+  label: Sister
+  keywords: [sister]
+  arasaac_query: sister
+- id: brother
+  label: Brother
+  keywords: [brother]
+  arasaac_query: brother
+- id: phone
+  label: Phone call
+  keywords: [phone, call, calling, telephone]
+  arasaac_query: telephone
+- id: talk
+  label: Talk
+  keywords: [talk, talking, speak, tell, telling, say]
+  arasaac_query: talking
+- id: help
+  label: Help
+  keywords: [help, assist, assistance]
+  arasaac_query: help
+- id: television
+  label: Television
+  keywords: [television, tv, watch, watching]
+  arasaac_query: television
+- id: music
+  label: Music
+  keywords: [music, listen, song, songs]
+  arasaac_query: music
+- id: visit
+  label: Visit
+  keywords: [visit, visiting, see, seeing]
+  arasaac_query: visit
+- id: sleep
+  label: Sleep
+  keywords: [sleep, bed, nap, rest]
+  arasaac_query: sleep

@@ -1,0 +1,1719 @@
+/* my20Q caregiver cockpit styling.
+   Two colorways adopted from zgrey.github.io: a warm dark theme (default)
+   and a NIST-inspired light theme. Switched via the `data-theme` attribute
+   on <html> (see index.html for the pre-paint apply script). */
+
+:root {
+  /* --- dark colorway (default) --- */
+  --color-bg-primary: #1a1a1a;
+  --color-bg-secondary: #222222;
+  --color-bg-elevated: #2a2a2a;
+  --color-text-primary: #bdb191;
+  --color-text-secondary: #a9a076;
+  --color-text-heading: #d0c2a5;
+  --color-accent-primary: #537949;
+  --color-accent-hover: #6ea262;
+  --color-accent-dim: #2d3d28;
+  --color-border: #333333;
+
+  /* --- semantic answer colors (theme-independent) --- */
+  --yes: #3f9d44;
+  --no: #d24437;
+  --kinda: #e0921c;
+  --not-sure: #6b7a8a;
+  --neutral: #4b5d70;
+  --neutral-strong: #3a4654;
+  --rec: #e23b3b;
+
+  /* --- cockpit aliases (re-resolve per theme) --- */
+  --bg: var(--color-bg-primary);
+  --card: var(--color-bg-secondary);
+  --nested: var(--color-bg-elevated);
+  --ink: var(--color-text-primary);
+  --ink-soft: var(--color-text-secondary);
+  --heading: var(--color-text-heading);
+  --accent: var(--color-accent-primary);
+  --accent-hover: var(--color-accent-hover);
+  --accent-soft: var(--color-accent-dim);
+  --border: var(--color-border);
+
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+}
+
+/* --- light colorway (NIST-inspired) --- */
+[data-theme="light"] {
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #f1f1f1;
+  --color-bg-elevated: #e8e8e8;
+  --color-text-primary: #1b1b1b;
+  --color-text-secondary: #454545;
+  --color-text-heading: #0b2d71;
+  --color-accent-primary: #005ea2;
+  --color-accent-hover: #0076d6;
+  --color-accent-dim: #dbeefa;
+  --color-border: #c9c9c9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  overflow: hidden;
+}
+
+body,
+.topbar,
+.tile,
+.turn.question,
+.picto-box,
+.answer,
+.send,
+.rec,
+.theme-toggle,
+.context-row input,
+.topic select {
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.cockpit {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1.55fr 1fr;
+  grid-template-rows: 1fr auto;
+  /* Pictogram tile shelved (see app.tsx); reasoning takes the full right
+     column. The .pictogram rules below are retained for easy re-enable. */
+  grid-template-areas:
+    "conversation reasoning"
+    "input        reasoning";
+  gap: 14px;
+  padding: 14px;
+  min-height: 0;
+}
+
+.conversation {
+  grid-area: conversation;
+}
+.pictogram {
+  grid-area: pictogram;
+}
+.reasoning {
+  grid-area: reasoning;
+}
+.input {
+  grid-area: input;
+}
+
+.tile {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tile h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--heading);
+}
+
+/* ---------------------------------------------------------------- topbar */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 56px;
+  padding: 0 18px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.brand span {
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+
+.tb-spacer {
+  flex: 1;
+}
+
+.view-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+}
+.view-tabs button {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 5px 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.view-tabs button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.topic {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.topic select {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--nested);
+}
+
+.rec {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  cursor: pointer;
+}
+.rec .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.rec.on {
+  color: var(--rec);
+}
+.rec.on .dot {
+  background: var(--rec);
+  animation: blink 1.6s infinite;
+}
+.rec.paused {
+  color: var(--ink-soft);
+}
+.rec.paused .dot {
+  background: var(--ink-soft);
+}
+
+.save-btn {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.save-btn:hover:not(:disabled) {
+  color: var(--accent-hover);
+  border-color: var(--accent);
+}
+.save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.theme-toggle,
+.audio-toggle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.audio-toggle.degraded {
+  border-color: var(--kinda);
+}
+.theme-toggle:hover,
+.audio-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(226, 59, 59, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(226, 59, 59, 0);
+  }
+}
+
+/* ---------------------------------------------------------- conversation */
+
+.stream {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.empty {
+  color: var(--ink-soft);
+  font-style: italic;
+  margin: 4px 0;
+}
+
+.turn.question {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--nested);
+}
+.turn.question .q {
+  font-size: 16px;
+  line-height: 1.4;
+}
+.turn.question.pending {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+/* The spoken lead-in distilled from the reasoning — read aloud just before
+   the question; shown muted/italic above it so the caregiver sees it too. */
+.turn.question.pending .preface {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--ink-soft);
+  margin-bottom: 4px;
+}
+.awaiting {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+}
+
+/* Prominent "model is reasoning" feedback in the conversation window — latency
+   is real, so make it obvious the model is working on the next question. */
+.thinking {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent-soft);
+  animation: thinking-pulse 1.6s ease-in-out infinite;
+}
+.thinking-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent-hover);
+}
+.thinking-dots {
+  display: inline-flex;
+  gap: 5px;
+  flex: none;
+}
+.thinking-dots i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: thinking-bounce 1.2s ease-in-out infinite;
+}
+.thinking-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.thinking-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes thinking-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}
+@keyframes thinking-pulse {
+  0%,
+  100% {
+    border-color: var(--accent);
+  }
+  50% {
+    border-color: var(--accent-hover);
+  }
+}
+
+.chip {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: #fff;
+}
+.chip.yes {
+  background: var(--yes);
+}
+.chip.no {
+  background: var(--no);
+}
+.chip.kinda {
+  background: var(--kinda);
+}
+.chip.not_sure {
+  background: var(--not-sure);
+}
+
+.turn.context {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 3px solid var(--accent);
+  padding: 6px 10px;
+  background: var(--accent-soft);
+  border-radius: 0 8px 8px 0;
+}
+.turn.context .tag {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+.turn.context .ctx-text {
+  font-style: italic;
+}
+
+.synthesis {
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--accent-soft);
+}
+.synthesis .label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+.synthesis .utterance {
+  font-size: 20px;
+  line-height: 1.4;
+  margin: 8px 0;
+}
+.synthesis .confirm-note {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+/* ------------------------------------------------------------- pictogram */
+
+.picto-box {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--nested);
+  min-height: 120px;
+}
+.picto-box .glyph {
+  font-size: 64px;
+  line-height: 1;
+}
+.picto-box .concept {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  text-transform: capitalize;
+}
+.pictogram .caption {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.picto-img {
+  max-width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+}
+
+/* ------------------------------------------------------------- reasoning */
+
+.reasoning h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Connection dot for the SSE progress channel. Colour reflects status —
+   green = open, amber = connecting, dim = closed. Pulses only when open. */
+.pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+  opacity: 0.5;
+  transition:
+    background-color 0.2s ease,
+    opacity 0.2s ease;
+}
+.pulse.sse-open {
+  background: var(--accent-hover);
+  opacity: 1;
+  animation: blink 1.4s infinite;
+}
+.pulse.sse-connecting {
+  background: var(--kinda);
+  opacity: 0.8;
+  animation: blink 0.8s infinite;
+}
+.pulse.sse-closed {
+  background: var(--ink-soft);
+  opacity: 0.4;
+}
+.phase-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  margin-left: 4px;
+}
+.reason-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+/* ---- honest reasoning: the 5W1H consensus board ---- */
+.belief {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.belief-head {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--heading);
+}
+.facet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.facet-row {
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.facet-row.focus {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+.facet-cat {
+  font-weight: 600;
+  color: var(--heading);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.facet-focus-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-hover);
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.facet-contenders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.facet-chip {
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.facet-chip b {
+  font-variant-numeric: tabular-nums;
+  margin-left: 3px;
+  color: var(--accent-hover);
+}
+.facet-chip.lead {
+  border-color: var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+.facet-chip.neg {
+  opacity: 0.55;
+}
+.facet-chip.neg b {
+  color: var(--no);
+}
+.facet-empty {
+  opacity: 0.5;
+}
+
+/* ---- diagnostic: reasoning failed — a failure card, never a canned question ---- */
+.turn.diagnostic {
+  border-left: 3px solid var(--no);
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--nested);
+  border-radius: 6px;
+}
+.turn.diagnostic .tag {
+  color: var(--no);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 8px;
+}
+.diagnostic-card {
+  border: 1px solid var(--no);
+  border-radius: var(--radius);
+  background: var(--nested);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.diagnostic-card .label {
+  font-weight: 700;
+  color: var(--no);
+}
+.diag-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.diag-reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+  word-break: break-word;
+}
+.diag-reason .tag {
+  color: var(--no);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  margin-right: 6px;
+}
+.retry-btn {
+  align-self: flex-start;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 7px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.retry-btn:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.rstep-kind.diagnostic {
+  color: var(--no);
+}
+
+/* ----------------------------------------------------------------- input */
+
+.input {
+  gap: 12px;
+}
+/* Primary answers — a large 2×2 grid of big tap targets. */
+.answers-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+/* Secondary actions — Opposite/Repeat/Undo/Quit, smaller, beneath the grid. */
+.secondary-row {
+  display: flex;
+  gap: 10px;
+}
+.answer {
+  font-weight: 700;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.answers-grid .answer {
+  min-height: 92px;
+  font-size: 22px;
+}
+.secondary-row .answer {
+  flex: 1;
+  min-height: 46px;
+  font-size: 14px;
+}
+.answer:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.answer.yes {
+  background: var(--yes);
+}
+.answer.no {
+  background: var(--no);
+}
+.answer.kinda {
+  background: var(--kinda);
+}
+.answer.not_sure {
+  background: var(--not-sure);
+}
+.answer.undo {
+  background: var(--neutral);
+}
+/* The opposition button — accent-colored: it steers the questioning, it
+   doesn't answer or unwind it. */
+.answer.flip {
+  background: var(--accent);
+}
+/* Repeat — a readout utility, not an answer: neutral like undo. */
+.answer.repeat {
+  background: var(--neutral);
+}
+.answer.quit {
+  background: var(--neutral-strong);
+}
+.answer kbd {
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.context-row {
+  display: flex;
+  gap: 8px;
+}
+.context-row input {
+  flex: 1;
+  font-size: 15px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--nested);
+  color: var(--ink);
+}
+.context-row input::placeholder {
+  color: var(--ink-soft);
+}
+.context-row input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.send {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  padding: 0 20px;
+  cursor: pointer;
+}
+.send:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* --------------------------------------------------- wired-stage extras */
+
+.errorbar {
+  padding: 8px 18px;
+  background: var(--no);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.engine-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--ink-soft);
+}
+.engine-badge.reasoning {
+  color: var(--accent-hover);
+  border-color: var(--accent);
+}
+.engine-badge.fallback {
+  color: var(--kinda);
+  border-color: var(--kinda);
+}
+
+/* Model selector — pick the model for human-interaction trials. */
+.model-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.model-select select {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--nested);
+  color: var(--ink);
+  max-width: 160px;
+}
+
+.synthesis.proposed {
+  border-style: dashed;
+}
+
+.turn.question.was-synthesis {
+  border-left: 3px solid var(--accent);
+}
+
+.notice {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.emergency-card {
+  border: 2px solid var(--rec);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(226, 59, 59, 0.08);
+}
+.emergency-card .label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--rec);
+}
+.emergency-card p {
+  margin: 8px 0;
+}
+.emergency-card ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.ctx-hint {
+  font-size: 13px;
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.rec.off {
+  cursor: default;
+  color: var(--ink-soft);
+}
+.rec.off .dot {
+  background: var(--ink-soft);
+  opacity: 0.5;
+}
+
+.saved {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.saved.warning {
+  color: var(--kinda);
+  opacity: 1;
+}
+.saved.over {
+  color: var(--no);
+  opacity: 1;
+}
+
+/* ----------------------------------------------------- emotional sliders */
+
+.emotion {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.emotion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 8px;
+}
+.emotion h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--heading);
+}
+.reset-emotion {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.reset-emotion:hover:not(:disabled) {
+  color: var(--accent-hover);
+  border-color: var(--accent);
+}
+.reset-emotion:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+.slider-row {
+  display: grid;
+  grid-template-columns: 1fr 96px 1fr;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  color: var(--ink-soft);
+}
+.slider-row .slabel:last-child {
+  text-align: right;
+}
+.slider-row input[type="range"] {
+  width: 96px;
+  justify-self: center;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* --------------------------------------------------- session review */
+
+.review-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  padding: 14px;
+}
+.review {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+}
+.review > h2,
+.review-top h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--heading);
+}
+.review-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.review-source {
+  font-size: 12px;
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+.review-loader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-left: auto;
+}
+.review-upload,
+.review-server {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.review-upload input[type="file"] {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.review-server select {
+  font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--nested);
+  color: var(--ink);
+}
+.review-error {
+  color: var(--no);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.review-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 16px;
+  min-height: 0;
+}
+.review-round-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  align-self: start;
+}
+.ri-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ri-key {
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding-top: 2px;
+}
+.ri-val {
+  font-weight: 600;
+  text-align: right;
+}
+.ri-val.outcome.synthesized {
+  color: var(--yes);
+}
+.ri-val.outcome.abandoned {
+  color: var(--ink-soft);
+}
+.ri-val.outcome.emergency {
+  color: var(--rec);
+}
+.ri-utterance {
+  font-style: italic;
+  border-left: 3px solid var(--accent);
+  padding: 4px 10px;
+  background: var(--accent-soft);
+  border-radius: 0 6px 6px 0;
+}
+.ri-emotion {
+  font-size: 11px;
+  color: var(--ink-soft);
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+/* The whole conversation, scrollable; the active step is highlighted and the
+   rest dim, descending one question+reasoning pair at a time. */
+.review-transcript {
+  list-style: none;
+  margin: 0;
+  padding: 4px 8px 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.rstep-round {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 12px 0 2px;
+  padding: 4px 14px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.rstep-round:first-child {
+  margin-top: 4px;
+}
+.rr-num {
+  font-weight: 700;
+  color: var(--heading);
+}
+.rr-topic {
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+.rr-outcome {
+  margin-left: auto;
+  color: var(--ink-soft);
+}
+.rr-outcome.synthesized {
+  color: var(--yes);
+}
+.rr-outcome.emergency {
+  color: var(--rec);
+}
+
+.rstep {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 8px;
+  padding: 12px 16px;
+  border: 1px solid transparent;
+  border-left: 3px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  opacity: 0.5;
+  cursor: pointer;
+  transition:
+    opacity 0.25s ease,
+    background 0.25s ease,
+    border-color 0.25s ease;
+}
+.rstep:hover {
+  opacity: 0.8;
+}
+.rstep.active {
+  opacity: 1;
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+.rstep.is-context {
+  border-left-style: dashed;
+}
+.rstep-kind {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+.rstep-kind.context {
+  color: var(--ink-soft);
+}
+.rstep-text {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.4;
+}
+.rstep.active .rstep-text {
+  font-size: 20px;
+}
+.rstep-empty {
+  margin: 0;
+  font-style: italic;
+  color: var(--ink-soft);
+}
+.rstep-reasoning {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 3px solid var(--accent);
+  padding: 6px 12px;
+}
+.rstep-reasoning p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink);
+}
+.rstep-reasoning .tag {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  font-weight: 700;
+}
+
+.review-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+}
+.review-nav button {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 8px 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--nested);
+  color: var(--ink);
+  cursor: pointer;
+}
+.review-nav button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.review-nav button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.review-play.playing {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.review-progress {
+  font-size: 13px;
+  color: var(--ink-soft);
+  min-width: 110px;
+  text-align: center;
+}
+
+/* ===================================================================== */
+/* Mobile / iPhone — single-column, page scrolls, safe-area aware.       */
+/* The desktop shell is a fixed-height app with internally-scrolling     */
+/* tiles; on a phone we let the whole page scroll through stacked tiles. */
+/* ===================================================================== */
+
+@media (max-width: 700px) {
+  /* Let the page scroll instead of trapping everything in one viewport. */
+  html,
+  body,
+  #app {
+    height: auto;
+  }
+  body {
+    overflow-y: auto;
+    -webkit-text-size-adjust: 100%;
+  }
+  .cockpit {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh; /* dynamic — survives the Safari toolbar */
+  }
+
+  /* --- condensed, sticky, wrapping topbar --- */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    height: auto;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    padding: 8px 12px;
+    padding-top: calc(8px + env(safe-area-inset-top));
+  }
+  .brand {
+    font-size: 15px;
+  }
+  .brand span {
+    display: none; /* drop the "· Caregiver Cockpit" subtitle */
+  }
+  .engine-badge {
+    display: none; /* engine is also shown in the reasoning tile */
+  }
+  .tb-spacer {
+    display: none; /* wrapping handles spacing; no flexible gap needed */
+  }
+  .topic {
+    order: 10; /* topic select drops to its own full-width row */
+    width: 100%;
+  }
+  .topic select {
+    flex: 1;
+    font-size: 16px; /* >=16px stops iOS zooming in on focus */
+  }
+  .audio-toggle,
+  .theme-toggle {
+    width: 40px;
+    height: 40px;
+  }
+  /* Trim topbar width: Save becomes icon-only, drop the byte readout. */
+  .save-btn .btn-label {
+    display: none;
+  }
+  .rec .saved {
+    display: none;
+  }
+
+  /* --- tiles stack in a thumb-friendly reading/acting order --- */
+  .grid {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    gap: 10px;
+    padding: 10px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  .conversation {
+    order: 1;
+  }
+  .pictogram {
+    order: 2;
+  }
+  .input {
+    order: 3;
+  }
+  .reasoning {
+    order: 4;
+  }
+  .tile {
+    min-height: auto;
+  }
+  /* Cap the transcript so the answer buttons stay reachable; the question
+     auto-scrolls into view at the bottom of the stream. */
+  .stream {
+    max-height: 42vh;
+  }
+  .picto-img {
+    max-height: 28vh;
+  }
+  .picto-box {
+    min-height: 96px;
+  }
+  /* The reasoning tile no longer needs to fill height; sliders flow with
+     the page rather than scrolling inside a fixed box. */
+  .emotion {
+    flex: none;
+  }
+  .sliders {
+    overflow: visible;
+    max-height: none;
+  }
+
+  /* Big answer targets; slightly shorter to fit two rows comfortably. */
+  .answers-grid .answer {
+    min-height: 72px;
+    font-size: 20px;
+  }
+  .context-row input {
+    font-size: 16px; /* prevent iOS focus-zoom */
+  }
+
+  /* --- review dashboard stacks --- */
+  .review-main {
+    padding: 10px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  .review {
+    height: auto;
+  }
+  .review-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .review-loader {
+    margin-left: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .review-server select {
+    font-size: 16px;
+  }
+  .review-body {
+    grid-template-columns: 1fr; /* round info above the transcript */
+  }
+  /* The page scrolls on mobile, so the transcript flows instead of trapping
+     its own scroll; cap it so the nav stays reachable. */
+  .review-transcript {
+    max-height: 60vh;
+  }
+  .rstep.active .rstep-text {
+    font-size: 19px;
+  }
+  .review-nav {
+    flex-wrap: wrap;
+    position: sticky;
+    bottom: 0;
+    background: var(--card);
+    padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
+    gap: 10px;
+  }
+  .review-nav button {
+    flex: 1;
+    min-height: 48px;
+  }
+}
+
+/* ----------------------------- the living proposal banner (W1-C) */
+/* Sits directly under the topbar, ABOVE the tile grid — the first thing
+   the caregiver sees (owner note 06-11: it was missed inside the grid). */
+.banner {
+  margin: 12px 14px 0;
+  background: var(--card);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 10px 16px;
+  flex: 0 0 auto;
+}
+.banner.pending {
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
+.banner-glow {
+  animation: bannerGlow 1.8s ease-in-out infinite;
+}
+@keyframes bannerGlow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+/* Propose-ready: unmistakable (owner note 06-11 — the subtle glow was
+   too subtle). Breathing accent halo on the whole banner + a pulsing ✓. */
+.banner.draft.ready {
+  border-color: var(--accent-hover);
+  animation: bannerReady 1.8s ease-in-out infinite;
+}
+@keyframes bannerReady {
+  0%,
+  100% {
+    box-shadow: 0 0 4px 1px var(--accent-soft);
+  }
+  50% {
+    box-shadow: 0 0 24px 5px var(--accent-hover);
+  }
+}
+.banner.draft.ready .banner-btn.accept {
+  animation: acceptPulse 1.8s ease-in-out infinite;
+}
+@keyframes acceptPulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.12);
+  }
+}
+.banner-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.banner-text {
+  flex: 1;
+  font-size: 17px;
+  line-height: 1.45;
+}
+.banner-text mark.seg {
+  background: transparent;
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.banner-text mark.seg.locked {
+  font-weight: 700;
+  border-bottom: 2px solid var(--accent);
+}
+.banner-text mark.seg.working {
+  border-bottom: 2px dotted var(--ink-soft);
+  animation: bannerGlow 2.2s ease-in-out infinite;
+}
+.banner-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.banner-btn {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--nested);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  min-height: 38px;
+}
+.banner-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.banner-btn.accept {
+  color: #fff;
+  background: var(--yes, #2e7d32);
+  border: none;
+  min-width: 46px;
+}
+.banner-btn.reject {
+  color: #fff;
+  background: var(--no, #b3463f);
+  border: none;
+  min-width: 46px;
+}
+.banner-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.chip {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 10px;
+}
+.chip.banned {
+  text-decoration: line-through;
+  color: var(--no, #b3463f);
+}
+.chip.muted {
+  text-decoration: line-through;
+  opacity: 0.45;
+}
+.banner-edit {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.banner-edit input {
+  flex: 1;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+/* --------------------- explicit synthesis confirmation (the checkmark) */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  padding: 28px 34px;
+  max-width: 560px;
+  width: calc(100% - 48px);
+  text-align: center;
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.modal-utterance {
+  font-size: 22px;
+  line-height: 1.5;
+  margin: 0 0 22px;
+}
+.modal-action {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  padding: 12px 28px;
+  cursor: pointer;
+  min-height: 48px;
+}
+
+/* Refinement chains in the consensus board: a child chip renders as
+   "› value" and dims toward its family — the visible dive. */
+.facet-chip.child {
+  border-left: 2px solid var(--accent);
+  margin-left: 10px;
+  opacity: 0.92;
+}
+
+/* ------------------------- the synthesis editor (W1-F, owner design) */
+.banner-text mark.seg.selectable {
+  cursor: pointer;
+}
+.banner-text mark.seg.selectable:hover {
+  outline: 1px dashed var(--accent);
+  outline-offset: 2px;
+}
+.banner-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.editor-label {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.cand {
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--nested);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.cand:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.cand.remove {
+  border-color: var(--no, #b3463f);
+  color: var(--no, #b3463f);
+}
+.cand.cancel {
+  border-color: var(--border);
+  color: var(--ink-soft);
+}
+.banner-editor input {
+  flex: 1;
+  min-width: 220px;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+}

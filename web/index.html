@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover lets the layout extend under the notch / home
+         indicator; the CSS then pads with env(safe-area-inset-*). Zoom is
+         left enabled for accessibility. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <!-- Standalone feel when added to an iPhone home screen. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="theme-color" content="#1a1a1a" />
+    <title>my20Q · Caregiver Cockpit</title>
+    <!-- Apply the saved theme before first paint to avoid a flash. Dark is
+         the default (:root); only "light" sets an attribute. -->
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem("theme") === "light") {
+            document.documentElement.setAttribute("data-theme", "light");
+          }
+        } catch (e) {
+          /* localStorage unavailable — fall through to the dark default */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

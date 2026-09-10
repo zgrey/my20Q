@@ -1,42 +1,65 @@
-"""Dialogue state machine — LLM-driven in reasoning mode, taxonomy tree
-walk as the fallback for when Ollama is unavailable.
+"""Round state machine — the my20Q dialogue engine.
 
-Two modes dispatch through the same `DialogueSession.answer()` API so
-the CLI and (later) the FastAPI layer don't need to care which is
-active.
+A `Session` spans one tool process and spawns `Round`s. A `Round` is one
+convergence attempt under a single topic. A round ends ONLY when the caregiver
+ACCEPTS the live draft (the banner's ✓) — the engine never proposes or
+terminates on its own. The caregiver can still end it out-of-band (an
+emergency topic short-circuit, a topic switch, or an operator safety ceiling).
+Terminology and lifecycle: docs/design/beta-retool.md §2, §7.
 
-Reasoning mode
---------------
-After the user picks a starting category, the `Reasoner` drives the
-game: every turn asks the LLM for a yes/no question or a specific guess,
-then updates history with the user's answer (yes/no/kinda/not_sure).
-"yes" on a guess ends the session and triggers a caregiver summary.
-The 20-turn budget is the game limit — at the final turn the reasoner
-is forced to guess.
+The belief is a 5W1H **facet board** (``agent/facets.py``): per-category
+contender values with additive consensus points, recomputed from history so
+``undo()`` is pop-and-recompute. Each turn the controller picks a FOCUS slot
+and a directive (probe an unestablished core slot / split tied contenders /
+drill the vague leader); the `Reasoner` turns that into language. Crediting is
+anchored to the question text, so an answer can never move a contender the
+question didn't mention.
 
-Fallback mode
--------------
-If the LLM is not reachable, the session reverts to a deterministic
-breadth-first walk of the taxonomy subtree under the chosen category.
-"yes" descends, "no" prunes, "not_sure" defers, "kinda" is treated as
-yes (go deeper in this direction). Emergency nodes short-circuit in
-both modes.
+Synthesis is the **living proposal banner** (owner design — see
+docs/design/convergence-plan.md W1-C): an evolving draft utterance woven from
+the ban/mute-aware slot leaders, rendered from the first converged core slot
+(code template with slashed alternates + ellipsis; the LLM weave takes over
+at board-readiness, regenerated only when the weave changes). The caregiver
+concludes with ``accept()`` (✓ — the sole terminator), speaks the draft at
+whim, and edits it in real time with ``edit()`` (✗ — value bans struck
+through, slot mutes dimmed; both replayable history entries). There are no
+engine-initiated proposals, so there is no kinda-rephrase loop.
+
+A **restart** is the round's one recovery mechanism, with three triggers
+(a long run of "no", stalled board progress, and the reasoner fail-loop):
+it dumps every "no"/"kinda" influence and rebuilds the board from ONLY the
+caregiver context and this round's confirmed-yes answers (round-specific, not
+session-wide), plus fresh broad probes. Post-restart prompts hide the dumped
+noise; the code-level repeat gate still spans the whole round.
+
+There are NO canned fallback questions. When reasoning fails and the restart
+recovery cannot produce a question either, the round surfaces a DIAGNOSTIC
+event that tells the caregiver exactly what failed and how to proceed (retry /
+add context / switch model) — a useful failure beats a meaningless question.
+
+The engine is async: the FastAPI layer awaits it directly; a CLI wraps it in
+`asyncio.run`.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections import deque
+import random
+import re
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-from my20q.agent import prompts
-from my20q.agent.reasoner import Reasoner, ReasonerError
-from my20q.agent.safety import is_emergency_path, sanitize_llm_text
-from my20q.llm.base import LLMBackend, LLMUnavailable
-from my20q.taxonomy.node import Node
+from my20q.agent import facets
+from my20q.agent.reasoner import Reasoner, ReasonerAction, ReasonerError
+from my20q.agent.safety import EMERGENCY_SCREEN
+from my20q.config import Config, Mode, ReasoningTuning
+from my20q.llm.base import LLMBackend
+from my20q.profiles import PatientProfile, is_real_patient
+from my20q.recording.yes_memory import YesMemory, dated_path
+from my20q.topics import Topic, find_topic
 
 log = logging.getLogger(__name__)
 
@@ -48,312 +71,2063 @@ class Answer(StrEnum):
     NOT_SURE = "not_sure"
 
 
-TurnKind = Literal["question", "guess", "emergency", "answer", "dead_end"]
+EventKind = Literal[
+    "query", "synthesis", "emergency", "synthesized", "abandoned", "diagnostic"
+]
+Engine = Literal["reasoning", "fallback"]
+
+#: Consecutive reasoning failures after which the log level escalates. Reasoning
+#: is NEVER permanently abandoned — every turn retries the reasoner, because only
+#: the reasoner can produce the utterance a round needs to end.
+MAX_CONSEC_REASON_FAILURES = 3
+
+#: Default behavior knobs — the single source of truth for the tuning defaults. A
+#: `Round` uses the `ReasoningTuning` it is handed (the API/CLI thread the
+#: env-configured one through `Session`); this module alias is the default,
+#: kept for readability and the tests. Override via MY20Q_* env vars (see config).
+_DEFAULT_TUNING = ReasoningTuning()
+SOFT_RESET_NO_STREAK = _DEFAULT_TUNING.soft_reset_no_streak
+
+#: Never focus the same facet category more than this many turns in a row when
+#: an alternative exists — the cure for the observed "why"-hammering (20 wasted
+#: queries on motivation while "what" stayed unknown).
+MAX_CATEGORY_RUN = 2
+
+#: Consecutive "no" answers sharing one asserted pair (or one direction) after
+#: which that avenue is declared exhausted for a turn — the enumeration guard
+#: (remind→dinner→memory→appointment→medicine→BP… was 10+ fruitless guesses
+#: down one avenue).
+FUTILE_STREAK = 4
+
+#: Double-check (verify-on-lock) turns allowed per round. A pair that turns
+#: confident on a SINGLE yes — or on a caregiver boost the patient never
+#: confirmed — gets one gate-exempt re-ask before the engine builds on it;
+#: the budget keeps verification from ever feeling like nagging.
+VERIFY_BUDGET = 2
+
+_NO_LLM_TEXT = (
+    "No language model is configured, so questions cannot be generated. "
+    "Start the backend with an LLM (e.g. Ollama) and retry."
+)
 
 
 @dataclass
-class TurnResult:
-    kind: TurnKind
-    content: str = ""
-    node: Node | None = None
+class RoundEvent:
+    """The cockpit-facing state produced by open()/answer()/undo()/retry()."""
+
+    kind: EventKind
+    text: str = ""
     rationale: str = ""
-    path: list[Node] = field(default_factory=list)
-    summary: str = ""
-    turn: int = 0
+    preface: str = ""  # short spoken lead-in read just before a query
+    query_index: int = 0
+    engine: Engine = "reasoning"
+    emergency_screen: dict | None = None
+    # The live facet board — per 5W1H category, the top contender values with
+    # their consensus points — that drove this question. Empty in emergency /
+    # terminal / diagnostic events. Powers the cockpit's honest reasoning tile.
+    facets: list[dict] = field(default_factory=list)
+    # For kind == "diagnostic": what failed and what was attempted, so the
+    # cockpit can render a useful failure card instead of a canned question.
+    diagnostic: dict | None = None
+    # The question this one replaced via the opposition button — lets the
+    # cockpit mark a flipped question instead of presenting it as a new turn.
+    flipped_from: str = ""
 
 
-@dataclass
-class _Frame:
-    node: Node
-    queue: deque[Node]
-    deferred: list[Node] = field(default_factory=list)
+class Round:
+    """One convergence attempt under a single topic.
 
-
-class DialogueSession:
-    """Single 20Q session.
-
-    Call `select_category(category_id)` to start, then alternate
-    `answer(Answer.X)` with reading each `TurnResult`. A session is
-    terminal when a TurnResult of kind `answer`, `emergency`, or
-    `dead_end` is returned.
+    Drive it: ``await open()`` once, then alternate ``await answer(a)``
+    with reading each `RoundEvent`. ``add_context`` injects caregiver
+    steering; ``await undo()`` rewinds the last entry; ``await retry()``
+    re-proposes after a diagnostic; ``await flip()`` re-renders the pending
+    question in its opposite connotation (an action, not an answer).
+    ``banner()`` is the living draft proposal; ``accept()`` concludes the
+    round with it (the ✓ — the only way a round ends in success) and
+    ``await edit(note)`` applies a ✗-edit (value ban / slot mute / fallback
+    context). The round is over once an event of kind ``synthesized``,
+    ``abandoned``, or ``emergency`` is returned (also ``is_terminal``).
     """
 
     def __init__(
         self,
-        root: Node,
+        topic: Topic,
         *,
         llm: LLMBackend | None = None,
-        max_turns: int = 20,
+        max_queries: int = 0,
+        mode: Mode = "training",
         seed_context: str = "",
+        profile_context: str = "",
+        caregivers: list[str] | None = None,
+        emotional_state: dict[str, float] | None = None,
+        tuning: ReasoningTuning | None = None,
+        yes_memory: YesMemory | None = None,
+        round_id: str = "",
+        session_id: str = "",
+        rng: random.Random | None = None,
     ) -> None:
-        self.root = root
+        self.topic = topic
         self.llm = llm
-        self.max_turns = max_turns
+        # <= 0 means unlimited — a pure operator safety ceiling, not a terminator.
+        self.max_queries = max_queries
+        self.mode = mode
         self.seed_context = seed_context.strip()
-        self.turn = 0
-        self._category: Node | None = None
-        self._mode: Literal["reasoning", "fallback"] = (
-            "reasoning" if llm is not None else "fallback"
-        )
-        self._reasoner: Reasoner | None = Reasoner(llm) if llm is not None else None
-
-        # reasoning-mode state
+        self.profile_context = profile_context.strip()
+        # Known caregivers (from the profile). Hardcoded ask-order prior:
+        # caregivers offer care as tasks, so when the who-leader is a caregiver
+        # and no direction is established, the first how-probe tests the
+        # they-do-for-me direction — order only, never score points.
+        self.caregivers = [c.strip() for c in (caregivers or []) if c.strip()]
+        # Caregiver emotional-slider reading; steers question tone (the API
+        # keeps it in sync mid-round). See docs/design/beta-retool.md §6.
+        self.emotional_state: dict[str, float] = dict(emotional_state or {})
+        # Behavior knobs (env-configurable). Defaults match the module aliases.
+        self.tuning = tuning or ReasoningTuning()
+        # Confirmed-yes log. The engine WRITES it (for the recorded dataset and
+        # the future caregiver interview tool) but no longer reads it — restart
+        # recovery draws yes-context from this round's own history, keeping the
+        # recovered signal round-specific by construction.
+        self._yes_memory = yes_memory if yes_memory is not None else YesMemory()
+        self.round_id = round_id
+        #: The session this round belongs to — written into the yes-log so a
+        #: confirmed answer can be joined back to its recording (W2-Q).
+        self.session_id = session_id
+        # Drives the (decaying) exploration coin-flip; injectable for tests.
+        self._rng = rng or random.Random()
+        self.engine: Engine = "reasoning" if llm is not None else "fallback"
+        #: Why reasoning failed most recently, if it did — surfaced for
+        #: diagnostics (the cockpit failure card and the model bench).
+        self.degrade_reason: str = ""
+        #: Consecutive failed reasoning turns; reset on any successful turn.
+        self._consec_failures = 0
+        self._reasoner = Reasoner(llm) if llm is not None else None
+        # The round's seed values per facet category, generated once by the
+        # reasoner on the first advance. The live board is recomputed from
+        # these + history (see _replay_board).
+        self._seed_values: dict[str, list[str]] | None = None
         self._history: list[dict] = []
-        self._last_kind: Literal["question", "guess"] | None = None
-        self._last_content: str = ""
-        self._last_rationale: str = ""
+        self._pending: ReasonerAction | None = None
+        # Questions replaced unanswered via the opposition button. They were
+        # rendered (often spoken), so the repeat gate must still span them —
+        # but they carry no answer and never enter the history/board.
+        self._superseded: list[str] = []
+        # The banner's woven draft cache: the LLM weave is regenerated only
+        # when the weave (the ban/mute-aware slot leaders) changes; below
+        # board-readiness the banner renders the code template instead.
+        self._draft_text: str = ""
+        self._draft_weave: dict[str, str] = {}
+        # Refinement edges (child → parent per category), derived alongside
+        # every full board replay from history tags + the lexical fallback —
+        # reading structure only; scores stay flat and text-anchored.
+        self._edges: facets.Edges = facets.empty_edges()
+        self._outcome: str | None = None
+        self._final_utterance = ""
+        self._opened = False
+        # Autopsy instrumentation (W2-O). The seed call is the round's fixed
+        # cost before the first question, so it is timed once and recorded at
+        # round level rather than charged to q1; the question on screen when a
+        # round is abandoned is captured so the record shows what was unanswered.
+        self._seed_ms: float = 0.0
+        self._abandoned_pending: ReasonerAction | None = None
+        # Optional progress hook — the API wires this to the SSE channel.
+        self.on_phase: Callable[[str], None] | None = None
 
-        # fallback-mode state
-        self._stack: list[_Frame] = []
-        self._pending_leaf: Node | None = None
-        self._last_probe: Node | None = None
+    # ----------------------------------------------------------- state
 
     @property
     def history(self) -> list[dict]:
-        return list(self._history)
+        """Copy of the round's ordered query/synthesis/context entries."""
+        return [dict(h) for h in self._history]
 
     @property
-    def path(self) -> list[Node]:
-        return [self.root] if self._category is None else [self.root, self._category]
+    def outcome(self) -> str | None:
+        """`synthesized` / `abandoned` / `emergency`, or None while live."""
+        return self._outcome
 
-    def select_category(self, category_id: str) -> TurnResult:
-        if self._category is not None:
-            raise RuntimeError("select_category can only be called once")
-        chosen = self.root.find(category_id)
-        if chosen is None or chosen not in self.root.children:
-            raise ValueError(f"Unknown top-level category: {category_id!r}")
-        self._category = chosen
-        if chosen.emergency:
-            return TurnResult(kind="emergency", node=chosen, path=[self.root, chosen])
-        if self._mode == "reasoning":
-            return self._next_reasoning()
-        if self.seed_context:
-            # No LLM to refine freeform text — echo it as the answer.
-            return TurnResult(
-                kind="answer",
-                content=self.seed_context,
-                node=chosen,
-                path=[self.root, chosen],
-                summary=f"They are communicating: {self.seed_context}",
+    @property
+    def is_terminal(self) -> bool:
+        return self._outcome is not None
+
+    @property
+    def final_utterance(self) -> str:
+        """The confirmed utterance once the round is `synthesized`."""
+        return self._final_utterance
+
+    @property
+    def query_count(self) -> int:
+        return sum(1 for h in self._history if h["kind"] == "query")
+
+    @property
+    def seed_ms(self) -> float:
+        """Wall-clock milliseconds the board-seeding call took (W2-O).
+
+        A round's fixed cost before its first question — invisible in the
+        per-query timings, and the difference between "the model is slow" and
+        "the model was still loading".
+        """
+        return self._seed_ms
+
+    @property
+    def pending_question(self) -> dict | None:
+        """The unanswered question on screen — the one the round ended on (W2-O).
+
+        A round abandoned on a topic switch leaves a question hanging, and the
+        record used to drop it — so an autopsy could not tell a round that ran
+        out of questions from one the caregiver walked away from mid-question.
+        For a still-live round (the conversation export serves those too) this
+        is simply the question currently awaiting an answer.
+        """
+        action = self._pending or self._abandoned_pending
+        if action is None or action.kind != "query":
+            return None
+        out: dict = {"text": action.content, "rationale": action.rationale}
+        if action.focus:
+            out["focus"] = action.focus
+        if action.slots:
+            out["slots"] = dict(action.slots)
+        return out
+
+    # ------------------------------------------------------- lifecycle
+
+    async def open(self) -> RoundEvent:
+        if self._opened:
+            raise RuntimeError("Round.open() already called")
+        self._opened = True
+        if self.topic.emergency:
+            self._outcome = "emergency"
+            return RoundEvent(
+                kind="emergency",
+                engine=self.engine,
+                emergency_screen=dict(EMERGENCY_SCREEN),
             )
-        self._stack = [_Frame(chosen, deque(chosen.children))]
-        return self._next_fallback()
+        return await self._advance()
 
-    def answer(self, answer: Answer) -> TurnResult:
-        if self._category is None:
-            raise RuntimeError("answer() called before select_category")
-        self.turn += 1
-        if self._mode == "reasoning":
-            return self._resolve_reasoning(answer)
-        return self._resolve_fallback(answer)
+    async def answer(self, a: Answer) -> RoundEvent:
+        if not self._opened:
+            raise RuntimeError("answer() called before open()")
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        if self._pending is None:
+            raise RuntimeError("answer() called with no pending action")
 
-    # ------------------------------------------------------------------ reasoning
-
-    def _next_reasoning(self) -> TurnResult:
-        assert self._category is not None and self._reasoner is not None
-        final = self.turn + 1 >= self.max_turns
-        try:
-            action = _run_sync(
-                self._reasoner.next_action(
-                    category_label=self._category.label,
-                    history=self._history,
-                    turn=self.turn + 1,
-                    max_turns=self.max_turns,
-                    final=final,
-                    seed_context=self.seed_context,
-                    category_hint=self._category.reasoning_hint or "",
+        pending = self._pending
+        # Persist the reasoner's rationale, preface, focus, direction, and
+        # asserted slots alongside each entry — saves, recordings, and the
+        # review dashboard can then show *why* and *about what* each question
+        # was asked, and the board replay can recompute scores for undo.
+        entry: dict = {
+            "kind": pending.kind,
+            "text": pending.content,
+            "answer": a.value,
+            "rationale": pending.rationale,
+        }
+        if pending.preface:
+            entry["preface"] = pending.preface
+        if pending.slots:
+            entry["slots"] = dict(pending.slots)
+        if pending.kind == "query" and pending.focus:
+            entry["focus"] = pending.focus
+        # The slot the controller asked for, when the question went elsewhere
+        # (W2-P) — kept so the divergence rate stays measurable.
+        if pending.kind == "query" and pending.focus_requested:
+            entry["focus_requested"] = pending.focus_requested
+        if pending.kind == "query" and pending.direction:
+            entry["direction"] = pending.direction
+        if pending.kind == "query" and pending.flipped_from:
+            entry["flipped_from"] = pending.flipped_from
+        if pending.kind == "query" and pending.verify:
+            entry["verify"] = True
+        if pending.kind == "query" and pending.refines:
+            entry["refines"] = dict(pending.refines)
+        # What the controller was drilling into (W2-R). Recorded on every drill,
+        # answered or not — it is a fact about the question, and an autopsy
+        # wants to see the ladder the controller was trying to walk.
+        if pending.kind == "query" and pending.drill_parent:
+            entry["drill_parent"] = pending.drill_parent
+        # Autopsy instrumentation (W2-O): what the turn cost, and which gates
+        # rejected earlier attempts at it. Both were discarded before.
+        if pending.timings:
+            entry["timing"] = dict(pending.timings)
+        if pending.rejections:
+            entry["rejections"] = list(pending.rejections)
+        # An INFORMATIVE yes moved the board (some asserted pair was not yet
+        # established); a yes that merely re-confirms established leaders
+        # earns its points but does NOT advance the synthesis gates —
+        # confirmation farming must never substitute for new information.
+        if pending.kind == "query" and a is Answer.YES:
+            board = self._replay_board()
+            ready = self.tuning.facet_ready_points
+            entry["informative"] = any(
+                board.get(cat, {}).get(
+                    facets.canonical_value(board, cat, val), 0.0
                 )
+                < ready
+                for cat, val in (pending.slots or {}).items()
             )
-        except ReasonerError as exc:
-            log.warning("reasoner failed (%s) — degrading to fallback mode", exc)
-            return self._degrade_to_fallback()
+        self._history.append(entry)
+        self._pending = None
+        # Log every confirmed-YES query (write-only; see __init__).
+        if pending.kind == "query" and a is Answer.YES:
+            self._record_yes(pending)
 
-        self._last_kind = action.kind
-        self._last_content = action.content
-        self._last_rationale = action.rationale
-        return TurnResult(
-            kind=action.kind,
-            content=action.content,
-            rationale=action.rationale,
-            path=self.path,
-            turn=self.turn + 1,
+        if pending.kind == "synthesis" and a is Answer.YES:
+            self._outcome = "synthesized"
+            self._final_utterance = pending.content
+            return RoundEvent(
+                kind="synthesized",
+                text=pending.content,
+                query_index=self.query_count,
+                engine=self.engine,
+            )
+        return await self._advance()
+
+    async def add_context(self, text: str) -> RoundEvent:
+        """Inject caregiver context mid-round and re-propose forward.
+
+        A note from a caregiver / medical professional is **high-trust** signal
+        — far more reliable than the seeds. In reasoning mode we ask the
+        reasoner which facet values the note implies or confirms and credit
+        them at a boosted weight (see ``facets.apply_context``), so the next
+        question discriminates over what the caregiver just said. The slots are
+        recorded on the context entry, keeping the board reconstructible for
+        undo. Empty context is a no-op.
+        """
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        text = text.strip()
+        if not text:
+            if self._pending is not None:
+                return self._pending_event()
+            return await self._advance()
+
+        slots: dict[str, list[str]] = {}
+        if self._reasoner is not None and self._seed_values is not None:
+            board = self._replay_board()
+            slots = await self._reasoner.expand_slots(
+                context=text,
+                board=board,
+                history=self._history,
+                **self._reasoner_ctx(),
+            )
+
+        entry: dict = {"kind": "context", "text": text, "answer": None}
+        if slots:
+            entry["slots"] = slots
+        self._history.append(entry)
+        self._pending = None
+        return await self._advance()
+
+    def abandon(self) -> None:
+        """Finalize a still-live round as abandoned.
+
+        Used when the caregiver switches topic or starts a new round
+        before the current one converges (see the round lifecycle in
+        docs/design/beta-retool.md §2).
+        """
+        if self._outcome is None:
+            self._outcome = "abandoned"
+            # Keep the question that was on screen — the record needs to show
+            # what went unanswered (W2-O). Cleared from _pending either way, so
+            # nothing treats the terminal round as still awaiting an answer.
+            self._abandoned_pending = self._pending
+            self._pending = None
+
+    async def undo(self) -> RoundEvent:
+        """Rewind the most recent entry and re-propose forward.
+
+        Everything downstream of the undone entry is discarded; the next
+        action is re-proposed against the truncated history, so it may
+        differ from before.
+        """
+        if not self._opened:
+            raise RuntimeError("undo() called before open()")
+        if self._outcome == "emergency":
+            raise RuntimeError("cannot undo an emergency round")
+        if self._history:
+            self._history.pop()
+        self._outcome = None
+        self._final_utterance = ""
+        self._pending = None
+        return await self._advance()
+
+    async def retry(self) -> RoundEvent:
+        """Re-propose after a diagnostic (the failure card's Retry button)."""
+        if not self._opened:
+            raise RuntimeError("retry() called before open()")
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        self._pending = None
+        return await self._advance()
+
+    async def flip(self) -> RoundEvent:
+        """Re-render the pending question in its opposite connotation.
+
+        The caregiver's opposition button — an ACTION, not an answer: the
+        question on screen points the wrong way (e.g. "do something for Rob"
+        when the need is Rob doing something for the patient), so it is
+        re-asked mirrored and the round keeps waiting for an answer. The
+        original was rendered (often spoken), so it still counts as asked for
+        the repeat gate; it never enters the history or the board. Failure is
+        soft: any error leaves the pending question untouched.
+        """
+        if not self._opened:
+            raise RuntimeError("flip() called before open()")
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        pending = self._pending
+        if pending is None or pending.kind != "query":
+            raise RuntimeError("no pending question to flip")
+        if self._reasoner is None:
+            raise RuntimeError("no language model is configured — cannot flip")
+
+        board = self._replay_board()
+        action = await self._reasoner.flip(
+            question=pending.content,
+            board=board,
+            focus=pending.focus,
+            direction=pending.direction,
+            mirror=facets.MIRROR.get(pending.direction, ""),
+            on_phase=self.on_phase,
         )
+        # Reasoning demonstrably works — clear any failure streak.
+        self._consec_failures = 0
+        self.engine = "reasoning"
+        self._superseded.append(pending.content)
+        if self.topic.direction:
+            who_names = [v for v, _ in facets.live(board, "who")]
+            if action.slots.get("who"):
+                who_names.append(action.slots["who"])
+            action.direction = (
+                facets.classify_direction(action.content, who_names) or ""
+            )
+        self._pending = action
+        return self._event_for(action, facets.facet_view(board, action.focus, self._edges))
 
-    def _resolve_reasoning(self, answer: Answer) -> TurnResult:
-        assert self._category is not None
-        if self._last_kind is None:
-            raise RuntimeError("reasoning resolve before any action was issued")
+    # -------------------------------------------------------- internal
+
+    async def _advance(self) -> RoundEvent:
+        # No reasoner at all (constructed without an LLM): there are no canned
+        # questions anymore — surface the condition honestly instead.
+        if self._reasoner is None:
+            self.engine = "fallback"
+            self._pending = None
+            return RoundEvent(
+                kind="diagnostic",
+                text=_NO_LLM_TEXT,
+                engine=self.engine,
+                query_index=self.query_count,
+                diagnostic={
+                    "reason": "no LLM backend configured",
+                    "llm_unreachable": True,
+                    "restart_attempted": False,
+                    "consecutive_failures": self._consec_failures,
+                },
+            )
+
+        T = self.tuning
+        try:
+            # Seed the facet board once, on the first advance.
+            if self._seed_values is None:
+                t0 = time.perf_counter()
+                try:
+                    seeds = await self._reasoner.seed_board(
+                        seed_universal_wants=self.topic.seed_universal_wants,
+                        **self._reasoner_ctx(),
+                    )
+                finally:
+                    self._seed_ms = round((time.perf_counter() - t0) * 1000, 1)
+                self._seed_values = self._inject_direction_buckets(seeds)
+
+            # A long run of "no" — or a stretch of questioning in which no
+            # contender newly reached a confirmed score (stalled progress;
+            # sparse kindas used to shield a dead-end round from the streak
+            # trigger) — means the working context is WRONG: run the restart
+            # recovery (dump no/kinda influence, keep caregiver context +
+            # this round's yeses, add fresh probes).
+            restart_reason = ""
+            if self._consec_no_streak() > T.soft_reset_no_streak:
+                restart_reason = "no-streak"
+            elif self._stalled():
+                restart_reason = "stalled"
+            if restart_reason and not self._just_restarted():
+                await self._restart(restart_reason)
+
+            # The living proposal banner replaced engine-initiated synthesis
+            # (owner design — convergence-plan W1-C): the round only ever asks
+            # questions, the banner carries the evolving draft, and ONLY the
+            # caregiver concludes (``accept()``). No proposals, no rephrases,
+            # no kinda-loop — the remaining restart triggers are the
+            # no-streak / stalled checks above and the fail-loop path.
+            seg = self._segment()
+
+            # Operator safety ceiling — the ONLY count-based stop, off by default
+            # (<= 0). It never forces a half-baked utterance; it just abandons.
+            if self.max_queries > 0 and self.query_count >= self.max_queries:
+                self._outcome = "abandoned"
+                return RoundEvent(
+                    kind="abandoned", query_index=self.query_count, engine=self.engine
+                )
+
+            board = self._replay_board()
+            focus = ""
+            pair = self._verify_due(board)
+            if pair is not None:
+                # Verify-on-lock: double-check a pair that turned confident
+                # on a single answer before building on it.
+                action = await self._reasoner.verify(
+                    category=pair[0],
+                    value=pair[1],
+                    board=board,
+                    on_phase=self.on_phase,
+                )
+                focus = pair[0]
+                if self.topic.direction:
+                    who_names = [v for v, _ in facets.live(board, "who")]
+                    action.direction = (
+                        facets.classify_direction(action.content, who_names)
+                        or ""
+                    )
+            else:
+                action, board, focus = await self._propose_question(seg)
+        except ReasonerError as exc:
+            return await self._handle_reason_failure(str(exc))
+
+        # Reasoning succeeded — clear any failure streak.
+        self._consec_failures = 0
+        self.engine = "reasoning"
+        self._pending = action
+        # Keep the banner's draft current (cheap: re-weaves only on change).
+        await self._refresh_draft(board)
+        self._stamp_banner(board)
+        return self._event_for(action, facets.facet_view(board, focus, self._edges))
+
+    def _stamp_banner(self, board: facets.Board | None = None) -> None:
+        """Snapshot the banner onto the entry that just moved it (W2-O).
+
+        The record carried no banner state at all, so an autopsy could not say
+        WHEN the board became propose-ready — the metric that separates "the
+        round needed 18 questions" from "the round was answerable at q9 and
+        asked nine more". Called from every path that consumes an answer,
+        the failure paths included: an answer that tipped the board into
+        readiness must not go unrecorded just because the NEXT question failed
+        to generate. Pass the replayed board when one is already in hand
+        (``_advance`` has just refreshed the weave against it); otherwise it is
+        replayed here. Re-stamped on undo/retry — the freshest snapshot wins.
+        """
+        if self._seed_values is None:
+            return  # a round that never got its seeds
+        # The target is the answer/note that produced this board state. The
+        # failure path interposes its own markers (a restart, then the
+        # diagnostic) between that entry and here, so skip those — but stop at
+        # anything else, so a snapshot is never misattributed across a
+        # caregiver edit or a synthesis.
+        last: dict | None = None
+        for h in reversed(self._history):
+            kind = h.get("kind")
+            if kind in ("query", "context"):
+                last = h
+                break
+            if kind not in ("restart", "reseed", "diagnostic"):
+                return
+        if last is None:
+            return
+        if board is None:
+            board = self._replay_board()
+        snap = self._banner_for(board)
+        # `state` is derivable from `parts`; bans/mutes already ride on the
+        # `edit` entries — keep the per-entry snapshot to what only it knows.
+        last["banner"] = {
+            "ready": snap["ready"],
+            "text": snap["text"],
+            "parts": snap["parts"],
+        }
+
+    # ---------------------------------------- the living proposal banner
+
+    #: Direction buckets rendered as draft connectors; unresolved direction
+    #: renders as the "for/from" alternate (the sign-flip uncertainty as text).
+    _BUCKET_CONN = {
+        "me_for_them": "for",
+        "them_for_me": "from",
+        "tell_them": "to tell",
+        "ask_them": "to ask",
+    }
+
+    def _core_facets(self) -> list[str]:
+        """The topic's core slots, minus caregiver-muted ones (never empty)."""
+        muted = self._edit_mutes()
+        core = [
+            c
+            for c in (self.topic.core_facets or [])
+            if c in facets.CATEGORIES and c not in muted
+        ]
+        if core:
+            return core
+        return [c for c in ("what", "how") if c not in muted] or ["what"]
+
+    def _weave(self, board: facets.Board) -> dict[str, str]:
+        """Ban/mute-aware FRONTIER values — what the draft is woven from.
+
+        Per slot: the leading family's deepest confirmed member (one yes —
+        verify-on-lock covers thin locks), retreating to the best positive
+        member when nothing finer is confirmed. The draft therefore says
+        "tingling", not "discomfort", the moment tingling is confirmed — and
+        coarsens honestly if the fine value later loses support. Banned
+        values are floored on the board, so families re-route around them.
+        """
+        muted = self._edit_mutes()
+        out: dict[str, str] = {}
+        for cat in facets.CATEGORIES:
+            if cat in muted:
+                continue
+            top = facets.frontier(board, cat, self._edges)
+            if top is not None and top[1] > 0:
+                out[cat] = top[0]
+        return out
+
+    def _template_draft(self, weave: dict[str, str]) -> str:
+        """Deterministic early draft — structured ambiguity, ellipsis while open.
+
+        "I need/want something for/from Rob …": slashed alternates render the
+        undecided dimensions (need-vs-want; the direction buckets) and
+        collapse as evidence arrives; the trailing ellipsis says "still
+        working". Costs nothing, so it can populate the banner the moment the
+        first core slot converges; the LLM weave takes over at readiness.
+        """
+        bits = ["I need/want", weave.get("what", "something")]
+        how = weave.get("how", "")
+        bucket = next(
+            (k for k, v in facets.DIRECTION_BUCKETS.items() if v == how), None
+        )
+        if how and bucket is None:
+            bits.append(f"— {how} —")
+        if self.topic.direction or "who" in weave:
+            conn = self._BUCKET_CONN.get(bucket or "", "for/from")
+            bits.append(f"{conn} {weave.get('who', 'someone')}")
+        if "when" in weave:
+            bits.append(f", {weave['when']}")
+        if "where" in weave:
+            bits.append(f", {weave['where']}")
+        if "why" in weave:
+            bits.append(f"because {weave['why']}")
+        return " ".join(bits).replace(" ,", ",") + " …"
+
+    async def _refresh_draft(self, board: facets.Board) -> None:
+        """Refresh the woven draft — only when the weave actually changed.
+
+        The LLM weave runs only at board-readiness and on weave change (the
+        cost cap: leader changes are rare); below readiness the banner
+        renders the code template. Never raises — a failed weave just keeps
+        the template until the next change.
+        """
+        weave = self._weave(board)
+        if weave == self._draft_weave and (
+            self._draft_text or not self._board_ready(board)
+        ):
+            return
+        self._draft_weave = dict(weave)
+        self._draft_text = ""
+        if not weave or self._reasoner is None or not self._board_ready(board):
+            return
+        try:
+            action = await self._reasoner.synthesize(
+                leaders=weave,
+                history=self._history,
+                rejected=None,
+                **self._reasoner_ctx(),
+            )
+        except ReasonerError:
+            return  # the template still shows; retried on the next change
+        self._draft_text = action.content
+
+    def banner(self) -> dict:
+        """The living proposal banner — the cockpit's evolving draft.
+
+        States: ``pending`` (no core slot has signal yet — the glowing
+        "Pending synthesis…") and ``draft`` (an utterance with per-part
+        confidence bands). ``ready`` mirrors board-readiness — the
+        propose-ready vibrance (≈ the conjunction of per-slot posteriors
+        crossing ~0.5, the point where proposing IS the best question; see
+        the research audit). Bans and mutes ride along so the cockpit can
+        strike / dim them.
+        """
+        return self._banner_for(self._replay_board())
+
+    def _banner_for(self, board: facets.Board) -> dict:
+        """``banner()`` against an already-replayed board.
+
+        Split out so the per-entry snapshot (``_stamp_banner``) can reuse the
+        board ``_advance`` already holds instead of replaying it again.
+        """
+        bans = self._edit_bans()
+        base = {
+            "state": "pending",
+            "text": "",
+            "ready": False,
+            "parts": [],
+            "banned": [
+                {"category": cat, "value": v}
+                for cat in facets.CATEGORIES
+                for v in sorted(bans.get(cat, ()))
+            ],
+            "muted": sorted(self._edit_mutes()),
+        }
+        if (
+            not self._opened
+            or self._outcome == "emergency"
+            or self._seed_values is None
+        ):
+            return base
+        weave = self._weave(board)
+        if not any(c in weave for c in self._core_facets()):
+            return base  # nothing real to draft from yet
+        parts = [
+            {
+                "category": cat,
+                "value": val,
+                "band": (
+                    "locked"
+                    if self._family_confident(board, cat)
+                    else "working"
+                ),
+            }
+            for cat, val in weave.items()
+        ]
+        text = (
+            self._draft_text
+            if self._draft_text and self._draft_weave == weave
+            else self._template_draft(weave)
+        )
+        return {
+            **base,
+            "state": "draft",
+            "text": text,
+            "ready": self._board_ready(board),
+            "parts": parts,
+        }
+
+    def accept(self) -> RoundEvent:
+        """✓ on the banner: conclude the round with the current draft.
+
+        The caregiver is the stopping policy — the engine never proposes on
+        its own. Accept turns the live draft into the confirmed utterance,
+        recorded exactly like a confirmed synthesis so the dataset keeps one
+        shape. Template-stage accepts collapse the alternates ("need/want" →
+        "need") and close the ellipsis.
+        """
+        if not self._opened:
+            raise RuntimeError("accept() called before open()")
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        board = self._replay_board() if self._seed_values is not None else None
+        weave = self._weave(board) if board is not None else {}
+        if not weave:
+            raise RuntimeError("nothing to accept yet — no confirmed details")
+        if self._draft_text and self._draft_weave == weave:
+            text = self._draft_text
+        else:
+            text = (
+                self._template_draft(weave)
+                .replace("I need/want", "I need")
+                .replace("for/from", "for")
+                .rstrip(" …")
+                + "."
+            )
         self._history.append(
             {
-                "action": self._last_kind,
-                "content": self._last_content,
-                "answer": answer.value,
+                "kind": "synthesis",
+                "text": text,
+                "answer": Answer.YES.value,
+                "rationale": "Accepted from the live proposal banner.",
+                "slots": dict(weave),
             }
         )
-        if self._last_kind == "guess" and answer is Answer.YES:
-            content = self._last_content
-            summary = self._summarize_game(content)
-            return TurnResult(
-                kind="answer",
-                content=content,
-                path=self.path,
-                summary=summary,
-                turn=self.turn,
-            )
-        # Any other combination continues the game.
-        self._last_kind = None
-        if self.turn >= self.max_turns:
-            return TurnResult(kind="dead_end", path=self.path, turn=self.turn)
-        return self._next_reasoning()
+        self._pending = None
+        self._outcome = "synthesized"
+        self._final_utterance = text
+        return RoundEvent(
+            kind="synthesized",
+            text=text,
+            query_index=self.query_count,
+            engine=self.engine,
+        )
 
-    def _summarize_game(self, final_content: str) -> str:
-        assert self._category is not None
-        fallback = f"They are communicating: {final_content}."
-        if self.llm is None:
-            return fallback
-        try:
-            raw = _run_sync(
-                self.llm.chat(
-                    prompts.summarize_game_messages(
-                        self._category.label,
-                        final_content,
-                        self._history,
-                        seed_context=self.seed_context,
-                    ),
-                    max_tokens=80,
-                )
-            )
-        except LLMUnavailable as exc:
-            log.info("LLM unavailable for game summary: %s", exc)
-            return fallback
-        cleaned = sanitize_llm_text(raw)
-        return cleaned or fallback
-
-    def _degrade_to_fallback(self) -> TurnResult:
-        """Switch from reasoning to tree-walk mode mid-session."""
-        assert self._category is not None
-        self._mode = "fallback"
-        self._reasoner = None
-        self._stack = [_Frame(self._category, deque(self._category.children))]
-        return self._next_fallback()
-
-    # ------------------------------------------------------------------ fallback
-
-    def _next_fallback(self) -> TurnResult:
-        if self.turn >= self.max_turns:
-            node = self._stack[-1].node if self._stack else self.root
-            return TurnResult(kind="dead_end", node=node, path=self._fallback_path())
-
-        while self._stack:
-            frame = self._stack[-1]
-            node = frame.node
-            if is_emergency_path([self.root, *(f.node for f in self._stack)]):
-                return TurnResult(kind="emergency", node=node, path=self._fallback_path())
-
-            if node.is_leaf:
-                self._pending_leaf = node
-                question = self._phrase_question(node)
-                return TurnResult(
-                    kind="guess",
-                    content=question,
-                    node=node,
-                    path=self._fallback_path(),
-                    turn=self.turn,
-                )
-
-            if frame.queue:
-                probe = frame.queue.popleft()
-                self._last_probe = probe
-                question = self._phrase_question(probe)
-                return TurnResult(
-                    kind="question",
-                    content=question,
-                    node=probe,
-                    path=self._fallback_path(),
-                    turn=self.turn,
-                )
-
-            if frame.deferred:
-                frame.queue.extend(frame.deferred)
-                frame.deferred.clear()
-                continue
-
-            if len(self._stack) == 1:
-                return TurnResult(kind="dead_end", node=node, path=self._fallback_path())
-            self._stack.pop()
-
-        return TurnResult(kind="dead_end", node=self.root, path=self._fallback_path())
-
-    def _resolve_fallback(self, answer: Answer) -> TurnResult:
-        # Map KINDA to YES in tree-walk mode: "warmer" == "go deeper here".
-        effective = Answer.YES if answer is Answer.KINDA else answer
-        if self._pending_leaf is not None:
-            leaf = self._pending_leaf
-            self._pending_leaf = None
-            if effective is Answer.YES:
-                summary = self._summarize_fallback(leaf)
-                return TurnResult(
-                    kind="answer",
-                    content=leaf.label,
-                    node=leaf,
-                    path=self._fallback_path(),
-                    summary=summary,
-                    turn=self.turn,
-                )
-            if self._stack:
-                self._stack.pop()
-            return self._next_fallback()
-
-        if self._last_probe is None:
-            raise RuntimeError("fallback resolve before any probe was issued")
-        probe = self._last_probe
-        self._last_probe = None
-        frame = self._stack[-1]
-        if effective is Answer.YES:
-            self._stack.append(_Frame(probe, deque(probe.children)))
-        elif effective is Answer.NOT_SURE:
-            frame.deferred.append(probe)
-        # NO: already popped; stay at this frame.
-        return self._next_fallback()
-
-    def _fallback_path(self) -> list[Node]:
-        return [self.root, *(f.node for f in self._stack)]
-
-    def _phrase_question(self, probe: Node) -> str:
-        if self.llm is None:
-            return probe.question
-        try:
-            raw = _run_sync(
-                self.llm.chat(prompts.rephrase_question_messages(probe.question), max_tokens=60)
-            )
-        except LLMUnavailable as exc:
-            log.info("LLM unavailable, using static question: %s", exc)
-            return probe.question
-        cleaned = sanitize_llm_text(raw)
-        return cleaned or probe.question
-
-    def _summarize_fallback(self, leaf: Node) -> str:
-        path = self._fallback_path() + [leaf] if leaf not in self._stack else self._fallback_path()
-        fallback = f"They are communicating: {leaf.label}."
-        if self.llm is None:
-            return fallback
-        try:
-            raw = _run_sync(
-                self.llm.chat(prompts.summarize_path_messages(path), max_tokens=80)
-            )
-        except LLMUnavailable as exc:
-            log.info("LLM unavailable for summary: %s", exc)
-            return fallback
-        cleaned = sanitize_llm_text(raw)
-        return cleaned or fallback
-
-
-def _run_sync(coro):  # type: ignore[no-untyped-def]
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    raise RuntimeError(
-        "DialogueSession is synchronous and cannot run from within an active "
-        "event loop. Use the async API directly from FastAPI/tests."
+    #: Slot synonyms + dismissal stems for the ✗-note parser. Deterministic
+    #: and strict on purpose: a mute needs BOTH a slot word and a dismissal.
+    _SLOT_WORDS = {
+        "who": ("who", "person", "people"),
+        "what": ("what", "thing", "subject", "object"),
+        "when": ("when", "time", "timing"),
+        "where": ("where", "place", "location"),
+        "why": ("why", "reason"),
+        "how": ("how", "action"),
+    }
+    _DISMISS_STEMS = (
+        "matter",
+        "ignor",
+        "skip",
+        "important",
+        "irrelevant",
+        "forget",
+        "drop",
     )
+    #: Words that frame a REPLACEMENT note without being the replacement —
+    #: "plans seem to be dinner", "replace a visit with dinner", "she seems
+    #: to be indicating the right leg". Filtered (with stopwords and the
+    #: banned value's own tokens) so what remains is the replacement value.
+    _REPLACE_NOISE = frozenset(
+        [
+            "she", "he", "they", "i", "we", "you", "her", "him", "its",
+            "seem", "seems", "seemed", "specifically", "actually", "really",
+            "instead", "rather", "just", "like", "replace", "replacing",
+            "replaced", "indicate", "indicates", "indicating", "mean",
+            "means", "meant", "say", "says", "said", "not", "no", "never",
+            "think", "thinks", "probably", "maybe", "more",
+        ]
+    )
+    #: A free-text note may BAN a woven value only when it carries a clear
+    #: negation/removal cue or a replacement marker. Without one it is
+    #: guiding context — the Avalanche round's augmentation note ("The news
+    #: to share is that Paula wants to give Zach … tickets") mentioned the
+    #: CORRECT who-anchor and the old rule banned it, blowing up a
+    #: near-correct draft.
+    _NEGATION_CUES = frozenset(
+        [
+            "not", "no", "isn't", "isnt", "never", "wrong", "without",
+            "remove", "stop", "don't", "dont", "drop", "delete",
+        ]
+    )
+    #: Replacement markers — only notes shaped like an explicit substitution
+    #: mint a replacement; bare-leftover minting produced junk twice in live
+    #: trials ("remove worrying" → why='remove'; the Avalanche note → who
+    #: gibberish).
+    _REPLACE_MARKER = re.compile(
+        r"(?:seems?\s+to\s+be|seemed\s+to\s+be|should\s+be|"
+        r"replace\b.*?\bwith|change\b.*?\bto|make\s+it)\s+",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _parse_mute(cls, note: str) -> str | None:
+        """The slot a note dismisses ("the when doesn't matter"), or None."""
+        lowered = note.casefold()
+        if not any(stem in lowered for stem in cls._DISMISS_STEMS):
+            return None
+        tokens = set(re.findall(r"[a-z']+", lowered))
+        for cat, words in cls._SLOT_WORDS.items():
+            if any(w in tokens for w in words):
+                return cat
+        return None
+
+    async def edit(self, note: str) -> RoundEvent:
+        """✗ on the banner: a real-time edit to the evolving proposal.
+
+        The note is interpreted against the DRAFT, not the whole world —
+        deterministically: a slot dismissal MUTES the slot (dimmed + struck;
+        excluded from questioning and speech); a note matching a woven value
+        BANS that value (strike-through; floored on the board; gated out of
+        future questions). A note matching neither becomes ordinary guiding
+        context — nothing the caregiver types is dropped. Edits are history
+        entries: replayable, undoable, recorded.
+        """
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        note = note.strip()
+        if not note:
+            if self._pending is not None:
+                return self._pending_event()
+            return await self._advance()
+        mute = self._parse_mute(note)
+        if mute is not None:
+            self._history.append(
+                {"kind": "edit", "text": note, "answer": None, "mute": mute}
+            )
+            self._pending = None
+            return await self._advance()
+        if self._seed_values is not None and self._edit_intent(note):
+            board = self._replay_board()
+            for cat, val in self._weave(board).items():
+                if facets.mentions(note, val):
+                    entry: dict = {
+                        "kind": "edit",
+                        "text": note,
+                        "answer": None,
+                        "ban": {"category": cat, "value": val},
+                    }
+                    # Replacement semantics: "X seems to be Y" / "replace X
+                    # with Y" — what FOLLOWS the marker (minus the banned
+                    # value's words and framing noise) is the replacement,
+                    # minted at context strength. Marker-gated: leftover
+                    # heuristics minted junk twice in live trials.
+                    mint = self._replacement_value(note, val)
+                    if mint:
+                        entry["mint"] = {"category": cat, "value": mint}
+                    self._history.append(entry)
+                    self._pending = None
+                    return await self._advance()
+        return await self.add_context(note)  # no edit intent — guiding context
+
+    @classmethod
+    def _edit_intent(cls, note: str) -> bool:
+        """Whether a free-text note means REMOVE/REPLACE rather than inform.
+
+        A ban needs a negation/removal cue ("no, not a drink", "remove
+        worrying") or an explicit replacement marker ("plans seem to be
+        dinner"). An augmentation note that merely MENTIONS woven values is
+        guiding context — never a ban.
+        """
+        tokens = set(re.findall(r"[a-z']+", note.casefold()))
+        if tokens & cls._NEGATION_CUES:
+            return True
+        return cls._REPLACE_MARKER.search(note) is not None
+
+    @classmethod
+    def _replacement_value(cls, note: str, banned: str) -> str:
+        """The replacement an explicitly-marked note proposes, or "".
+
+        Marker-gated: only text FOLLOWING a replacement marker ("seems to
+        be …", "replace … with …", "should be …") is considered — then the
+        banned value's tokens, stopwords, and framing noise are dropped and
+        the result capped at four words. "remove worrying" has no marker →
+        plain ban, nothing minted.
+        """
+        m = cls._REPLACE_MARKER.search(note)
+        if m is None:
+            return ""
+        tail = note[m.end():]
+        banned_tokens = facets._content_tokens(banned)
+        kept: list[str] = []
+        for raw in re.findall(r"[A-Za-z][A-Za-z']*", tail):
+            token = raw.casefold()
+            if token in cls._REPLACE_NOISE or token in facets._STOPWORDS:
+                continue
+            stem = facets._stem(token)
+            if any(facets._tokens_match(stem, b) for b in banned_tokens):
+                continue
+            kept.append(token)
+        return " ".join(kept[:4])
+
+    async def replace(self, category: str, old: str, new: str) -> RoundEvent:
+        """A precise banner edit: the caregiver clicked a draft segment.
+
+        The synthesis editor's primary action (owner design, 06-11): the
+        clicked segment identifies the (category, value) EXACTLY — no note
+        parsing, no guessing. ``new`` may come from the candidate dropdown
+        or be typed free text (a word, or a grouped phrase like "Colorado
+        Avalanche tickets"); an empty ``new`` means "remove this detail"
+        (the slot is muted). Refine-or-replace at replay: a ``new`` that
+        lexically EXTENDS ``old`` keeps it as the parent (the draft deepens,
+        nothing banned); otherwise ``old`` is struck and ``new`` stands in
+        at context strength.
+        """
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        if category not in facets.CATEGORIES:
+            raise RuntimeError(f"unknown category: {category!r}")
+        old = " ".join(old.split())
+        new = " ".join(new.split())[:60]
+        if not new:
+            self._history.append(
+                {
+                    "kind": "edit",
+                    "text": f"remove {category}: {old}" if old else f"remove {category}",
+                    "answer": None,
+                    "mute": category,
+                }
+            )
+        else:
+            self._history.append(
+                {
+                    "kind": "edit",
+                    "text": f"{old} → {new}" if old else new,
+                    "answer": None,
+                    "replace": {"category": category, "old": old, "new": new},
+                }
+            )
+        self._pending = None
+        return await self._advance()
+
+    async def restate(self) -> None:
+        """⟳ on the banner: say the same draft slightly differently.
+
+        Owner design: a caregiver-triggered rephrase — same content,
+        different wording (swapped verbs/nouns) — for when the draft is
+        structurally right but reads wrong. Touches only the draft cache;
+        the board, history, and the pending question are untouched. Soft
+        failure: any error leaves the current draft as it was.
+        """
+        if self._outcome is not None:
+            raise RuntimeError("round is already terminal")
+        if self._reasoner is None:
+            raise RuntimeError("no language model is configured — cannot restate")
+        if self._seed_values is None:
+            raise RuntimeError("nothing to restate yet")
+        board = self._replay_board()
+        weave = self._weave(board)
+        if not weave:
+            raise RuntimeError("nothing to restate yet — no confirmed details")
+        current = (
+            self._draft_text
+            if self._draft_text and self._draft_weave == weave
+            else self._template_draft(weave)
+        )
+        # The existing rephrase machinery is exactly restate's semantics:
+        # "kinda" = close — keep the gist, change the wording.
+        action = await self._reasoner.synthesize(
+            leaders=weave,
+            history=self._history,
+            rejected=[(current, Answer.KINDA.value)],
+            **self._reasoner_ctx(),
+        )
+        self._draft_text = action.content
+        self._draft_weave = dict(weave)
+
+    def _edit_mutes(self) -> set[str]:
+        """Slots the caregiver dismissed via ✗-edits (recomputed → undo-safe)."""
+        return {
+            h["mute"]
+            for h in self._history
+            if h.get("kind") == "edit" and h.get("mute") in facets.CATEGORIES
+        }
+
+    def _edit_bans(self) -> dict[str, set[str]]:
+        """Values the caregiver struck, per category — explicit bans plus the
+        old value of every SWAP replacement (refining replacements keep the
+        old value as the parent; nothing is struck)."""
+        out: dict[str, set[str]] = {}
+        for h in self._history:
+            if h.get("kind") != "edit":
+                continue
+            ban = h.get("ban")
+            if isinstance(ban, dict):
+                out.setdefault(ban.get("category", ""), set()).add(
+                    ban.get("value", "")
+                )
+            rep = h.get("replace")
+            if isinstance(rep, dict):
+                old = rep.get("old", "")
+                new = rep.get("new", "")
+                if old and new and not facets.value_extends(new, old):
+                    out.setdefault(rep.get("category", ""), set()).add(old)
+        return out
+
+    async def _propose_question(
+        self, seg: list[dict]
+    ) -> tuple[ReasonerAction, facets.Board, str]:
+        """Ask the next question at the controller-chosen focus slot."""
+        assert self._reasoner is not None
+        T = self.tuning
+        board = self._replay_board()
+        focus, directive, split_pair = self._pick_focus(board, seg)
+        # Exploration DECAYS as yeses accrue toward synthesis — probe a fresh
+        # value (profile dropped) with probability explore_decay**(yeses+1).
+        # The yes-count resets after each synthesis attempt and each restart,
+        # so exploration re-opens whenever the round re-opens.
+        yeses = self._yes_since_last_synth(seg)
+        exploratory = (
+            directive not in ("split", "pin")
+            and self._rng.random() < self._explore_probability(yeses)
+        )
+        # Each asked entry carries its asserted slot categories so the repeat
+        # gate can tell a same-anchor DRILL (new category) from a reword;
+        # flip-superseded questions carry None — never exempt.
+        asked = [
+            (h["text"], frozenset((h.get("slots") or {}).keys()))
+            for h in self._history
+            if h.get("kind") == "query" and h.get("text")
+        ] + [(t, None) for t in self._superseded]
+        # Established pairs (confident leaders) — Gate 4's zero-information set.
+        established: set[tuple[str, str]] = set()
+        for cat in facets.CATEGORIES:
+            top = facets.leader(board, cat)
+            if top is not None and top[1] >= T.facet_ready_points:
+                established.add((cat, top[0]))
+        vetoed = {
+            (cat, val)
+            for cat, vals in self._edit_bans().items()
+            for val in vals
+        }
+        action = await self._reasoner.ask(
+            board=board,
+            focus=focus,
+            directive=directive,
+            split_pair=split_pair,
+            history=self._history,
+            edges=self._edges,
+            asked=asked,
+            established=established,
+            banned=self._futile_pair(seg),
+            vetoed=vetoed or None,
+            caregiver_hint=self._caregiver_hint(board),
+            exploratory=exploratory,
+            **self._reasoner_ctx(),
+        )
+        # W2-P: the controller asks about ONE slot, but 23% of questions in the
+        # recorded trials assert nothing in it — the model answers about `what`
+        # when asked for `why`. The entry still recorded the REQUESTED slot, so
+        # the rotation in `_pick_focus` believed that slot had been covered
+        # while it still had no leader, and kept re-selecting it: the
+        # starvation loop (`why` starved 7 times while `what` was asserted 12).
+        #
+        # Deliberately NOT a fifth gate, which is what W2-P originally
+        # specified. A gate rejects and re-asks, and W2-S measured that adding
+        # constraint makes this model fail harder — doubling diagnostics and
+        # the rounds that die early. Re-attributing costs nothing, discards
+        # nothing, and is simply honest bookkeeping: record the slot the
+        # question actually asks about. The requested one is kept alongside so
+        # the divergence stays measurable instead of being erased by its fix.
+        requested = focus
+        if action.kind == "query" and action.slots and focus not in action.slots:
+            core = self._core_facets()
+            focus = next(
+                (c for c in action.slots if c in core), next(iter(action.slots))
+            )
+            action.focus = focus
+            action.focus_requested = requested
+        # W2-R: a `drill` is the controller asking to NARROW a slot that
+        # already has a positive leader, so a yes to the resulting question is
+        # a refinement of the value the draft is currently showing — the
+        # frontier, not the leader. (Parenting to the leader builds a star, and
+        # the frontier of a star is an arbitrary depth-1 child; parenting to
+        # the frontier builds the ladder the round actually walked.) Captured
+        # HERE, at ask time, because the frontier is a fact about the board as
+        # it stood before the answer — deriving it during replay would be
+        # circular, since the frontier is itself read off the edges.
+        #
+        # Only when the drill LANDED on the slot it targeted: if the question
+        # wandered to another category, the frontier of the requested slot is
+        # not that value's parent, and inferring an edge across categories
+        # would invent structure the round never walked.
+        if directive == "drill" and action.kind == "query" and focus == requested:
+            top = facets.frontier(board, focus, self._edges)
+            if top is not None:
+                action.drill_parent = top[0]
+        # Classify the question's intent direction (person topics) — pure
+        # code; replay uses the stored label to credit/flip the buckets.
+        if self.topic.direction and action.kind == "query":
+            who_names = [v for v, _ in facets.live(board, "who")]
+            if action.slots.get("who"):
+                who_names.append(action.slots["who"])
+            action.direction = (
+                facets.classify_direction(action.content, who_names) or ""
+            )
+        return action, board, focus
+
+    def _pick_focus(
+        self, board: facets.Board, seg: list[dict]
+    ) -> tuple[str, str, tuple[str, str] | None]:
+        """Choose the focus slot + directive — the question-strategy policy.
+
+        Priorities (code decides strategy; the model only does language):
+        0. PIN the weakest slot of a just-rejected utterance — a kinda/no on a
+           proposal means one of its details is off; target it instead of
+           re-confirming the parts that already scored (this automates the
+           "FOCUS on WHAT" note the caregiver had to type in two trials).
+        1. PROBE a core slot with no positively-led contender — coverage first,
+           so synthesis is never missing its essential pieces.
+        2. SPLIT a slot whose top two contenders are tied — matching scores
+           carry no decision, so separate them.
+        3. Every core slot confident → PROBE an empty modifier slot (fresh
+           coverage beats re-drilling).
+        4. DRILL a LIVE slot — any slot with a positive leader, core or not,
+           that has not RETIRED. Core slots outrank modifiers; unestablished
+           leaders outrank established ones (coverage first); then the
+           topic's ``facet_priority`` order (data, not logic — e.g. my_people
+           ranks "where" last: usually implied in caregiving), then weakest
+           leader.
+
+        RETIREMENT (the 06-11 metronome fix — ~14 tail drills on who at
+        +25.5): a slot whose leader DOMINATES (>= retire_ready_x * ready
+        points with the runner-up at <= half the leader) leaves the
+        probe/drill/pin pool. It stays split-eligible — dominance and tie are
+        mutually exclusive, so scores re-converging reopens it by themselves —
+        and restarts rebuild the board, which can un-retire.
+
+        ROTATION: a category is never focused more than MAX_CATEGORY_RUN
+        turns in a row — unless the run is WORKING (its latest question got a
+        yes/kinda): a rising drill-ladder (tidy → cleanup task → dishes) may
+        extend, and ends on the first miss.
+        """
+        T = self.tuning
+        core = self._core_facets()
+        muted = self._edit_mutes()
+        others = [
+            c for c in facets.CATEGORIES if c not in core and c not in muted
+        ]
+        recent = [
+            h.get("focus")
+            for h in seg
+            if h.get("kind") == "query" and h.get("focus")
+        ][-MAX_CATEGORY_RUN:]
+
+        def fresh(cat: str) -> bool:
+            if recent.count(cat) < MAX_CATEGORY_RUN:
+                return True
+            return self._run_working(seg, cat)
+
+        def first_fresh(cands: list[str]) -> str | None:
+            for c in cands:
+                if fresh(c):
+                    return c
+            return None
+
+        # 0. After a rejected utterance: pin its weakest used slot until it is
+        #    confident (then fall through to the normal policy).
+        last_syn = next(
+            (h for h in reversed(seg) if h.get("kind") == "synthesis"), None
+        )
+        if last_syn is not None and last_syn.get("answer") in (
+            Answer.NO.value,
+            Answer.KINDA.value,
+        ):
+            used = last_syn.get("slots") or {}
+            ranked_used = sorted(
+                used.items(),
+                key=lambda cv: board.get(cv[0], {}).get(cv[1], 0.0),
+            )
+            for cat, _val in ranked_used:
+                if cat not in facets.CATEGORIES or cat in muted:
+                    continue
+                if self._family_confident(board, cat):
+                    continue
+                if fresh(cat):
+                    return cat, "pin", None
+
+        # 1. Unestablished core slots — no family confirmed above zero yet.
+        open_core = []
+        for cat in core:
+            fams = facets.families(board, cat, self._edges)
+            if not fams or fams[0][1] <= 0:
+                open_core.append(cat)
+        cat = first_fresh(open_core)
+        if cat is not None:
+            return cat, "probe", None
+
+        # 2. Tied top contenders anywhere (core first) — split them.
+        for cat in core + others:
+            pair = facets.tied_top(board, cat, margin=T.facet_split_margin)
+            if pair is not None and fresh(cat):
+                return cat, "split", (pair[0][0], pair[1][0])
+
+        # 3. Every core slot is confident → enrich an empty modifier slot.
+        if all(self._family_confident(board, c) for c in core):
+            open_other = []
+            for c in others:
+                fams = facets.families(board, c, self._edges)
+                if not fams or fams[0][1] <= 0:
+                    open_other.append(c)
+            alt = first_fresh(open_other)
+            if alt is not None:
+                return alt, "probe", None
+
+        # 4. Drill a live slot (core or not; retired slots are out —
+        #    re-drilling a settled answer is the metronome). Rank: core block
+        #    first; within a block, UNESTABLISHED families (below ready) before
+        #    established ones (coverage is information; refinement can wait);
+        #    within a band, the topic's facet_priority order — so for people
+        #    topics a vague established "what" outranks an established "when"/
+        #    "where" — and weakest family last as the final tie-break.
+        order = {c: i for i, c in enumerate(self._facet_order())}
+
+        def _mass(c: str) -> float:
+            fams = facets.families(board, c, self._edges)
+            return fams[0][1] if fams else 0.0
+
+        pool = [
+            c
+            for c in facets.CATEGORIES
+            if c not in muted and not self._retired(board, c) and _mass(c) > 0
+        ]
+        pool.sort(
+            key=lambda c: (
+                c not in core,
+                _mass(c) >= T.facet_ready_points,
+                order.get(c, len(order)),
+                _mass(c),
+            )
+        )
+        cat = first_fresh(pool)
+        if cat is not None:
+            return cat, "drill", None
+        # Nothing live and fresh — fall back to the weakest core leader so a
+        # turn always has a focus (board-ready synthesis usually fires first).
+        ranked_core = sorted(
+            core, key=lambda c: (facets.leader(board, c) or ("", 0.0))[1]
+        )
+        cat = first_fresh(ranked_core) or ranked_core[0]
+        return cat, "drill", None
+
+    def _retired(self, board: facets.Board, cat: str) -> bool:
+        """Whether `cat`'s leading FAMILY dominates — excluded from probe/drill/pin.
+
+        Dominance ratio, not margin: family mass >= retire_ready_x * ready
+        points AND the rival family <= half. (A margin rule retires whatever
+        is two clean yeses ahead — which mid-round is usually the vague
+        leader that most needs drilling; a ratio targets settled slots like
+        who=Rob at +25.5 vs +10 while leaving what at +6 vs +4 live.) Read
+        at family level: drilling WITHIN the leading family is the frontier's
+        job, not the focus rotation's.
+        """
+        T = self.tuning
+        ranked = facets.families(board, cat, self._edges)
+        if not ranked or ranked[0][1] < T.retire_ready_x * T.facet_ready_points:
+            return False
+        runner = ranked[1][1] if len(ranked) > 1 else 0.0
+        return runner <= ranked[0][1] / 2
+
+    def _facet_order(self) -> list[str]:
+        """Drill tie-break order: the topic's facet_priority, then the rest."""
+        listed = [
+            c for c in (self.topic.facet_priority or []) if c in facets.CATEGORIES
+        ]
+        return listed + [c for c in facets.CATEGORIES if c not in listed]
+
+    @staticmethod
+    def _run_working(seg: list[dict], cat: str) -> bool:
+        """Whether `cat`'s current focus run is producing — last answer yes/kinda.
+
+        Lets a working drill-ladder extend past MAX_CATEGORY_RUN; the first
+        miss (no / not-sure) ends the extension and rotation applies again.
+        """
+        for h in reversed(seg):
+            if h.get("kind") != "query":
+                continue
+            if h.get("focus") != cat:
+                return False  # the tail run belongs to another slot
+            return h.get("answer") in (Answer.YES.value, Answer.KINDA.value)
+        return False
+
+    def _board_ready(self, board: facets.Board) -> bool:
+        """Whether every core slot has a clear, confirmed leader.
+
+        Drives the banner's propose-ready vibrance (≈ the conjunction of
+        per-slot posteriors crossing ~0.5 — see the research audit) and the
+        LLM-weave trigger. Caregiver-muted slots are excluded; confidence is
+        read at FAMILY level, so a confirmed idea fragmented across its own
+        refinements still counts as established.
+        """
+        return all(self._family_confident(board, c) for c in self._core_facets())
+
+    def _explore_probability(self, yeses: int) -> float:
+        """Probability the next question probes fresh: ``explore_decay**(yeses+1)``.
+
+        High when few yeses have accrued toward synthesis, decaying as the
+        round homes in (see config.ReasoningTuning.explore_decay).
+        """
+        return self.tuning.explore_decay ** (yeses + 1)
+
+    def _inject_direction_buckets(
+        self, seeds: dict[str, list[str]]
+    ) -> dict[str, list[str]]:
+        """Add the four intent buckets as standing "how" contenders.
+
+        Person topics only (``topic.direction``). Buckets enter at zero like
+        any seed — the direction layer credits them from answers.
+        """
+        if not self.topic.direction:
+            return seeds
+        out = dict(seeds)
+        how = list(out.get("how") or [])
+        for bucket in facets.DIRECTION_BUCKETS.values():
+            if all(bucket.casefold() != v.casefold() for v in how):
+                how.append(bucket)
+        out["how"] = how
+        return out
+
+    def _caregiver_hint(self, board: facets.Board) -> str:
+        """The who-leader's name when the care-first ask-order prior applies.
+
+        Applies only when: the topic tracks direction, the who-leader is
+        positively confirmed AND matches a known caregiver, and no direction
+        bucket has positive evidence yet. An ASK-ORDER prior only — it adds no
+        points, so the honest tile stays honest and genuine concern ABOUT a
+        caregiver is never suppressed.
+        """
+        if not self.topic.direction or not self.caregivers:
+            return ""
+        top = facets.leader(board, "who")
+        if top is None or top[1] <= 0:
+            return ""
+        who = top[0]
+        who_cf = who.casefold()
+        if not any(
+            cg.casefold() in who_cf or who_cf in cg.casefold()
+            for cg in self.caregivers
+        ):
+            return ""
+        for bucket in facets.DIRECTION_BUCKETS.values():
+            key = facets._find(board["how"], bucket)
+            if key is not None and board["how"][key] > 0:
+                return ""  # direction already has evidence — prior spent
+        return who
+
+    def _futile_pair(self, seg: list[dict]) -> tuple[str, str] | None:
+        """The avenue a run of "no" guesses has exhausted, if any.
+
+        Walks the trailing run of consecutive "no" queries. A non-who pair
+        asserted in >= FUTILE_STREAK of them is the drilled-and-dead value;
+        failing that, a direction label repeated that often marks the whole
+        intent bucket as the dead avenue (content guesses vary, the direction
+        doesn't). The who-anchor itself is never banned — the asymmetric
+        scoring already protects it, and banning the person would be wrong.
+        """
+        pair_counts: dict[tuple[str, str], int] = {}
+        direction_counts: dict[str, int] = {}
+        for h in reversed(seg):
+            kind = h.get("kind")
+            if kind in ("synthesis", "restart"):
+                break
+            if kind != "query":
+                continue
+            answer = h.get("answer")
+            if answer == Answer.NOT_SURE.value:
+                continue
+            if answer != Answer.NO.value:
+                break
+            for cat, val in (h.get("slots") or {}).items():
+                if cat != "who":
+                    pair_counts[(cat, val)] = pair_counts.get((cat, val), 0) + 1
+            direction = h.get("direction")
+            if direction in facets.DIRECTION_BUCKETS:
+                direction_counts[direction] = direction_counts.get(direction, 0) + 1
+        if pair_counts:
+            (cat, val), count = max(pair_counts.items(), key=lambda kv: kv[1])
+            if count >= FUTILE_STREAK:
+                return (cat, val)
+        if direction_counts:
+            direction, count = max(direction_counts.items(), key=lambda kv: kv[1])
+            if count >= FUTILE_STREAK:
+                return ("how", facets.DIRECTION_BUCKETS[direction])
+        return None
+
+    def _verify_due(self, board: facets.Board) -> tuple[str, str] | None:
+        """The (category, leader) pair owed a double-check, if any.
+
+        Verify-on-lock: a slot whose leader is CONFIDENT on the strength of
+        at most one patient yes — one noisy answer, or a caregiver-context
+        boost the patient never confirmed at all — gets one gate-exempt
+        re-ask before the engine builds on it (Rényi–Ulam: re-ask under
+        noise; SCA: verify what matters). Never re-verify a pair; never
+        exceed VERIFY_BUDGET per round; >= 2 yeses never need it. Core slots
+        are checked first.
+        """
+        verified: set[tuple[str, str]] = set()
+        spent = 0
+        yes_counts: dict[tuple[str, str], int] = {}
+        for h in self._history:
+            if h.get("kind") == "edit":
+                # Values the CAREGIVER chose (replacements / replacement
+                # mints) are already confirmed by the most reliable channel —
+                # double-checking them produced nonsense in the Avalanche
+                # round ("Is it remove you want to use?").
+                for payload, key in ((h.get("mint"), "value"), (h.get("replace"), "new")):
+                    if isinstance(payload, dict):
+                        cat = payload.get("category", "")
+                        val = payload.get(key, "")
+                        if cat and val:
+                            found = facets._find(board.get(cat, {}), val)
+                            verified.add((cat, found if found is not None else val))
+                continue
+            if h.get("kind") != "query":
+                continue
+            if h.get("verify"):
+                spent += 1
+                for cat, val in (h.get("slots") or {}).items():
+                    verified.add((cat, val))
+            if h.get("answer") == Answer.YES.value:
+                for cat, val in (h.get("slots") or {}).items():
+                    yes_counts[(cat, val)] = yes_counts.get((cat, val), 0) + 1
+                # Direction buckets are confirmed via the `direction` label,
+                # not the slots map — count those yeses too, or a well-
+                # confirmed bucket would draw a spurious double-check.
+                d = h.get("direction")
+                if d in facets.DIRECTION_BUCKETS:
+                    pair = ("how", facets.DIRECTION_BUCKETS[d])
+                    yes_counts[pair] = yes_counts.get(pair, 0) + 1
+        if spent >= VERIFY_BUDGET:
+            return None
+        core = self._core_facets()
+        muted = self._edit_mutes()
+        others = [
+            c for c in facets.CATEGORIES if c not in core and c not in muted
+        ]
+        for cat in core + others:
+            if not self._family_confident(board, cat):
+                continue
+            # Verify the FRONTIER — the value the draft would actually weave.
+            top = facets.frontier(board, cat, self._edges)
+            if top is None:
+                continue
+            pair = (cat, top[0])
+            if pair not in verified and yes_counts.get(pair, 0) <= 1:
+                return pair
+        return None
+
+    @staticmethod
+    def _confirmed_pairs(board: facets.Board) -> set[tuple[str, str]]:
+        """Pairs with at least one full yes worth of consensus (score >= 1)."""
+        return {
+            (cat, val)
+            for cat in facets.CATEGORIES
+            for val, score in board.get(cat, {}).items()
+            if score >= 1.0
+        }
+
+    def _stalled(self) -> bool:
+        """Whether the last ``stall_window`` answers produced zero progress.
+
+        Progress = some pair newly reaching a confirmed score (>= 1.0), or a
+        synthesis attempt. Sparse kindas used to keep resetting the no-streak
+        while the round went nowhere (runs of 9/10/12 in one trial) — this
+        trigger measures the board, not the answer pattern. 0 disables.
+        """
+        window = self.tuning.stall_window
+        if window <= 0 or self._seed_values is None:
+            return False
+        start = 0
+        for i, h in enumerate(self._history):
+            if h.get("kind") == "restart":
+                start = i + 1
+        answered = [
+            i
+            for i in range(start, len(self._history))
+            if self._history[i].get("kind") == "query"
+            and self._history[i].get("answer")
+        ]
+        if len(answered) < window:
+            return False
+        cut = answered[-window]
+        if any(
+            self._history[i].get("kind") == "synthesis"
+            for i in range(cut, len(self._history))
+        ):
+            return False
+        before = self._confirmed_pairs(self._replay_board(upto=cut))
+        now = self._confirmed_pairs(self._replay_board())
+        return now <= before
+
+    def board_record(self) -> dict:
+        """The round's board evolution, for the recorded dataset / autopsies.
+
+        Seeds, the final replayed board, and any restart snapshots — so a
+        trial autopsy can reconstruct exactly what the controller believed
+        without re-deriving it from slots.
+        """
+        if self._seed_values is None:
+            return {}
+        record: dict = {
+            "seeds": self._seed_values,
+            "final": facets.snapshot(self._replay_board()),
+        }
+        # Refinement edges (child → parent per slot) — autopsies can see the
+        # dive structure, not just the flat scores.
+        edges = {cat: dict(m) for cat, m in self._edges.items() if m}
+        if edges:
+            record["edges"] = edges
+        # Restart markers are stripped from the recorded `queries` (they are
+        # belief control, not conversation), which used to lose WHERE each
+        # restart happened. `after_query` carries the position instead — the
+        # information without putting an internal marker in front of a
+        # caregiver reading the transcript. (W2-O)
+        restarts: list[dict] = []
+        asked = 0
+        for h in self._history:
+            if h.get("kind") == "query":
+                asked += 1
+            elif h.get("kind") == "restart":
+                restarts.append(
+                    {
+                        "reason": h.get("reason", ""),
+                        "after_query": asked,
+                        "board": h.get("board") or {},
+                    }
+                )
+        if restarts:
+            record["restarts"] = restarts
+        return record
+
+    # ---- segment helpers (the synthesis state machine reads these) ----
+
+    def _segment(self) -> list[dict]:
+        """History since the last restart — the live working segment.
+
+        A restart DUMPS the noisy context, so the synthesis state machine (yes
+        counts, attempt runs) reasons only over entries after the most recent
+        restart marker.
+        """
+        start = 0
+        for i, h in enumerate(self._history):
+            if h.get("kind") == "restart":
+                start = i + 1
+        return self._history[start:]
+
+    def _just_restarted(self) -> bool:
+        """True when nothing has been answered since the last restart marker.
+
+        Another restart would dump nothing new — so the failure path surfaces
+        a diagnostic instead of spinning through pointless dumps.
+        """
+        seg = self._segment()
+        if len(seg) == len(self._history):  # no restart marker exists yet
+            return False
+        return not any(h.get("kind") == "query" and h.get("answer") for h in seg)
+
+    @staticmethod
+    def _yes_since_last_synth(seg: list[dict]) -> int:
+        """Count INFORMATIVE query yeses after the segment's last synthesis.
+
+        A yes that merely re-confirmed already-established leaders carries no
+        new information and does not count toward the synthesis gates (entries
+        without the flag — older recordings — count as informative).
+        """
+        n = 0
+        for h in reversed(seg):
+            if h.get("kind") == "synthesis":
+                break
+            if (
+                h.get("kind") == "query"
+                and h.get("answer") == Answer.YES.value
+                and h.get("informative", True)
+            ):
+                n += 1
+        return n
+
+    def _consec_no_streak(self) -> int:
+        """Consecutive 'no'-answered queries at the tail of the history.
+
+        Counts back from the latest entry over queries answered "no"; a "yes"
+        or "kinda" (real positive signal) ends the run, while "not sure" (no
+        information), caregiver context, and diagnostics are transparent. A
+        restart or a synthesis attempt is a hard boundary. Drives the
+        no-streak restart trigger (see soft_reset_no_streak).
+        """
+        streak = 0
+        for h in reversed(self._history):
+            kind = h.get("kind")
+            if kind in ("restart", "synthesis"):
+                break
+            if kind != "query":
+                continue  # caregiver context / diagnostics are transparent
+            answer = h.get("answer")
+            if answer == Answer.NO.value:
+                streak += 1
+            elif answer == Answer.NOT_SURE.value:
+                continue  # no information — neither extends nor breaks the run
+            else:
+                break  # yes / kinda — a real positive signal ends the run
+        return streak
+
+    def _record_yes(self, pending: ReasonerAction) -> None:
+        """Log a confirmed-yes query (question + the slot values it asserted)."""
+        self._yes_memory.add(
+            question=pending.content,
+            needs=list(pending.slots.values()),
+            topic_id=self.topic.id,
+            round_id=self.round_id,
+            session_id=self.session_id,
+        )
+
+    async def _restart(self, reason: str) -> None:
+        """Dump the no/kinda influence and rebuild the board — the recovery move.
+
+        Implements the round's one recovery mechanism (fail-loop, no-streak,
+        and synthesis-exhausted all trigger it): the new board keeps ONLY
+
+        - the contributions of this round's confirmed-yes answers, and
+        - the caregiver-context boosts (seed context + mid-round notes stay
+          visible to prompts as well),
+
+        both round-specific by construction, plus fresh deliberately-broad
+        probes from a profile-free seed call. Recorded as a ``restart`` marker
+        carrying the rebuilt board, so replay/undo stay exact and post-restart
+        prompts can hide the dumped noise. Never raises.
+        """
+        # 1. Keep the high-trust signal: yes answers (content pairs AND their
+        #    direction-bucket credits) + caregiver context. Flip nudges are
+        #    no-derived and are dumped with the rest of the no/kinda influence.
+        kept = facets.empty_board()
+        for h in self._history:
+            kind = h.get("kind")
+            if kind == "query" and h.get("answer") == Answer.YES.value:
+                if h.get("slots"):
+                    kept = facets.update(kept, h["slots"], Answer.YES.value)
+                direction = h.get("direction")
+                if self.topic.direction and direction in facets.DIRECTION_BUCKETS:
+                    kept = facets.update(
+                        kept,
+                        {"how": facets.DIRECTION_BUCKETS[direction]},
+                        Answer.YES.value,
+                    )
+            elif kind == "context" and h.get("slots"):
+                kept = facets.apply_context(kept, h["slots"])
+
+        # 2. Fresh, deliberately broad probes. Caregiver seed context AND the
+        #    patient profile are both kept — they are caregiver signal, not
+        #    guess-priors. (The profile used to be blanked here. In the 09-01
+        #    trial that turned `who` from "Rob, Zach, Aaron, Julie, Ashley"
+        #    into "my husband / my caregiver / a doctor" the moment a round
+        #    got into trouble, and those generic relations drew four straight
+        #    no's — exactly the low-information questions the caregiver's
+        #    ordered name list exists to prevent. What a restart dumps is the
+        #    no/kinda SCORE history, never the identity prior. See §1d C5.)
+        fresh: dict[str, list[str]] = {}
+        if self._reasoner is not None:
+            try:
+                ctx = self._reasoner_ctx()
+                fresh = await self._reasoner.seed_board(
+                    seed_universal_wants=self.topic.seed_universal_wants, **ctx
+                )
+            except ReasonerError:
+                fresh = {}  # recovery must not depend on a flaky seed call
+
+        board = facets.merge_values(kept, self._inject_direction_buckets(fresh))
+        self._history.append(
+            {"kind": "restart", "reason": reason, "board": facets.snapshot(board)}
+        )
+        log.info(
+            "round restarted (%s): kept yes/context signal, %d fresh probe values",
+            reason,
+            sum(len(v) for v in fresh.values()),
+        )
+
+    def _replay_board(self, upto: int | None = None) -> facets.Board:
+        """Rebuild the facet board from seeds + history (optionally truncated).
+
+        Walks events in order so undo is just pop-and-recompute:
+        - start from the zero-scored seed board;
+        - a [context] entry credits the values the caregiver's note implied
+          (high-trust boost);
+        - a query adds points to the (category, value) pairs it asserted
+          (yes/kinda credit every pair; a no hits only the lowest-scoring
+          pair — see facets.update);
+        - a query carrying a DIRECTION label also moves the intent buckets:
+          yes/kinda credit the asserted bucket, and a no whose who-anchor is
+          positive adds a kinda-strength nudge to the MIRROR bucket (the
+          "opposite" sign flip — a no on one pole of the direction attribute
+          is soft evidence for the other pole);
+        - a [restart] marker REPLACES the board with the snapshot it carries
+          (yes/context signal kept, noise dumped, fresh probes added);
+        - a synthesis entry does NOT change the board — a rejected utterance
+          is rephrased, not eliminated.
+        """
+        board = facets.seed_board(self._seed_values or {})
+        history = self._history if upto is None else self._history[:upto]
+        for h in history:
+            kind = h.get("kind")
+            if kind == "restart":
+                board = facets.restore(h.get("board") or {})
+            elif kind == "context" and h.get("slots"):
+                board = facets.apply_context(board, h["slots"])
+            elif kind == "edit":
+                # A caregiver ban floors the value — out of play, still on the
+                # board (never re-minted), struck through in the banner. A
+                # replacement note also MINTS what the caregiver said instead,
+                # at context strength (it is caregiver signal, not a guess).
+                ban = h.get("ban")
+                if isinstance(ban, dict):
+                    cat = ban.get("category", "")
+                    val = ban.get("value", "")
+                    if cat in board:
+                        key = facets._find(board[cat], val)
+                        board[cat][key if key is not None else val] = (
+                            facets.ELIMINATE_FLOOR
+                        )
+                mint = h.get("mint")
+                if isinstance(mint, dict):
+                    cat = mint.get("category", "")
+                    val = mint.get("value", "")
+                    if cat in facets.CATEGORIES and val:
+                        val = facets.canonical_value(board, cat, val)
+                        board = facets.apply_context(board, {cat: [val]})
+                rep = h.get("replace")
+                if isinstance(rep, dict):
+                    # The synthesis editor: refine-or-replace. An extension
+                    # ("tickets" → "Avalanche tickets") keeps the old value
+                    # as the parent — the lexical edge derives automatically
+                    # and the frontier deepens; a genuine swap strikes it.
+                    # The new value is minted VERBATIM (no canonical folding
+                    # — the caregiver chose these exact words, and folding a
+                    # refinement onto its own parent would erase it).
+                    cat = rep.get("category", "")
+                    old = rep.get("old", "")
+                    new = rep.get("new", "")
+                    if cat in facets.CATEGORIES and new:
+                        if old and not facets.value_extends(new, old):
+                            key = facets._find(board.get(cat, {}), old)
+                            if key is not None:
+                                board[cat][key] = facets.ELIMINATE_FLOOR
+                        board = facets.apply_context(board, {cat: [new]})
+            elif kind == "query":
+                answer = h.get("answer")
+                slots = h.get("slots")
+                if answer and slots:
+                    board = facets.update(board, slots, answer)
+                board = self._apply_direction(board, h)
+        if upto is None:
+            # Keep the refinement edges in lockstep with the live board
+            # (derived, never stored — undo stays pop-and-recompute).
+            self._edges = facets.derive_edges(
+                board, self._refine_tags(), self._drill_tags()
+            )
+        return board
+
+    def _refine_tags(self) -> list[tuple[str, str, str]]:
+        """(category, child, parent) refinement tags from history, in order."""
+        tags: list[tuple[str, str, str]] = []
+        for h in self._history:
+            if h.get("kind") != "query":
+                continue
+            refines = h.get("refines")
+            slots = h.get("slots") or {}
+            if not isinstance(refines, dict):
+                continue
+            for cat, parent in refines.items():
+                child = slots.get(cat)
+                if child and isinstance(parent, str):
+                    tags.append((cat, child, parent))
+        return tags
+
+    def _drill_tags(self) -> list[tuple[str, str, str]]:
+        """Drill-inferred (category, child, parent) links — W2-R's last resort.
+
+        A `drill` asks to narrow the focus slot, so a YES to it makes the
+        asserted value a refinement of the draft value being drilled. Only
+        yeses count (a no narrows nothing) and only the focus category (a
+        question may assert other slots in passing; those are not what was
+        being drilled). Applied after the explicit tags and the lexical
+        fallback, so the model's own answer always wins.
+        """
+        tags: list[tuple[str, str, str]] = []
+        for h in self._history:
+            if h.get("kind") != "query" or h.get("answer") != Answer.YES.value:
+                continue
+            parent = h.get("drill_parent")
+            cat = h.get("focus")
+            child = (h.get("slots") or {}).get(cat or "")
+            if parent and cat and child:
+                tags.append((cat, child, parent))
+        return tags
+
+    def _family_confident(self, board: facets.Board, cat: str) -> bool:
+        """Confidence read at FAMILY level — refinement-aware.
+
+        Non-negative family mass: a child's no never erodes the family, so
+        an established parent stays locked while the round weaves through
+        its children (see facets.families).
+        """
+        return facets.family_confident(
+            board,
+            cat,
+            self._edges,
+            ready_points=self.tuning.facet_ready_points,
+            margin=self.tuning.facet_split_margin,
+        )
+
+    def _apply_direction(self, board: facets.Board, h: dict) -> facets.Board:
+        """Fold one query's direction evidence into the intent buckets."""
+        direction = h.get("direction")
+        if not self.topic.direction or direction not in facets.DIRECTION_BUCKETS:
+            return board
+        answer = h.get("answer")
+        bucket = facets.DIRECTION_BUCKETS[direction]
+        if answer in (Answer.YES.value, Answer.KINDA.value):
+            return facets.update(board, {"how": bucket}, answer)
+        if answer == Answer.NO.value:
+            # The sign flip — licensed only when the question's who-anchor is
+            # positively confirmed (otherwise the no may mean "wrong person").
+            who_val = (h.get("slots") or {}).get("who", "")
+            key = facets._find(board["who"], who_val) if who_val else None
+            if key is not None and board["who"][key] > 0:
+                mirror = facets.DIRECTION_BUCKETS[facets.MIRROR[direction]]
+                return facets.update(board, {"how": mirror}, Answer.KINDA.value)
+        return board
+
+    def _reasoner_ctx(self) -> dict:
+        """Shared keyword context passed to every reasoner call."""
+        return {
+            "topic_label": self.topic.label,
+            "seed_context": self.seed_context,
+            "profile_context": self.profile_context,
+            "topic_hint": self.topic.reasoning_hint or "",
+            "emotional_state": self.emotional_state,
+            "on_phase": self.on_phase,
+        }
+
+    async def _handle_reason_failure(self, reason: str) -> RoundEvent:
+        """A reasoning turn failed — recover by restart, else surface a diagnostic.
+
+        There are NO canned fallback questions. First try the context-restart
+        recovery (dump the no/kinda noise that traps a model in a fail loop;
+        keep caregiver context + this round's yeses) and re-ask once. If the
+        model is unreachable, or the restart can't help (nothing new to dump /
+        seeding itself failed), or the recovered ask fails too — return a
+        DIAGNOSTIC event that tells the caregiver what failed and what to do
+        (retry / add context / switch model). Reasoning is never permanently
+        abandoned: retry / the next interaction re-runs it.
+        """
+        self._consec_failures += 1
+        self.degrade_reason = reason
+        level = (
+            log.error
+            if self._consec_failures >= MAX_CONSEC_REASON_FAILURES
+            else log.warning
+        )
+        level(
+            "reasoner failed (%s) — attempting recovery (×%d)",
+            reason,
+            self._consec_failures,
+        )
+
+        unreachable = "unreachable" in reason
+        restart_attempted = False
+        if (
+            not unreachable
+            and self._reasoner is not None
+            and self._seed_values is not None
+            and not self._just_restarted()
+        ):
+            restart_attempted = True
+            try:
+                await self._restart("fail-loop")
+                action, board, focus = await self._propose_question(self._segment())
+            except ReasonerError as exc:
+                reason = f"{reason}; restart recovery also failed: {exc}"
+                self.degrade_reason = reason
+            else:
+                self._consec_failures = 0
+                action.rationale = (
+                    f"(recovered after a context restart) {action.rationale}".strip()
+                )
+                self._pending = action
+                self._stamp_banner(board)
+                return self._event_for(action, facets.facet_view(board, focus, self._edges))
+
+        if unreachable:
+            text = (
+                "The language model is unreachable. Check that the backend "
+                "(e.g. Ollama) is running, then press Retry."
+            )
+        elif restart_attempted:
+            text = (
+                "The model could not produce a usable question, even after "
+                "dumping unhelpful context and restarting from the confirmed "
+                "answers. Press Retry, add a context note to steer it, or "
+                "switch models."
+            )
+        else:
+            text = (
+                "The model could not produce a usable question. Press Retry, "
+                "add a context note to steer it, or switch models."
+            )
+        # Stamp before the diagnostic entry lands, so the snapshot rides the
+        # ANSWER that preceded the failure rather than being lost with it.
+        self._stamp_banner()
+        self._history.append(
+            {"kind": "diagnostic", "text": reason[:300], "answer": None}
+        )
+        self._pending = None
+        return RoundEvent(
+            kind="diagnostic",
+            text=text,
+            engine=self.engine,
+            query_index=self.query_count,
+            diagnostic={
+                "reason": reason[:300],
+                "consecutive_failures": self._consec_failures,
+                "llm_unreachable": unreachable,
+                "restart_attempted": restart_attempted,
+            },
+        )
+
+    def _pending_event(self) -> RoundEvent:
+        """Re-emit the current pending action with its current board view."""
+        assert self._pending is not None
+        if self._seed_values is not None:
+            board = self._replay_board()
+            return self._event_for(
+                self._pending, facets.facet_view(board, self._pending.focus, self._edges)
+            )
+        return self._event_for(self._pending)
+
+    def _event_for(
+        self, action: ReasonerAction, board_view: list[dict] | None = None
+    ) -> RoundEvent:
+        idx = self.query_count + (1 if action.kind == "query" else 0)
+        return RoundEvent(
+            kind=action.kind,
+            text=action.content,
+            rationale=action.rationale,
+            preface=action.preface,
+            query_index=idx,
+            engine=self.engine,
+            facets=board_view or [],
+            flipped_from=action.flipped_from,
+        )
+
+
+class Session:
+    """One tool process — holds the patient context and spawns rounds."""
+
+    def __init__(
+        self,
+        topics: Sequence[Topic],
+        *,
+        llm: LLMBackend | None = None,
+        config: Config | None = None,
+        profile: PatientProfile | None = None,
+        session_id: str = "",
+    ) -> None:
+        self.topics = list(topics)
+        self.llm = llm
+        self.config = config
+        self.profile = profile
+        #: The API's session id, so the yes-log can be joined to the recording
+        #: it came from (W2-Q). Empty for the CLI harness, which records nothing.
+        self.session_id = session_id
+        self.rounds: list[Round] = []
+        self.emotional_state: dict[str, float] = {}
+        # One yes-memory per session, shared by every round it spawns. The
+        # engine only WRITES to it (a confirmed-yes log for the dataset and the
+        # future interview tool); recovery reads yes-context from each round's
+        # own history instead — round-specific, never cross-round. File-backed
+        # for a real patient (the privacy invariant); in-memory only otherwise.
+        self.yes_memory = self._build_yes_memory()
+
+    def _build_yes_memory(self) -> YesMemory:
+        if self.config and self.profile and is_real_patient(self.profile):
+            return YesMemory(path=dated_path(self.config.recording_dir, self.profile.id))
+        return YesMemory()
+
+    def start_round(
+        self, topic_id: str, *, seed_context: str = "", round_id: str = ""
+    ) -> Round:
+        """Open a round. ``round_id`` should be the id the RECORDING will use.
+
+        It defaults to an ordinal for the CLI harness, but the API passes the
+        uuid it records under — before W2-Q the two were generated separately,
+        so the yes-log's "r3" could never be joined to its own round.
+        """
+        topic = find_topic(self.topics, topic_id)
+        if topic is None:
+            raise ValueError(f"Unknown topic: {topic_id!r}")
+        round_ = Round(
+            topic,
+            llm=self.llm,
+            max_queries=self.config.max_queries if self.config else 0,
+            mode=self.config.mode if self.config else "training",
+            seed_context=seed_context,
+            profile_context=(self.profile.context or "") if self.profile else "",
+            caregivers=list(self.profile.caregivers) if self.profile else [],
+            emotional_state=self.emotional_state,
+            tuning=self.config.reasoning if self.config else None,
+            yes_memory=self.yes_memory,
+            round_id=round_id or f"r{len(self.rounds) + 1}",
+            session_id=self.session_id,
+        )
+        self.rounds.append(round_)
+        return round_
+
+    @property
+    def topic_sequence(self) -> list[str]:
+        """Ordered topics of the rounds so far — input to loop detection."""
+        return [r.topic.id for r in self.rounds]

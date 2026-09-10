@@ -21,6 +21,16 @@ class LLMBackend(Protocol):
         *,
         max_tokens: int = 200,
         json_mode: bool = False,
-    ) -> str: ...
+        think: bool | None = None,
+    ) -> str:
+        """Generate a completion.
+
+        ``think`` overrides the backend's thinking mode for this one call
+        (None = use the backend default). The reasoner uses it to let a thinking
+        model deliberate freely in the reasoning phase, then forces thinking off
+        for the cheap JSON-formatting phase. Backends without a thinking mode
+        ignore it.
+        """
+        ...
 
     async def health(self) -> bool: ...

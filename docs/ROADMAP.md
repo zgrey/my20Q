@@ -1,113 +1,138 @@
 # my20Q Roadmap
 
-A phased plan for building the assistive 20-questions agent. Each phase is
+A phased plan for building the assistive speech-emulator agent. Each phase is
 independently testable and produces a usable artifact.
+
+> Restructured 2026-05-18 after the Phase 1 trials. The design behind Phases 2+
+> lives in [`design/beta-retool.md`](design/beta-retool.md) — the source of
+> truth for beta scope. Phases 0–1 are historical and complete.
+
+> **Phase 2 rewritten 2026-09-10** to the banner era with real verification
+> numbers (gate F4 of [`design/phase2-finalization.md`](design/phase2-finalization.md)).
+> The merge plan and what remains after Phase 2 land on `main` live there; the
+> reasoning-engine fix queue and the trial autopsies live in
+> [`design/convergence-plan.md`](design/convergence-plan.md).
 
 ## Phase 0 — Repo scaffolding ✅
 
-Deliverables:
-
-- `CLAUDE.md` at repo root documenting architecture, decisions, UX/safety
-  principles, and future ideas.
+- `CLAUDE.md` documenting architecture, decisions, UX/safety principles.
 - `docs/ROADMAP.md` (this file).
 
 ## Phase 1 — Python backend MVP (CLI-testable) ✅
 
-**Goal**: a working dialogue engine with Ollama, exercised from a terminal
-before any UI is built.
+A working dialogue engine with Ollama, exercised from a terminal before any UI.
 
-1. `pyproject.toml` with deps: `fastapi`, `uvicorn[standard]`, `httpx`,
-   `pydantic>=2`, `pyyaml`, `rich`, `pytest`, `ruff`. `src/` layout.
-2. `src/my20q/llm/ollama_client.py` — thin async client over `/api/chat`.
-   Abstract `LLMBackend` Protocol so llama.cpp or vLLM swap in later.
-3. `src/my20q/taxonomy/` — initial YAML tree:
-   - 5 top categories: `emergency` (pinned first), `mental_health`
-     ("My feelings"), `physical_health` ("My body"), `my_people`
-     (immediate-family titles), `general` ("Other", always pinned last).
-   - Each node carries `id`, `label`, `image`, `question`, optional
-     `description` and `emergency: true` flag.
-4. `src/my20q/agent/dialogue.py` — session state machine with two modes:
-   - **Reasoning mode** (LLM available): `Reasoner` drives the game. Each
-     turn, the LLM proposes a `question` or a concrete `guess` as strict JSON
-     given the accumulated history; the user answers `yes`/`no`/`kinda`/
-     `not_sure`. A `yes` on a guess ends the session. Turn-to-turn behavior
-     is governed by an explicit **explore / exploit** policy (see
-     `CLAUDE.md` → Dialogue Philosophy) — every turn mixes exploitation of
-     current-game signals (plus seed context and prior successes as
-     **priors**) with exploration of an under-sampled dimension.
-   - **Fallback mode** (LLM unreachable): deterministic breadth-first walk of
-     the taxonomy subtree under the chosen category. `yes` descends, `no`
-     prunes, `not_sure` defers, `kinda` is treated as `yes`.
-   - Emergency categories/descendants short-circuit to a hard-coded screen in
-     both modes. On final-turn or dead-end, a caregiver-facing summary is
-     generated via a constrained LLM call (or a static fallback).
-5. `src/my20q/agent/reasoner.py` — LLM-driven action proposer. Strict JSON
-   output, sanitized, with explicit "final turn must be a guess" enforcement.
-6. `src/my20q/agent/prompts.py` — templated system prompts for rephrasing,
-   path summaries, reasoning-mode action proposals, and game summaries.
-7. `python -m my20q` — Rich-based CLI harness with a **play again** loop,
-   `--no-llm` and `--max-turns` flags.
-8. Safety layer — emergency detector, LLM-output sanitizer (length / URL /
-   medical-advice filtering) shared across modes.
-9. Tests — unit tests with a mock LLM backend; integration test gated by
-   `MY20Q_INTEGRATION=1`.
+- `pyproject.toml`, `src/` layout, `LLMBackend` Protocol + Ollama client + mock.
+- Taxonomy YAML tree; `agent/dialogue.py` two-mode state machine (reasoning +
+  fallback); `agent/reasoner.py` strict-JSON action proposer; `agent/prompts.py`.
+- `python -m my20q` Rich CLI harness; safety layer; unit + gated integration
+  tests.
 
-**Verification**: `pytest` (21 passed, 1 integration skipped); `python -m
-my20q` completes a full dialogue against `gemma3:12b` via Ollama, or in
-`--no-llm` fallback mode against the bundled taxonomy.
+**Verification**: `pytest` green; `python -m my20q` completes a full dialogue
+against `gemma4:e4b` (default), or in `--no-llm` fallback mode.
 
-## Phase 2 — Web UI (PWA) + FastAPI service
+The trials of this MVP motivated the retool — see `design/beta-retool.md` §1.
+The dialogue engine here is the seed for the Phase 2 cockpit.
 
-**Goal**: tablet-ready interface, served over Tailscale from cerberus.
+## Phase 2 — Caregiver Cockpit (beta) ✅
 
-1. FastAPI app in `src/my20q/api/`:
-   - `POST /session` → create session, return initial category screen.
-   - `POST /session/{id}/answer` → submit yes/no/skip, return next question +
-     image refs.
-   - `GET /session/{id}/state` → resume support.
-   - Static mounts for `/assets/` and the built PWA.
-   - Optional SSE for streaming question text.
-2. Frontend — decision at start of Phase 2, narrowed to:
-   - **Recommended**: Vite + vanilla TS (or preact). Zero tablet-side runtime
-     deps, trivial kiosk deployment.
-   - Alternative: SvelteKit if offline-cache cleverness is needed.
-3. UX baselines baked in from `CLAUDE.md` (huge tap targets, one question per
-   screen, persistent Start-Over / Emergency, AAA contrast).
-4. `scripts/fetch_icons.py` pulls ARASAAC pictograms via their open API and
-   Mulberry from GitHub, writing an attribution manifest.
-5. Tailscale deployment doc in `docs/` covering MagicDNS cert, systemd unit
-   for the FastAPI service on cerberus, kiosk-browser setup on the Android
-   tablet.
+The caregiver-driven web cockpit — the real product interface. Delivered:
 
-**Verification**: complete a dialogue from a desktop browser over Tailscale,
-then from the tablet in kiosk mode. Lighthouse accessibility audit ≥ 95.
+- **FastAPI backend** + local server; the async engine; round-lifecycle
+  endpoints; an SSE progress channel; serves the built cockpit and the
+  pictogram assets.
+- **Preact + Vite cockpit** — the **living proposal banner** across the top (the
+  evolving draft: Speak · ⟳ Restate · ✓ accept behind a confirmation modal ·
+  click-to-edit segments with candidate dropdowns) over **three** tiles
+  (conversation · live reasoning with the consensus board and refinement chains
+  + emotional sliders · input with ⇄ Opposite, Repeat, Undo and the
+  guiding-context field). The **pictogram tile is shelved**, not delivered —
+  retrieval mostly fell back to "?", and reviving it means either fixing
+  retrieval or generating imagery, which reopens a locked decision and needs its
+  own privacy review. Persistent topic dropdown, recording light with a
+  dataset-size monitor, session **Review** dashboard, dark/light theme;
+  `y/n/k/s/q` + undo + mid-round caregiver context; **local TTS** readouts
+  (piper or kokoro).
+- **Retooled dialogue engine** — session/round/query model, async,
+  synthesis-terminated rounds, rewindable history/undo, training/operational
+  mode axis, and the format auditor (re-prompts non-yes/no queries).
+  **Rebuilt 2026-06-10 as the 5W1H facet controller**: per-slot consensus
+  scores (who/what/when/where/why/how) anchored to the question text, a
+  code-level focus policy (probe → split ties → drill), a hard repeat gate,
+  leader-weaving synthesis with placeholders, and a unified restart recovery —
+  canned fallback questions removed in favor of diagnostic cards (see
+  `design/reasoning-retro.md` §8).
+- **Flat topic list** replacing the taxonomy tree; **3-tier recording/dataset**
+  writer + Job-B metric, gated by `real_patient_profile_loaded` + a caregiver
+  pause control; **pictogram retrieval** from a curated ARASAAC catalog.
+- **Ollama + Anthropic/Opus backends** behind the hard privacy gate; minimal
+  patient-profile loader; **emotional sliders** feeding the reasoner.
+- CLI harness rewired to the async engine.
 
-## Phase 3 — Clinical & usability iteration
+- **The v3 convergence work** (2026-06 → 09), driven by live-trial autopsies in
+  [`design/convergence-plan.md`](design/convergence-plan.md): the banner as the
+  only synthesis path, focus retirement, verify-on-lock, refinement links,
+  value identity, autopsy instrumentation, the noise bench, and the focus/
+  content fixes. Proposals are iterated with the owner one at a time and
+  measured on the bench before landing — two were measured and **rejected**
+  (W2-S, W3-I/W4-J discarded as no longer occurring).
 
-1. Local-only session logging for caregiver review — taxonomy paths +
-   timestamps, never free text.
-2. TTS output via `piper` (local, fast).
-3. **Caregiver-configured patient profile** — a per-patient config file
-   (YAML, e.g. `config/patients/<id>.yaml`) holding family names,
-   medications, hobbies, dietary/sensory preferences, frequent-need
-   shortcuts. Loaded at the start of every round (CLI launch) via
-   `--profile <id>` / env var, threaded into the reasoning prompt as
-   **persistent patient-level priors**. This is the sanctioned channel
-   for patient context across rounds; it replaces any temptation to
-   persist pass- or round-level history to disk as implicit priors
-   (see `CLAUDE.md` → Dialogue Philosophy for the round/pass
-   terminology and why cross-round bleed-through is excluded).
-4. Expand taxonomy with caregiver input. Per-patient taxonomy overlays
-   (e.g. the `my_people` category swaps in real family names from the
-   profile).
-5. Latency budget: < 1.5 s per question on cerberus-class hardware.
+**Verification**: `pytest` (289 passed, 2 gated integration skipped); `ruff`
+clean; cockpit typecheck + build clean; the Opus backend is refused when a
+real profile is loaded.
 
-## Phase 4 — Native Linux tablet app (stretch)
+**Validated in live trials, not just in tests.** The 2026-09-09 sessions
+converged repeatedly — three rounds accepted at 7, 4 and 11 queries and a
+fourth at 12, against one accept in eight rounds at 18 queries on 08-31/09-01.
+Caregiver: *"Much more robust and we quickly got to the correct question."*
+Autopsies: `design/convergence-plan.md` §1e–§1f.
 
-Revisit only after Phase 2 validates the UX clinically. Options:
+Backlog raised during the build (see `design/beta-retool.md` §15): emergency
+false-alarm metric, metrics-over-time visualization, an emotion-weighted
+conditional-sampling scheme, and an on-topic LLM auditor.
 
-- **Tauri** shell wrapping the PWA (lowest risk, reuses frontend).
-- **GTK4 + libadwaita** (best-in-class Linux feel, commits us to a tablet).
-- **Qt6 / QML** (broadest Linux-tablet hardware support).
+## Phase 3 — Caregiver interview tool + knowledge graph
 
-Decision deferred. The PWA remains the primary deliverable regardless.
+**Goal**: Job A — controlled, human-curated patient context.
+
+1. **Caregiver interview tool** — caregiver-initiated, nudged after ~10 logged
+   rounds. Opens with open-recall prompts, then grounds against the logs and
+   proposes concrete graph edits the caregiver approves or rejects.
+2. **Knowledge-graph data model** — edge weight = decayed count of
+   caregiver-confirmed occurrences; written only via the interview tool.
+3. **Interactive graph visualization** that builds as edits are approved.
+4. **Expensive loop detection** — bridging queries across oscillating topics;
+   topic-correlations feeding the graph.
+
+## Phase 3.5 — Scheduling rounds (owner-requested 2026-08-11)
+
+**Goal**: a scheduling-specific mode of play — rounds that converge on
+scheduling logistics or event planning and synthesize an utterance in that
+register ("Aaron's dinner is Saturday — at our house?").
+
+Notable because it is the first topic where `when` carries the round: every
+existing topic ranks `when` 5th or last, and the trials treated `when`-farming
+as waste. Time is natively hierarchical, so it leans hard on W3-H refinement
+links. Not yet iterated or designed — the requirement, the structural notes,
+and the open questions are recorded in
+[`design/scheduling-rounds.md`](design/scheduling-rounds.md).
+
+## Phase 4 — Patient operational interface
+
+Revisit only after Phase 2 validates the cockpit. The aphasia-oriented secondary
+input surface as a real interface; operational mode (patient-solo, noisy input,
+graph-driven inference). Bound by the patient-interface UX principles in
+`CLAUDE.md`.
+
+## Phase 5 — Clinical & usability iteration
+
+1. TTS output via `piper` (local, fast).
+2. Full caregiver-configured patient profile (family names, medications,
+   hobbies, dietary/sensory preferences, frequent-need shortcuts).
+3. Latency budget: < 1.5 s per query on cerberus-class hardware.
+4. Caregiver review of recorded sessions.
+
+## Phase 6 — Native Linux tablet app (stretch)
+
+Tauri shell wrapping the web frontend, or GTK4 + libadwaita. Decision deferred;
+the web app remains the primary deliverable regardless.
