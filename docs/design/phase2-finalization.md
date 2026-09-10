@@ -18,7 +18,7 @@ the first time. *(Counts refreshed 2026-09-08; the three added commits are the
 
 | Check | Result |
 |---|---|
-| `pytest` | 252 passed, 2 skipped *(211 → 220 W2-K → 237 W2-O → 252 W2-G)* |
+| `pytest` | 283 passed, 2 skipped *(211 → 220 K → 237 O → 252 G → 261 R → 283 M/P)* |
 | `ruff check .` | clean |
 | `npm run typecheck` (web) | clean |
 

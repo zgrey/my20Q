@@ -20,8 +20,8 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 
 ## Status
 
-> **Parked 2026-09-09, awaiting a live trial.** `phase2-cockpit` is 73 commits
-> ahead of `main`, 0 behind, and pushed. All green: **276 tests / 2 skipped**,
+> **Parked 2026-09-09, awaiting a live trial.** `phase2-cockpit` is 78 commits
+> ahead of `main`, 0 behind, and pushed. All green: **283 tests / 2 skipped**,
 > ruff and cockpit typecheck clean. Phase 2 is feature-complete but **not yet
 > merged** — the bar and the remaining gates are in
 > [`docs/design/phase2-finalization.md`](docs/design/phase2-finalization.md).
@@ -42,21 +42,28 @@ and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the phased plan.
 >   (autopsy instrumentation) landed. Engine changes are now *measured* rather
 >   than argued about.
 >
-> **The next action is a live trial, not code.** Six behavioural changes have
-> landed since the last session and none has been seen by a person. The stack
-> was verified trial-ready on 09-09: profile loads, cloud backend refused,
-> recording armed, cockpit rebuilt (its bundle had been stale since June).
+> **The next action is a live trial, not code.** The 09-09 trial was the first
+> to converge repeatedly — **three rounds accepted at 7, 4 and 11 queries**,
+> against one accept in eight rounds at 18 queries on 08-31/09-01. Since then
+> **W2-M** (a caregiver note now credits only words it actually says — it could
+> credit `what: pain` from a note reading "right side paralysis", at a weight
+> that locks the slot instantly) and **W2-P** (the entry records the slot a
+> question actually asks about, so rotation stops re-picking a starved one) have
+> landed unseen by a person, along with the **iPad audio fix** — the question
+> was never read aloud because each readout built a new `Audio` element, and
+> iOS ties playback permission to the element.
 >
-> **Watch `reached_ready`, not `converged`.** The bench's confirm oracle
-> rejected a draft that plainly captured the need, so convergence is capped
-> below what the engine deserves; whether the board ever reaches readiness — the
-> point where the draft becomes a woven sentence rather than the code template —
-> is the honest measure. Across nine simulated rounds it never once did.
+> **Watch `reached_ready`, not `converged`.** The bench's confirm oracle rejects
+> drafts that plainly capture the need, so convergence is capped below what the
+> engine deserves; whether the board reaches readiness — the point where the
+> draft becomes a woven sentence rather than the code template — is the honest
+> measure. W2-P took it from **0/9 to 2/9**, the first non-zero in any bench run.
 >
 > Then **F3** (W2-E, tag rescue) and **F4** (doc reconciliation) → merge. Still
-> open and unaddressed: **W2-P** (the questioning marches down one axis),
-> **W2-M** (typed notes garbled), **W2-Q** (confirmed answers never read back),
-> and the owner call on **W2-L**'s verify-no scoring.
+> open: **W2-Q** (confirmed answers never read back), the owner call on
+> **W2-L**'s verify-no scoring, W2-P's unbuilt **enumeration-axis guard**, and
+> **latency** — 10.2s per question, 86% of it the deliberate phase, with
+> prompt-side fixes measured and rejected (**W2-S**).
 
 - **Phase 1 — backend MVP** ✓ Dialogue engine, topics, Ollama client, safety
   layer, and a Rich-based CLI harness.
