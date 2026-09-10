@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 
 from my20q.llm.base import LLMMessage, LLMUnavailable
 
@@ -51,11 +51,11 @@ class OllamaBackend:
         if eff_think is not None:
             payload["think"] = eff_think
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+            async with httpx2.AsyncClient(timeout=self.timeout_s) as client:
                 resp = await client.post(f"{self.base_url}/api/chat", json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx2.HTTPError, ValueError) as exc:
             raise LLMUnavailable(f"Ollama call failed: {exc}") from exc
 
         message = data.get("message", {})
@@ -83,14 +83,14 @@ class OllamaBackend:
         timeout since a large model loads slowly; returns False on any failure.
         """
         try:
-            async with httpx.AsyncClient(timeout=timeout_s) as client:
+            async with httpx2.AsyncClient(timeout=timeout_s) as client:
                 resp = await client.post(
                     f"{self.base_url}/api/generate",
                     json={"model": self.model, "prompt": "", "stream": False},
                 )
                 resp.raise_for_status()
             return True
-        except (httpx.HTTPError, ValueError):
+        except (httpx2.HTTPError, ValueError):
             return False
 
     async def is_thinking_model(self) -> bool:
@@ -106,22 +106,22 @@ class OllamaBackend:
             return cached
         result = False
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx2.AsyncClient(timeout=5.0) as client:
                 resp = await client.post(
                     f"{self.base_url}/api/show", json={"model": self.model}
                 )
                 resp.raise_for_status()
                 caps = resp.json().get("capabilities") or []
                 result = "thinking" in caps
-        except (httpx.HTTPError, ValueError):
+        except (httpx2.HTTPError, ValueError):
             result = False
         self._thinking_cache[self.model] = result
         return result
 
     async def health(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx2.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{self.base_url}/api/tags")
                 return resp.status_code == 200
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             return False

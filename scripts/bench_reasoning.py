@@ -587,14 +587,14 @@ async def _drive_round(
 
 
 async def _model_pulled(backend: OllamaBackend) -> bool:
-    import httpx
+    import httpx2
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx2.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{backend.base_url}/api/tags")
             resp.raise_for_status()
             names = {m.get("name", "") for m in resp.json().get("models", [])}
-    except httpx.HTTPError:
+    except httpx2.HTTPError:
         return False
     return backend.model in names or any(n == backend.model for n in names)
 

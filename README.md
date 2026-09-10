@@ -146,6 +146,36 @@ synthetic persona the Anthropic backend is permitted and recording is off. The
 recorded dataset and any cloud backend can never coexist. TTS is **always**
 local (piper or kokoro) — there is no cloud-voice path.
 
+### Security posture
+
+Reviewed 2026-09-10; `pip-audit` and `npm audit` both clean.
+
+**Threat model.** The API binds `127.0.0.1` and is reached only over Tailscale
+(`tailscale serve` proxies to it). There is deliberately **no application-level
+auth** — the network boundary is the boundary, and the only user is the
+caregiver. Anything that widens that boundary (binding `0.0.0.0`, exposing the
+port publicly, adding a permissive `MY20Q_CORS_ORIGINS`) invalidates the model
+and would need real authentication first.
+
+What holds it up, and what to preserve when changing it:
+
+- **The privacy gate cannot be crossed at runtime.** `POST /api/model` switches
+  models mid-session but requires an `OllamaBackend` and only mutates its model
+  name — it cannot reach a cloud backend, so a real-patient session stays local
+  no matter what the client sends.
+- **No shell.** `piper` is invoked as an argument list with the text on
+  **stdin**, never interpolated into a command, so voiced text cannot inject.
+- **Path traversal is refused twice.** `Recorder.read_session` rejects
+  separators and `..`, then re-checks that the resolved parent *is* the patient
+  directory.
+- **`/api/tts` input is length-capped.** It is the one endpoint that spends
+  unbounded CPU on client input.
+- **Logs carry no patient text and no secrets** — booleans and counts only.
+  `ANTHROPIC_API_KEY` is read from the environment and passed straight to the
+  SDK.
+- **Patient data is gitignored** (`/patient_data/`, `/patient_profiles/`) and
+  never leaves the host.
+
 ## Install
 
 ```bash
