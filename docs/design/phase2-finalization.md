@@ -1,5 +1,16 @@
 # Phase 2 finalization — closing the beta and merging to `main`
 
+> **✅ COMPLETE — merged 2026-09-10 as PR #1** (`e5139fe`), a true merge commit
+> with both parents intact so the commit hashes referenced throughout
+> [`convergence-plan.md`](convergence-plan.md) still resolve. 83 commits, 93
+> files, +24,597 / −1,900; `main` green at 290 passed / 2 skipped.
+>
+> **This document is now history.** It records how the bar was set, how it was
+> amended twice by evidence, and why one of its gates was dropped — keep it for
+> that reasoning, not as a plan. Current state lives in
+> [`../../README.md`](../../README.md); the engine queue and the trial autopsies
+> live in [`convergence-plan.md`](convergence-plan.md).
+
 Written 2026-08-11 after a two-month gap. Purpose: state exactly where the
 `phase2-cockpit` branch stands, what remains before it becomes `main`, and
 what is explicitly deferred.
@@ -262,6 +273,12 @@ commits. Squashing would break those references.
 > Note for F4: `CLAUDE.md`'s Git Workflow section says "squash-merge PRs into
 > `main`" without exception. Record this carve-out there so the next session
 > does not read the merge commit as a process violation.
+
+**Executed 2026-09-10.** The carve-out is recorded in `CLAUDE.md`, and the
+merge landed as `e5139fe` with two parents (`0a7e3c1` + `79f304f`) — verified,
+because a squash would have silently broken every commit reference in
+`convergence-plan.md`. The branch grew from 62 commits to 83 between the
+decision and the merge.
 
 ---
 
