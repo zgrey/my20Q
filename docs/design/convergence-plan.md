@@ -1068,7 +1068,7 @@ confirmation; (d) enforce the W1-F exemption: never verify a pair whose only
 support is a caregiver context boost. **Touches:** `prompts`, `auditor`,
 `dialogue` (verify-due check), tests.
 
-### W2-M · Caregiver-note fidelity — Status: PROPOSED (09-08, §1d C4)
+### W2-M · Caregiver-note fidelity — Status: IMPLEMENTED (09-09)
 
 **Problem.** The "repeat already-on-board values VERBATIM so they are credited"
 rule in `expand_slots` turns notes into hallucinations: *"right side
@@ -1084,6 +1084,35 @@ contenders; fold onto an existing contender only on exact or near-exact match
 (reusing W2-K's tightened rule); **never emit a value absent from the note's own
 words**. **Touches:** `prompts.expand_slots` instruction, `dialogue` (context
 path), tests.
+
+**Landed 09-09, at half the expected scope.** Checking both cases against
+current code first: *"Pain in right calf"* → `where: right side` **was already
+fixed by W2-K** — `canonical_value` returns "right calf" unchanged now (the
+head tokens differ), so the note's precision survives as its own contender.
+That example is stale.
+
+The live defect was one clause in `expand_slots`:
+
+```python
+if known or facets.mentions(context, value):
+```
+
+The `known` branch admitted any value that happened to sit on the board **with
+no check that the note said it**. A note reading *"right side paralysis"*
+therefore credited `what: pain` at `CONTEXT_POINTS` (+2.0). The note is now the
+anchor, never the board; folding is kept only as wording normalisation for
+values the note does say. The `EXPAND_SYSTEM` line that caused it — *"when the
+note supports a value ALREADY on the board, repeat that value VERBATIM so it is
+credited"* — is replaced by the opposite instruction plus both failing examples.
+
+**Owner decision:** accept losing the implicit case (*"her water cup"*
+confirming an existing *"a drink"*). It mints "water cup" instead, which is
+more specific anyway; fabrication at +2.0 is the far worse failure.
+
+**Four existing tests asserted the old behaviour** — each passing a note whose
+words did not contain the value it expected credited, one commented *"a drink
+is on the board (confirmed-by-note)"*. They encoded the defect and were
+rewritten to say what they mean, rather than the rule loosened to fit them.
 
 ### W2-N · Restart keeps the profile prior — Status: IMPLEMENTED (09-08)
 
@@ -1159,7 +1188,7 @@ of a gate re-ask visible for the first time), and 3 gate rejections across 6
 questions — 2 of them the model writing either/or questions. All of it is
 `--compare`-able the moment W2-G exists.
 
-### W2-P · Focus/content divergence gate + enumeration-axis guard — Status: PROPOSED (09-08, §1d C7)
+### W2-P · Focus/content divergence — Status: IMPLEMENTED (09-09, part a) · axis guard still unbuilt
 
 **Problem.** Roughly **9 of 45** turns assert no slot in the category the
 controller asked for, so `_pick_focus` keeps re-selecting a slot the questions
@@ -1174,6 +1203,52 @@ dimension being enumerated (sub-types of one confirmed parent) and forces a
 category rotation after N misses, independent of pair identity. **Note:** W2-K
 partly re-arms `FUTILE_STREAK` on its own — re-measure after W2-K before
 building the axis guard.
+
+**Landed 09-09 — and NOT as the gate above.** Re-measured first, as the note
+asks: divergence is **23% (16 of 69)** on the recorded trials, worse than the
+9/45 estimate; `why` starved 7 times while `what` was asserted 12 times
+instead.
+
+**The fifth gate was rejected on the strength of W2-S** (owner-confirmed). A
+gate rejects and re-asks, and W2-S measured that adding constraint makes this
+model fail *harder* — doubling diagnostics and the rounds that die early.
+Instead the entry now records **the slot the question actually asserts**. Zero
+LLM calls, nothing discarded, and honest bookkeeping: rotation stops believing
+a starved slot was covered. `focus_requested` rides alongside so the divergence
+stays measurable rather than erased by its own fix (`dump_recording` renders it
+as `ASKED-FOR <slot>`).
+
+One consequence handled: W2-R's drill inference reads `slots[focus]`, so
+re-attribution would let it parent a value under the *requested* slot's
+frontier — inventing a cross-category edge the round never walked.
+`drill_parent` is now set only when the drill landed on the slot it targeted.
+
+**Measured** (same seed and command as every prior run; W2-M is inert on the
+bench, which types no caregiver notes, so this delta is W2-P's):
+
+| variant | q | rate/q | diag | ended early | restarts | **ready** |
+|---|---|---|---|---|---|---|
+| baseline (W2-R) | 119 | 0.538 | 10 | 2/9 | 22 | **0/9** |
+| W2-S (rejected) | 97 | 0.433 | 20 | 4/9 | 13 | 0/9 |
+| **W2-P** | 111 | **0.477** | 12 | **2/9** | **17** | **2/9** |
+
+**`reached_ready` moves off zero for the first time in any bench run** —
+foot-pain at q6, anxious-noise at q11 — with rejections down 11% and restarts
+down 23%, while diagnostics and early-ending rounds stay flat. That flatness is
+the contrast with W2-S, which bought its rejection drop by killing rounds
+sooner.
+
+The mechanism is confirmed rather than inferred: the focus distribution evened
+out (most-used category **43% → 38%** of all questions) and `when` is now used
+at all, where it was never selected before. Rotation sees the truth, stops
+hammering `what`, and the spread lets core slots fill — which is what readiness
+requires.
+
+*Caveat:* n=9, and 2/9 against 0/9 is a small sample. Convergence stays 0/9, as
+expected while the confirm oracle rejects drafts that plainly capture the need.
+
+**The enumeration-axis guard (part b) stays unbuilt.** This may have subsumed
+it — re-measure on the next trial before building it.
 
 ### W2-R · The draft does not follow the leader — Status: IMPLEMENTED (09-09)
 
@@ -1462,10 +1537,10 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | **W2-G** | **Noise bench** | **IMPLEMENTED (09-08)** — gate **F2**: ε-noise, `--compare`, §1 metrics read off the round record, 15 tests. Fixed two defects in the instrument (unreachable accept gate, `not_sure`-biased simulator) |
 | **W2-K** | **Value identity — anchoring + folding** | **IMPLEMENTED (09-08)** — drill-down restored; verified by replay (`right side › right leg › right thigh`) |
 | W2-L | Verify-turn safety | **PARTLY IMPLEMENTED (09-08)** — wording fixed; the verify-no scoring question stays open (owner-decided, wants the bench) |
-| W2-M | Caregiver-note fidelity | PROPOSED (09-08, §1d C4) |
+| **W2-M** | **Caregiver-note fidelity** | **IMPLEMENTED (09-09)** — the note is the anchor, never the board; half the spec was already fixed by W2-K |
 | W2-N | Restart keeps the profile prior | **IMPLEMENTED (09-08)** — one line |
 | **W2-O** | **Autopsy instrumentation** | **IMPLEMENTED (09-08)** — record carries seed context, per-query banner/timing/rejections, restart positions, pending question; **F2 precondition cleared** |
-| W2-P | Focus/content gate + enumeration-axis guard | PROPOSED (09-08, §1d C7) — re-measure after W2-K |
+| **W2-P** | **Focus/content divergence** | **IMPLEMENTED (09-09)** — re-attribution, NOT the specified gate (see W2-S). First bench run ever to reach readiness (2/9). Axis guard still unbuilt |
 | W2-Q | `yes_memory` integrity + same-session read-back | PROPOSED (09-08, §1d C7) |
 | **W2-R** | **Draft does not follow the leader** | **IMPLEMENTED (09-09)** — drill-inferred edges, parented to the FRONTIER. Measured on the bench: round health up (farming yeses to zero, diagnostics halved), **convergence and readiness unmoved at 0/9**. Kept, not claimed as a win |
 | W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |
