@@ -240,6 +240,15 @@ interface). They do not constrain the caregiver cockpit.
 - Feature work on topic branches; squash-merge PRs into `main`.
 - Conventional-ish commit messages (`feat:`, `fix:`, `docs:`, `chore:`).
 
+**One recorded exception — the `phase2-cockpit` merge.** That branch lands as a
+**true merge commit**, not a squash (owner decision, 2026-08-11). It carries the
+whole cockpit plus the convergence work, and that work is a documented sequence
+of owner-iterated proposals whose autopsies in
+[`docs/design/convergence-plan.md`](docs/design/convergence-plan.md) reference
+individual commits. Squashing would break those references. This is the single
+carve-out, not a precedent for later branches — so a reader finding a merge
+commit in the history should not read it as a process violation.
+
 ## Cross-Repo Context
 
 This is a **new, independent repo** in the multi-repo workspace documented at

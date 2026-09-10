@@ -8,17 +8,17 @@ what is explicitly deferred.
 
 ## 1. Where we stand
 
-**Branch.** `phase2-cockpit` is **65 commits ahead of `main`, 0 behind** (the
+**Branch.** `phase2-cockpit` is **81 commits ahead of `main`, 0 behind** (the
 Starlette/CVE-2026-48710 bump was merged down 2026-08-11). The eventual merge
 carries **89 files, +20,473 / −1,903** — `web/` arrives on `main` whole, for
-the first time. *(Counts refreshed 2026-09-08; the three added commits are the
-08-11/08-12 planning docs.)*
+the first time. *(Counts refreshed 2026-09-08; refreshed again 2026-09-10 after the
+convergence work and three live trials.)*
 
-**Health — all green, re-confirmed 2026-09-08:**
+**Health — all green, re-confirmed 2026-09-10:**
 
 | Check | Result |
 |---|---|
-| `pytest` | 283 passed, 2 skipped *(211 → 220 K → 237 O → 252 G → 261 R → 283 M/P)* |
+| `pytest` | 290 passed, 2 skipped *(211 → 220 K → 237 O → 252 G → 261 R → 283 M/P → 290 Q/oracle)* |
 | `ruff check .` | clean |
 | `npm run typecheck` (web) | clean |
 
@@ -32,6 +32,13 @@ field. §1d found **W3-H has never once engaged in production** (`board.edges`
 empty in all 8 recorded rounds, blocked upstream by W2-K) and **W2-F is
 actively harmful as shipped** (see W2-L). Nothing in this list reaches
 VALIDATED until the bench exists.
+
+*Resolved 2026-09-09/10.* The bench exists (F2), W2-K unblocked W3-H, and the
+stack is now **validated in the field**: three sessions on 09-09 converged
+four rounds at 7, 4, 11 and 12 queries with the caregiver accepting each
+weave — see `convergence-plan.md` §1e–§1f. W2-L's harm did not recur; verifies
+now fire once in 38 questions, which is why its open scoring question was
+judged moot rather than answered.
 
 **Trial evidence.** The v3 stack works, and the improvement is large. The
 06-13 session (the last trial *before the park*; superseded as "most recent" by
@@ -68,16 +75,21 @@ confirmed or typed, none reaching the board, which ended on `pain / right side`.
 Root cause is reproducible with no LLM in the loop and is now queued as
 **W2-K**, with **W2-L / W2-M / W2-N / W2-O / W2-P / W2-Q** behind it.
 
-**Known doc drift.** `docs/ROADMAP.md` still marks Phase 2 ✅ with a
-verification line reading "51 passed" and describes the pre-banner
-architecture. It predates the entire facet-controller rebuild and the banner
-era. It is the single most misleading document in the repo right now.
+**Known doc drift — RESOLVED 2026-09-10 (gate F4).** `docs/ROADMAP.md` Phase 2
+is rewritten to the banner era with real numbers; `beta-retool.md` §12 is
+reconciled against what actually shipped (four items did not land as written —
+three tiles not four, the pictogram tile shelved, rounds caregiver-terminated
+rather than synthesis-terminated, and TTS moved from Out to In); and the
+true-merge-commit carve-out is recorded in `CLAUDE.md` so the merge is not read
+as a process violation.
 
 ---
 
 ## 2. What remains
 
-Five items. Only the first four are candidates for gating the merge.
+Five items. **All merge gates are now closed: F1, F1.5 and F2 cleared; F3 was
+dropped on 2026-09-10 after re-measurement; F4 is done. The branch is ready to
+merge.**
 
 ### F1 · A fresh trial round — ✅ **DONE (08-31 / 09-01, closed 09-08)**
 Two months idle. One live session confirms nothing rotted (model availability,
@@ -220,8 +232,16 @@ Concretely, nothing merges until:
       table computed from `build_round_record`, and 15 tests where there were
       none. Its first run converged 0/6 and immediately confirmed W2-P with
       numbers and turned up a new defect, **W2-R**.)*
-- [ ] **F3** — W2-E lands, with a measured delta on the bench.
-- [ ] **F4** — ROADMAP Phase 2 rewritten; §12 checklist reconciled.
+- [x] ~~**F3** — W2-E~~ — **DROPPED from the bar (owner, 2026-09-10).**
+      Re-measured on the post-fix trials: the defect it targets is down to
+      **1 farming yes in 25** (4%). It was justified as "the last cheap engine
+      win" when the engine did not converge; it now converges repeatedly, the
+      bench cannot reliably endorse a pre-merge change (it scored W2-R null),
+      and 79 unmerged commits are the larger risk. Moved post-merge, if at all.
+- [x] **F4** — ROADMAP Phase 2 rewritten to the banner era with real
+      numbers (289/2); beta-retool §12 reconciled (4 items did not land as
+      written, pictogram tile SHELVED); the true-merge-commit carve-out
+      recorded in `CLAUDE.md`. **2026-09-10.**
 
 **Not gates, but raised by F1 and queued** (`convergence-plan.md` §3): **W2-L**
 verify-turn safety — patient-facing, and 2 of 3 verifies in the trial destroyed

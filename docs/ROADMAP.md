@@ -7,12 +7,11 @@ independently testable and produces a usable artifact.
 > lives in [`design/beta-retool.md`](design/beta-retool.md) — the source of
 > truth for beta scope. Phases 0–1 are historical and complete.
 
-> **⚠ The Phase 2 entry below is stale (2026-08-11).** It predates the
-> 5W1H facet-controller rebuild and the entire banner era, and its
-> verification numbers are wrong (211 tests pass now, not 51). For the
-> current state, what remains, and the merge plan, read
-> [`design/phase2-finalization.md`](design/phase2-finalization.md). Rewriting
-> this section is item F4 of that plan.
+> **Phase 2 rewritten 2026-09-10** to the banner era with real verification
+> numbers (gate F4 of [`design/phase2-finalization.md`](design/phase2-finalization.md)).
+> The merge plan and what remains after Phase 2 land on `main` live there; the
+> reasoning-engine fix queue and the trial autopsies live in
+> [`design/convergence-plan.md`](design/convergence-plan.md).
 
 ## Phase 0 — Repo scaffolding ✅
 
@@ -42,10 +41,18 @@ The caregiver-driven web cockpit — the real product interface. Delivered:
 - **FastAPI backend** + local server; the async engine; round-lifecycle
   endpoints; an SSE progress channel; serves the built cockpit and the
   pictogram assets.
-- **Preact + Vite cockpit** — four tiles (conversation · AAC pictogram · live
-  reasoning + emotional sliders · input), persistent topic dropdown, recording
-  light with a dataset-size monitor, dark/light theme; `y/n/k/s/q` + undo +
-  mid-round caregiver context.
+- **Preact + Vite cockpit** — the **living proposal banner** across the top (the
+  evolving draft: Speak · ⟳ Restate · ✓ accept behind a confirmation modal ·
+  click-to-edit segments with candidate dropdowns) over **three** tiles
+  (conversation · live reasoning with the consensus board and refinement chains
+  + emotional sliders · input with ⇄ Opposite, Repeat, Undo and the
+  guiding-context field). The **pictogram tile is shelved**, not delivered —
+  retrieval mostly fell back to "?", and reviving it means either fixing
+  retrieval or generating imagery, which reopens a locked decision and needs its
+  own privacy review. Persistent topic dropdown, recording light with a
+  dataset-size monitor, session **Review** dashboard, dark/light theme;
+  `y/n/k/s/q` + undo + mid-round caregiver context; **local TTS** readouts
+  (piper or kokoro).
 - **Retooled dialogue engine** — session/round/query model, async,
   synthesis-terminated rounds, rewindable history/undo, training/operational
   mode axis, and the format auditor (re-prompts non-yes/no queries).
@@ -62,9 +69,23 @@ The caregiver-driven web cockpit — the real product interface. Delivered:
   patient-profile loader; **emotional sliders** feeding the reasoner.
 - CLI harness rewired to the async engine.
 
-**Verification**: `pytest` (51 passed, 1 gated integration skipped); `ruff`
+- **The v3 convergence work** (2026-06 → 09), driven by live-trial autopsies in
+  [`design/convergence-plan.md`](design/convergence-plan.md): the banner as the
+  only synthesis path, focus retirement, verify-on-lock, refinement links,
+  value identity, autopsy instrumentation, the noise bench, and the focus/
+  content fixes. Proposals are iterated with the owner one at a time and
+  measured on the bench before landing — two were measured and **rejected**
+  (W2-S, W3-I/W4-J discarded as no longer occurring).
+
+**Verification**: `pytest` (289 passed, 2 gated integration skipped); `ruff`
 clean; cockpit typecheck + build clean; the Opus backend is refused when a
 real profile is loaded.
+
+**Validated in live trials, not just in tests.** The 2026-09-09 sessions
+converged repeatedly — three rounds accepted at 7, 4 and 11 queries and a
+fourth at 12, against one accept in eight rounds at 18 queries on 08-31/09-01.
+Caregiver: *"Much more robust and we quickly got to the correct question."*
+Autopsies: `design/convergence-plan.md` §1e–§1f.
 
 Backlog raised during the build (see `design/beta-retool.md` §15): emergency
 false-alarm metric, metrics-over-time visualization, an emotion-weighted

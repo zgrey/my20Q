@@ -287,3 +287,17 @@ def test_the_confirm_oracle_judges_by_meaning(bench) -> None:
     # It must still name the failures that MUST be rejected.
     for wrong in ("wrong thing", "wrong person", "wrong side of the body"):
         assert wrong in p
+
+
+def test_the_oracle_prompt_refuses_vague_stubs(bench) -> None:
+    # The first version of this fix loosened the oracle without testing the
+    # actual failure mode, and it accepted the engine's pre-readiness template
+    # stubs — "I need pain." for a hurt foot, "I need something for someone."
+    # for a request to move a picture — reporting 6/9 converged on drafts that
+    # would help nobody. Loosening without the negative cases just manufactures
+    # convergence.
+    p = bench._SIM_CONFIRM
+    assert "too vague for anyone to act on" in p
+    assert "would they know what to do" in p
+    for stub in ("I need pain", "I need overwhelmed", "I need something for someone"):
+        assert stub in p  # named explicitly, since they are what it really emits

@@ -233,8 +233,16 @@ Would you be content to have that said for you? Judge it the way a person
 would, not word by word:
 - YES if saying it would get you what you need — even if it is worded
   differently, leaves out a detail, or adds a reasonable one.
-- NO only if it would send someone after the wrong thing, or gets a specific
-  detail wrong (the wrong person, the wrong side of the body, the wrong item).
+- NO if it would send someone after the wrong thing, or gets a specific detail
+  wrong (the wrong person, the wrong side of the body, the wrong item).
+- NO if it is too vague for anyone to act on. It must name the thing you
+  actually want. A sentence that leaves the main thing as "something" or
+  "someone", or that just names a feeling or a symptom, helps nobody:
+  "I need something for someone", "I need pain", "I need overwhelmed" are all
+  NO, however true they sound.
+
+Ask yourself: if a helper heard only this sentence, would they know what to do?
+If not, answer no.
 
 Reply EXACTLY one word: "yes" or "no". One word only.
 """

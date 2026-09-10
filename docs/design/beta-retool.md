@@ -353,6 +353,25 @@ loader; pictogram retrieval.
 mode; aphasia-oriented patient input surface; bridging-query loop detection; TTS;
 weight fine-tuning; native app.
 
+> **Reconciled against what shipped — 2026-09-10 (gate F4).** Four line items
+> above did not land as written:
+>
+> - **"4 tiles" → three, under the living proposal banner.** The banner (§6)
+>   was designed after this checklist and became the only synthesis path.
+> - **"pictogram retrieval" → SHELVED, not delivered.** Retrieval mostly fell
+>   back to "?", so the tile is unmounted. Reviving it means either fixing
+>   retrieval or *generating* imagery — and generating reopens the locked
+>   "retrieved, never generated" decision and needs its own privacy review.
+>   Tracked in §15, not here.
+> - **"synthesis-terminated rounds" → caregiver-terminated.** The engine never
+>   proposes; the caregiver accepts the banner draft (✓). "The only model-side
+>   terminator" no longer exists.
+> - **TTS moved from Out to In.** Local piper/kokoro readouts shipped, and the
+>   09-09 trial confirmed them on the caregiver's iPad.
+>
+> Everything else in **In** landed. Nothing in **Out** was pulled forward
+> except TTS.
+
 ---
 
 ## 13. Documentation debt — DONE (applied 2026-05-18)
