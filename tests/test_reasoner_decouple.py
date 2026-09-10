@@ -397,9 +397,11 @@ async def test_seed_board_rejects_a_boardless_payload() -> None:
 
 
 async def test_expand_slots_anchors_to_the_note() -> None:
-    # Values must come from the note's words or match an existing contender —
-    # the same anti-hallucination rule as questions. "a drink" is on the board
-    # (confirmed-by-note), "Aaron" is in neither the note nor the board.
+    # Every value must come from the NOTE'S OWN WORDS. This test used to assert
+    # that "a drink" was creditable here because it sits on the board, even
+    # though the note never says it — that board shortcut is the W2-M defect
+    # (it let "right side paralysis" credit `what: pain` at +2.0), so the
+    # contract is now note-anchoring only.
     payload = json.dumps(
         {"slots": {"what": ["a drink"], "who": ["Aaron"], "where": ["the kitchen"]}}
     )
@@ -409,6 +411,79 @@ async def test_expand_slots_anchors_to_the_note() -> None:
         board=_BOARD,
         history=[],
     )
-    assert out.get("what") == ["a drink"]
-    assert out.get("where") == ["the kitchen"]
+    assert out.get("where") == ["the kitchen"]  # the note says it
+    assert "what" not in out  # on the board, but NOT in the note
     assert "who" not in out  # the hallucinated person was dropped
+
+
+# ------------------------------------------- W2-M: caregiver-note fidelity
+
+
+async def test_a_note_never_credits_a_word_it_does_not_say() -> None:
+    # THE 09-01 defect: the note said "right side paralysis"; the model emitted
+    # `what: pain` because "pain" was already on the board, and it was credited
+    # at CONTEXT_POINTS (+2.0) — instantly locking the slot on a word the
+    # caregiver never wrote, then contradicted by the engine's own verify turn.
+    board = facets.seed_board({"what": ["pain", "tingling"], "where": ["right side"]})
+    mock = MockBackend(
+        responder=lambda msgs: json.dumps({"slots": {"what": ["pain"]}})
+    )
+    got = await Reasoner(mock).expand_slots(
+        topic_label="My body",
+        context="right side paralysis",
+        board=board,
+        history=[],
+    )
+    assert got == {}, "a value absent from the note must never be credited"
+
+
+async def test_a_note_keeps_its_own_precision() -> None:
+    # And the other half: "Pain in right calf" must not have its location
+    # deleted. W2-K stopped `right calf` folding onto `right side`; this pins
+    # that the note path preserves it end to end.
+    board = facets.seed_board({"what": ["pain"], "where": ["right side", "legs"]})
+    mock = MockBackend(
+        responder=lambda msgs: json.dumps(
+            {"slots": {"what": ["pain"], "where": ["right calf"]}}
+        )
+    )
+    got = await Reasoner(mock).expand_slots(
+        topic_label="My body",
+        context="Pain in right calf",
+        board=board,
+        history=[],
+    )
+    assert got["where"] == ["right calf"]   # NOT folded to "right side"
+    assert got["what"] == ["pain"]          # the note does say "pain" here
+
+
+async def test_a_note_still_folds_a_pure_rewording() -> None:
+    # Anchoring must not fragment the board: the note's words map onto an
+    # existing contender when they are genuinely the same thing.
+    board = facets.seed_board({"what": ["a picture"]})
+    mock = MockBackend(
+        responder=lambda msgs: json.dumps({"slots": {"what": ["the picture"]}})
+    )
+    got = await Reasoner(mock).expand_slots(
+        topic_label="My people",
+        context="she keeps pointing at the picture",
+        board=board,
+        history=[],
+    )
+    assert got["what"] == ["a picture"]
+
+
+async def test_a_note_mints_what_the_board_has_never_seen() -> None:
+    board = facets.seed_board({"what": ["a drink"]})
+    mock = MockBackend(
+        responder=lambda msgs: json.dumps({"slots": {"what": ["water cup"]}})
+    )
+    got = await Reasoner(mock).expand_slots(
+        topic_label="My body",
+        context="she is reaching for her water cup",
+        board=board,
+        history=[],
+    )
+    # Minted on its own terms rather than folded into the vaguer "a drink" —
+    # the specific is the reason the caregiver bothered to type it.
+    assert got["what"] == ["water cup"]

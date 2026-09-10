@@ -440,8 +440,9 @@ async def test_reasoning_round_converges_via_the_board(topics: list[Topic]) -> N
     assert not rnd.banner()["ready"]
 
     # A caregiver note locks both core slots → two verify-on-lock turns.
-    # (Both values are anchored in the note's words — the expand gate.)
-    ev = await rnd.add_context("she pointed at her cup and rubbed her throat")
+    # Both values must be IN THE NOTE'S WORDS: since W2-M a note credits only
+    # what it actually says, so "her cup" no longer stands in for "a drink".
+    ev = await rnd.add_context("she rubbed her throat and wants a drink")
     assert rnd._pending is not None and rnd._pending.verify
     ev = await rnd.answer(Answer.YES)  # confirm what='a drink'
     assert rnd._pending is not None and rnd._pending.verify
@@ -624,7 +625,7 @@ async def test_add_context_steers_and_boosts(topics: list[Topic]) -> None:
     rnd = Round(_topic(topics, "physical_health"), llm=backend,
                 rng=_FixedRandom(0.99))
     first = await rnd.open()
-    ev = await rnd.add_context("She keeps pointing at the empty cup.")
+    ev = await rnd.add_context("She keeps pointing at the empty cup — she wants a drink.")
     assert ev.kind == "query"
     assert "context" in [h["kind"] for h in rnd.history]
     assert ev.text != first.text
@@ -1379,7 +1380,7 @@ async def test_context_locked_pair_gets_a_double_check(
     await rnd.answer(Answer.YES)  # "Is it about a drink?" → +1
     # The caregiver note boosts the same value to +3 — locked on ONE yes:
     # the very next turn must be the gate-exempt double-check.
-    ev = await rnd.add_context("she pointed at her cup")
+    ev = await rnd.add_context("she pointed at her cup — she wants a drink")
     assert ev.kind == "query"
     assert rnd._pending is not None and rnd._pending.verify is True
     assert rnd._pending.slots == {"what": "a drink"}
@@ -1848,3 +1849,73 @@ async def test_a_no_to_a_drill_infers_nothing(topics: list[Topic]) -> None:
         if h.get("drill_parent") and h.get("answer") == Answer.NO.value:
             child = (h.get("slots") or {}).get(h.get("focus") or "")
             assert rnd._edges.get(h["focus"], {}).get(child) != h["drill_parent"]
+
+
+# ------------------------------------------- W2-P: focus/content divergence
+
+
+async def test_focus_is_reattributed_to_what_the_question_asserts(
+    topics: list[Topic],
+) -> None:
+    # 23% of questions in the recorded trials asserted nothing in the slot the
+    # controller asked for. Recording the REQUESTED slot made rotation believe
+    # that slot had been covered while it still had no leader — so _pick_focus
+    # kept re-selecting it (`why` starved 7 times, `what` asserted 12 instead).
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "starting GUESSES" in system:
+            return json.dumps(SEED_SLOTS)
+        if "pin down the ONE specific" in system:
+            return "thinking"
+        if "DOUBLE-CHECK" in system:
+            return json.dumps({"question": "Can you confirm that?"})
+        if "Convert a drafted question" in system:
+            # Whatever the controller asks for, answer about `what`.
+            return json.dumps(
+                {"question": "Is it about a drink?", "slots": {"what": "a drink"},
+                 "preface": "", "rationale": "x"}
+            )
+        return json.dumps({"utterance": "x"})
+
+    rnd = Round(_topic(topics, "physical_health"),
+                llm=MockBackend(responder=responder), rng=_FixedRandom(0.99))
+    ev = await rnd.open()
+    await rnd.answer(Answer.YES)
+    entry = rnd.history[0]
+    # Recorded as the slot it really asserts...
+    assert entry["focus"] == "what"
+    assert entry["slots"] == {"what": "a drink"}
+    # ...and the controller's original ask survives for the autopsy.
+    if "focus_requested" in entry:
+        assert entry["focus_requested"] != "what"
+    assert ev.kind == "query"
+
+
+async def test_focus_is_left_alone_when_the_question_lands(
+    topics: list[Topic],
+) -> None:
+    # No divergence — nothing to re-attribute, and no stray field recorded.
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    entry = rnd.history[0]
+    assert entry["focus"] in entry["slots"]
+    assert "focus_requested" not in entry
+
+
+async def test_a_wandering_drill_infers_no_refinement(topics: list[Topic]) -> None:
+    # A drill that lands on a DIFFERENT category is not a narrowing of the slot
+    # it targeted — inferring an edge across categories would invent structure
+    # the round never walked. So drill_parent is only set when it landed.
+    rnd = Round(_topic(topics, "general"),
+                llm=_ladder_backend(["an object", "keeps you warm", "a blanket"]),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    await _drive(rnd, [Answer.YES] * 12)
+    for h in rnd.history:
+        if h.get("kind") != "query" or not h.get("drill_parent"):
+            continue
+        # Every recorded drill_parent belongs to the slot actually asserted.
+        assert h["focus"] in (h.get("slots") or {})
+        assert "focus_requested" not in h

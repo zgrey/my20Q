@@ -250,12 +250,18 @@ OUTPUT — STRICT JSON, nothing else:
 {"slots": {"who": ["Zach"], "how": ["move it", "lift it"]}}
 
 - Keys are among who/what/when/where/why/how; each maps to the value(s) the
-  note implies or confirms — short plain phrases (1-4 words) drawn from the
-  note's own words.
-- When the note supports a value ALREADY on the board, repeat that value
-  VERBATIM so it is credited (e.g. a note about "her water cup" confirms an
-  existing "a drink").
-- {"slots": {}} only if the note truly implies nothing for any slot.
+  note states — short plain phrases (1-4 words) TAKEN FROM THE NOTE'S OWN
+  WORDS.
+- NEVER emit a value the note does not say, even when a similar value is
+  already on the board. A note reading "right side paralysis" does NOT support
+  "pain"; a note reading "Pain in right calf" says "right calf", not "right
+  side". Substituting a board value for the caregiver's own wording is the
+  worst thing you can do here — it is trusted far above any guess, and it
+  overwrites what they actually reported.
+- Prefer the note's PRECISE wording over a broader one. "right calf" beats
+  "leg"; the specific is the whole reason the note was written.
+- {"slots": {}} only if the note truly states nothing for any slot. Saying
+  nothing is much better than saying something the note does not.
 - No medical advice, diagnoses, or dosages. No URLs, markup, or emoji.
 """
 

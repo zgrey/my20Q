@@ -323,6 +323,10 @@ class Round:
             entry["slots"] = dict(pending.slots)
         if pending.kind == "query" and pending.focus:
             entry["focus"] = pending.focus
+        # The slot the controller asked for, when the question went elsewhere
+        # (W2-P) — kept so the divergence rate stays measurable.
+        if pending.kind == "query" and pending.focus_requested:
+            entry["focus_requested"] = pending.focus_requested
         if pending.kind == "query" and pending.direction:
             entry["direction"] = pending.direction
         if pending.kind == "query" and pending.flipped_from:
@@ -1154,6 +1158,28 @@ class Round:
             exploratory=exploratory,
             **self._reasoner_ctx(),
         )
+        # W2-P: the controller asks about ONE slot, but 23% of questions in the
+        # recorded trials assert nothing in it — the model answers about `what`
+        # when asked for `why`. The entry still recorded the REQUESTED slot, so
+        # the rotation in `_pick_focus` believed that slot had been covered
+        # while it still had no leader, and kept re-selecting it: the
+        # starvation loop (`why` starved 7 times while `what` was asserted 12).
+        #
+        # Deliberately NOT a fifth gate, which is what W2-P originally
+        # specified. A gate rejects and re-asks, and W2-S measured that adding
+        # constraint makes this model fail harder — doubling diagnostics and
+        # the rounds that die early. Re-attributing costs nothing, discards
+        # nothing, and is simply honest bookkeeping: record the slot the
+        # question actually asks about. The requested one is kept alongside so
+        # the divergence stays measurable instead of being erased by its fix.
+        requested = focus
+        if action.kind == "query" and action.slots and focus not in action.slots:
+            core = self._core_facets()
+            focus = next(
+                (c for c in action.slots if c in core), next(iter(action.slots))
+            )
+            action.focus = focus
+            action.focus_requested = requested
         # W2-R: a `drill` is the controller asking to NARROW a slot that
         # already has a positive leader, so a yes to the resulting question is
         # a refinement of the value the draft is currently showing — the
@@ -1163,7 +1189,12 @@ class Round:
         # HERE, at ask time, because the frontier is a fact about the board as
         # it stood before the answer — deriving it during replay would be
         # circular, since the frontier is itself read off the edges.
-        if directive == "drill" and action.kind == "query":
+        #
+        # Only when the drill LANDED on the slot it targeted: if the question
+        # wandered to another category, the frontier of the requested slot is
+        # not that value's parent, and inferring an edge across categories
+        # would invent structure the round never walked.
+        if directive == "drill" and action.kind == "query" and focus == requested:
             top = facets.frontier(board, focus, self._edges)
             if top is not None:
                 action.drill_parent = top[0]

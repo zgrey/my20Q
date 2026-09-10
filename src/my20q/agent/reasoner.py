@@ -118,8 +118,14 @@ class ReasonerAction:
     #: ONLY pairs an answer is allowed to score. For a synthesis: the slot
     #: leaders the utterance was woven from.
     slots: dict[str, str] = field(default_factory=dict)
-    #: The focus category the controller chose for this query.
+    #: The focus category this query actually asserts a slot in. Normally the
+    #: one the controller chose; re-attributed by the controller when the
+    #: question asserts nothing in the requested slot (W2-P).
     focus: str = ""
+    #: The slot the controller ASKED for, set only when it differs from
+    #: ``focus`` — so the divergence stays visible to an autopsy rather than
+    #: being erased by the fix for it.
+    focus_requested: str = ""
     #: The intent-direction bucket the question asserts (person topics only;
     #: classified by code from the question text — see facets.classify_direction).
     direction: str = ""
@@ -521,10 +527,25 @@ class Reasoner:
         for cat, values in cleaned.items():
             kept: list[str] = []
             for value in values:
-                canonical = facets.canonical_value(board, cat, value)
-                known = canonical in board.get(cat, {})
-                if known or facets.mentions(context, value):
-                    kept.append(canonical if known else value)
+                # W2-M: the NOTE is the anchor, never the board. This used to
+                # read `known or mentions(...)`, so any value that happened to
+                # sit on the board was admitted with no check that the note
+                # said it — a note reading "right side paralysis" credited
+                # `what: pain` at CONTEXT_POINTS (+2.0), instantly locking the
+                # slot on a word the caregiver never wrote, and the engine then
+                # contradicted itself on the verify turn. A mistranslated note
+                # is the most damaging single event available to the system,
+                # and both observed cases were the caregiver *rescuing* a
+                # failing round.
+                if not facets.mentions(context, value):
+                    continue
+                # Anchored — now fold onto an existing contender only when it
+                # is genuinely the same thing ("the picture" → "a picture").
+                # W2-K's guards keep this from swallowing the specific: since
+                # it landed, "right calf" no longer collapses into "right
+                # side", so the note's own precision survives as a new
+                # contender.
+                kept.append(facets.canonical_value(board, cat, value))
             if kept:
                 out[cat] = kept
         return out

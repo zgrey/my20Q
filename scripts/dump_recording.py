@@ -183,6 +183,11 @@ def dump(path: str) -> None:
                     )
                 if q.get("mute"):
                     flags.append(f"MUTE {q['mute']}")
+                if q.get("focus_requested"):
+                    # W2-P: the controller asked for one slot, the question
+                    # asserted another. Recorded so the divergence stays
+                    # visible rather than erased by the fix for it.
+                    flags.append(f"ASKED-FOR {q['focus_requested']}")
                 if q.get("drill_parent"):
                     # W2-R: the draft value the controller was narrowing. A yes
                     # links the asserted value under it, so the ladder a round

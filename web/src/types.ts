@@ -74,6 +74,9 @@ export interface HistoryEntry {
   // The draft value the controller was narrowing on a drill turn (W2-R); a
   // "yes" links the asserted value beneath it.
   drill_parent?: string;
+  // The slot the controller asked for, when the question asserted another
+  // one (W2-P). Absent when they agree.
+  focus_requested?: string;
   timing?: { total_ms: number; llm_calls: number; attempts: number } & Record<
     string,
     number
