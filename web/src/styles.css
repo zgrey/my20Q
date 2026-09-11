@@ -240,6 +240,16 @@ body,
   background: var(--rec);
   animation: blink 1.6s infinite;
 }
+/* Synthetic dev capture — deliberately NOT the patient-dataset red, so the
+   two are distinguishable at a glance and a development trial can never be
+   mistaken for a real session. */
+.rec.on.dev {
+  color: var(--kinda);
+}
+.rec.on.dev .dot {
+  background: var(--kinda);
+  animation: none;
+}
 .rec.paused {
   color: var(--ink-soft);
 }

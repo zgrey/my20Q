@@ -169,12 +169,18 @@ class RoundStateOut(BaseModel):
 class RecordingStatusOut(BaseModel):
     """Recorded-dataset status for the cockpit's monitor."""
 
-    enabled: bool  # a real patient profile is loaded
+    enabled: bool  # something is being written
     paused: bool
     bytes: int
     threshold_bytes: int
     status: str  # "ok" | "warning" | "over" | "disabled"
     rounds: int
+    #: True when what is being written is the SYNTHETIC dev capture, not the
+    #: patient dataset. The cockpit must label the two differently: a recording
+    #: light that looks identical either way would let a development trial read
+    #: as a real patient session, which is precisely the confusion the privacy
+    #: invariant exists to prevent.
+    dev: bool = False
 
 
 class PauseIn(BaseModel):

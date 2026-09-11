@@ -140,6 +140,10 @@ export interface RecordingStatus {
   threshold_bytes: number;
   status: "ok" | "warning" | "over" | "disabled";
   rounds: number;
+  // True when this is the SYNTHETIC dev capture rather than the patient
+  // dataset. The light is labelled differently for the two — a development
+  // trial must never read as a real patient session at a glance.
+  dev?: boolean;
 }
 
 // Whether local (piper) speech is available — drives the audio toggle.

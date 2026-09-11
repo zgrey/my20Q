@@ -109,6 +109,19 @@ class Config:
     mode: Mode
     recording_dir: Path
     recording_threshold_bytes: int
+    #: Dev capture for SYNTHETIC personas only (MY20Q_DEV_CAPTURE=1). It exists
+    #: so a development trial leaves a round record to audit, which the patient
+    #: dataset cannot do because it is off by design for a synthetic run.
+    #:
+    #: It does NOT weaken the privacy invariant, and the distinction is the
+    #: whole point: the PATIENT DATASET still implies a real patient and
+    #: therefore a local LLM. This is a different artifact with the mirror-image
+    #: guard — dev capture implies SYNTHETIC — so the two can never both be
+    #: writing, and no path exists by which real patient content reaches this
+    #: directory. `create_app` refuses to enable it when a real profile is
+    #: loaded rather than silently preferring one channel over the other.
+    dev_capture: bool
+    dev_capture_dir: Path
     # Text-to-speech (local-only — never a cloud voice). The engine is
     # selectable: `piper` (fast, flat) or `kokoro` (more natural). Models are
     # installed on the host; until then the cockpit reports audio as unavailable
@@ -172,6 +185,10 @@ class Config:
             max_queries=int(os.environ.get("MY20Q_MAX_QUERIES", "0")),
             mode=mode,  # type: ignore[arg-type]
             recording_dir=Path(os.environ.get("MY20Q_DATA_DIR", "patient_data")),
+            dev_capture=os.environ.get("MY20Q_DEV_CAPTURE", "0") == "1",
+            dev_capture_dir=Path(
+                os.environ.get("MY20Q_DEV_CAPTURE_DIR", "dev_recordings")
+            ),
             recording_threshold_bytes=(
                 int(os.environ.get("MY20Q_RECORDING_THRESHOLD_MB", "25")) * 1024 * 1024
             ),

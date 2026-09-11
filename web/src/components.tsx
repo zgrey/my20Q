@@ -149,18 +149,25 @@ export function TopicBar(props: TopicBarProps) {
       </button>
       {recording && recording.enabled ? (
         <button
-          class={`rec ${recording.paused ? "paused" : "on"}`}
+          class={`rec ${recording.paused ? "paused" : "on"} ${
+            recording.dev ? "dev" : ""
+          }`}
           onClick={onTogglePause}
           title={
             recording.paused
               ? "Recording paused — click to resume"
-              : `Recording to the patient dataset — ${recording.rounds} rounds, ` +
+              : `Recording to the ${
+                  recording.dev
+                    ? "SYNTHETIC dev capture (no patient data)"
+                    : "patient dataset"
+                } — ${recording.rounds} rounds, ` +
                 `${formatBytes(recording.bytes)} of ` +
                 `${formatBytes(recording.threshold_bytes)}`
           }
         >
           <span class="dot" />
-          {recording.paused ? "Paused" : "REC"}
+          {/* A dev capture must never read as a patient session at a glance. */}
+          {recording.paused ? "Paused" : recording.dev ? "DEV REC" : "REC"}
           <span class={`saved ${recording.status}`}>
             {formatBytes(recording.bytes)}
           </span>
