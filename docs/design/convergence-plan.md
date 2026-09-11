@@ -2245,7 +2245,46 @@ alone.
 **Depends on:** a decision about W2-V first — if the round stops wasting 25
 questions on an unfillable slot, the review pass has much less to catch.
 
-### W2-X · Explore/exploit driven by board score — Status: PROPOSED (owner, 09-11)
+### W2-X · Explore/exploit driven by board score — Status: IMPLEMENTED (09-11)
+
+> **Landed 09-11, in two halves, and the ranking half needed three attempts
+> before it stopped breaking working mechanisms.** Recorded because each
+> retreat was forced by a specific test, and the final shape is narrower than
+> the proposal below for good reasons.
+>
+> **(a) Explore probability is per-slot.** Same curve, same knob
+> (`explore_decay`), different variable: `_slot_confirmation_depth` — the focus
+> slot's leading family mass over `facet_ready_points`, so 0.0 means "knows
+> nothing" and 1.0 means "established". The old argument was the ROUND's yes
+> count, which by q32 of §1i had driven exploration to ~0 while `where` still
+> had no answer. Also excludes `dig`: that turn must keep its anchor, and
+> exploring is defined as dropping the profile to reach for a new value.
+>
+> **(b) The dead tie-break, made live — but scoped three times over:**
+>
+> 1. *Mass before `facet_priority`* — the original proposal. **Reverted a
+>    trial-derived fix:** my_people ranks `where` last because location is
+>    usually implied in caregiving, and blunt mass-first had the round drilling
+>    `where` ahead of a vague `what`. → restrict to CORE slots; `facet_priority`
+>    still governs modifiers, where it is right.
+> 2. *All core slots* — **broke the drill ladder.** A climbing ladder sits below
+>    the ready line, and demoting it there steers away from discovery.
+>    → restrict to core slots that are already ESTABLISHED, which is exactly
+>    where §1i wasted its questions.
+> 3. *All established core slots* — **still broke the ladder** once it climbed
+>    past ready: a ladder gets heavy BECAUSE it is working. → stand the demotion
+>    down while `_run_working` holds, so a producing run keeps its place and a
+>    merely-heavy one does not.
+>
+> Final rule: **among core slots that are established and not currently
+> producing, drill the one that knows least.** Everything else is untouched.
+>
+> **The lesson, which is the general one:** three separate validated mechanisms
+> (topic relevance ordering, drill-down, the working-run extension) all sat on
+> the ranking key, and none was visible from the key itself. The map's evidence
+> column exists for exactly this.
+
+### W2-X · original proposal (owner, 09-11)
 
 **Owner's proposal.** *"We are exploring locked details too frequently instead
 of focusing exploration towards low scoring topics of the consensus board. We
@@ -2282,7 +2321,33 @@ to `1 − s`.** Retirement stays as the hard cutoff at the top end.
 defeats it — and §1i has one. `1 − s` only aims attention correctly if `s` is
 honest.
 
-### W2-Y · Vacuous placeholders beyond the four-word list — Status: PROPOSED (09-11, §1i)
+### W2-Y · Vacuous placeholders beyond the four-word list — Status: IMPLEMENTED (09-11)
+
+> **Landed 09-11.** The rule keeps its SHAPE — every content token must be
+> non-identifying, so one real word still saves a value ("right side" on
+> "right", "lifting things" on "lifting"). What grew is the set it checks:
+> `_GENERIC_HEADS` (words that frame an answer without ever being one) and
+> `_VAGUE_MODIFIERS` (quantifiers that narrow nothing).
+>
+> **The first attempt was too wide and a test caught it.** `"an object"` — the
+> coarse top rung of `an object › keeps you warm › fabric › a blanket` — was
+> rejected, which breaks drill-down. Ladder roots (`object`, `item`, `place`,
+> `person`, `problem`, `time`, `reason`, `sensation`) are deliberately OUT of
+> the list: a working refinement mechanism is worth more than catching one extra
+> placeholder. Replayed against 41 real values from §1h/§1i and 9 placeholders:
+> 0 false positives, 0 misses.
+>
+> **Confirmed live the same day.** A round asked *"Is the sensation you are
+> feeling located in a specific part of your body?"* — the §1i phrasing
+> exactly — and got a **yes**. Nothing was minted; the board ended with no
+> placeholder on it at all, where §1i had one leading `where` at +4.0.
+>
+> **Watch:** `what: sensation` led a (very short) live round at +3.0.
+> "sensation" is the same class as "feeling" but is also a plausible ladder
+> root, so it is deliberately not in the list. If trials show it holding a slot,
+> that is the evidence to add it — not before.
+
+### W2-Y · original proposal (09-11, §1i)
 
 **Problem.** `where: "one specific area of your body" +4.0` led the slot while
 `arm` / `forearm` / `wrist` sat at +1.0. `facets._VACUOUS` is
@@ -2392,7 +2457,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | **W2-U** | **Check every new detail · conflict trigger · gated detail walk · the dig** | **IMPLEMENTED (09-10)** — checks fire on the draft's new details (1-in-56 → 1-in-4.7 live, 0.4 s each); a rise-then-fall score is a second clarify trigger (1 per 26 q, 65% of rounds never fire); the mode is GATED on a scored detail existing; clarifying confirms the draft in templated questions at ZERO LLM calls, then DIGS — anchor held, axis turned — when every detail holds. Demarcated in the cockpit. Owner-directed |
 | **W2-V** | **An unfillable slot absorbs the round** | PROPOSED (09-10, §1h D1) — ~25 of 57 questions lost to `why` because a run of KINDAS extends the rotation guard without bound. Needs owner iteration (focus policy); D2's fix may shrink it first — measure |
 | **W2-W** | **Role-separated review agents** (proposer · grammarian · physician · logistician) | PROPOSED (owner, 09-10) — right diagnosis of §1h; the open question is how much of it is deterministic. 3 of the 4 catches are decidable from the board and question text with no model call |
-| **W2-X** | **Explore/exploit driven by board score** | PROPOSED (owner, 09-11) — the "weakest slot" tie-break in `_pick_focus` is provably UNREACHABLE; `what` drew 32 of 69 focuses at 16.5 mass while `where` drew 9 at 7.0. Per-slot settledness should drive both slot ranking and explore probability. Depends on W2-Y |
-| **W2-Y** | **Vacuous placeholders beyond the four-word list** | PROPOSED (09-11, §1i) — **the keystone**: `where: "one specific area of your body" +4.0` beat arm/forearm/wrist at +1.0, which defeats W2-X's settledness, Gate 4's redundancy suppression, and the draft weave |
+| **W2-X** | **Explore/exploit driven by board score** | **IMPLEMENTED (09-11)** — per-slot explore depth replaces the round-level decay; the unreachable weakest-slot key made live, scoped to ESTABLISHED, NON-PRODUCING core slots after three attempts broke topic-priority, then the ladder, then the ladder again. Owner-proposed — the "weakest slot" tie-break in `_pick_focus` is provably UNREACHABLE; `what` drew 32 of 69 focuses at 16.5 mass while `where` drew 9 at 7.0. Per-slot settledness should drive both slot ranking and explore probability. Depends on W2-Y |
+| **W2-Y** | **Vacuous placeholders beyond the four-word list** | **IMPLEMENTED (09-11)** — same rule shape, wider set; ladder roots deliberately excluded after a test caught "an object" being rejected. 0 false positives on 41 real values; confirmed live rejecting the §1i phrase — **the keystone**: `where: "one specific area of your body" +4.0` beat arm/forearm/wrist at +1.0, which defeats W2-X's settledness, Gate 4's redundancy suppression, and the draft weave |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | **REJECTED (owner, 09-10)** — fatigue is not a cost this engine models; the caregiver and patient end the session |

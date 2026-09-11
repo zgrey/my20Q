@@ -101,11 +101,57 @@ def _find(bucket: dict[str, float], value: str) -> str | None:
 #: "feeling cold" and "the feeling in my leg" are perfectly good values.
 _VACUOUS = frozenset(["feel", "feeling", "thing", "stuff"])
 
+#: Head nouns that name a CATEGORY OF ANSWER rather than an answer. W2-Y: the
+#: four words above were scoped to the §1d phrase that prompted them, and the
+#: 09-11 round found the same defect one slot over —
+#: `where: "one specific area of your body" +4.0` beating arm / forearm / wrist
+#: at +1.0. It is a perfectly good English phrase and a useless `where`.
+#:
+#: Global rather than per-slot on purpose: "area" identifies nothing wherever it
+#: lands, and a per-slot table is machinery this does not need.
+#: Deliberately excludes coarse-but-real LADDER ROOTS — "an object", "a place",
+#: "a person", "a problem". Those are the top rung of a refinement chain
+#: (an object › keeps you warm › fabric › a blanket) and rejecting them breaks
+#: drill-down, which is a working mechanism and worth more than catching one
+#: extra placeholder. A test caught exactly that on the first attempt at this
+#: list. What stays are words that frame an answer without ever being one.
+_GENERIC_HEADS = frozenset(
+    [
+        "area", "part", "side", "position", "region", "location", "spot",
+        "body", "aspect", "point", "detail", "amount", "level", "way",
+        "matter", "situation",
+    ]
+)
+
+#: Quantifiers and intensifiers that narrow nothing. "one specific area" is no
+#: more locating than "area"; "a specific cleanup task" still has "cleanup".
+_VAGUE_MODIFIERS = frozenset(
+    [
+        "one", "some", "any", "certain", "specific", "particular", "general",
+        "exact", "exactly", "only", "just", "kind", "sort", "type", "each",
+        "every", "all", "other", "another", "same", "different", "various",
+        "several", "many", "few", "more", "less", "bit", "little", "lot",
+    ]
+)
+
+#: Nothing in here identifies a value on its own.
+_NON_IDENTIFYING = _VACUOUS | _GENERIC_HEADS | _VAGUE_MODIFIERS
+
 
 def is_vacuous(value: str) -> bool:
-    """Whether `value` is made up entirely of contentless placeholder nouns."""
+    """Whether `value` is made up ENTIRELY of words that identify nothing.
+
+    The rule is unchanged in shape — every content token must be
+    non-identifying — so a single real word still saves the value: "right side"
+    survives on "right", "lifting things" on "lifting", "a specific cleanup
+    task" on "cleanup". What changed is the size of the set it checks against.
+
+    Values whose tokens are ALL stopwords (the direction buckets — "do
+    something for them") have no content tokens at all and are not vacuous:
+    they are standing contenders the code credits by label, not by text.
+    """
     tokens = _content_tokens(value)
-    return bool(tokens) and tokens <= _VACUOUS
+    return bool(tokens) and tokens <= _NON_IDENTIFYING
 
 
 def _mint(board: Board, cat: str, value: str) -> str | None:

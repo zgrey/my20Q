@@ -191,6 +191,42 @@ def test_action_values_refile_from_what_to_how() -> None:
     assert facets.remap_slot("why", "cleaning") == "why"  # only what is re-filed
 
 
+def test_a_quantified_generic_never_becomes_a_contender() -> None:
+    """W2-Y: the keystone defect of the 09-11 round.
+
+    `where: "one specific area of your body" +4.0` beat arm / forearm / wrist at
+    +1.0 — a perfectly good English phrase and a useless `where`. It made the
+    slot look settled, kept the real value from ever being "established" (so
+    Gate 4 stopped suppressing redundant questions about it), and blocked the
+    draft weave. Three symptoms, one cause.
+    """
+    board = facets.seed_board({"where": ["arm"]})
+    assert facets.is_vacuous("one specific area of your body")
+    after = facets.update(board, {"where": "one specific area of your body"}, "yes")
+    assert list(after["where"]) == ["arm"], "it must never be minted at all"
+    # …while the real answer scores normally.
+    after = facets.update(after, {"where": "wrist"}, "yes")
+    assert after["where"]["wrist"] == 1.0
+
+
+def test_ladder_roots_survive_the_widened_rule() -> None:
+    """The counterweight, and the one a test caught before it shipped.
+
+    "an object" is the coarse TOP RUNG of a refinement chain
+    (an object › keeps you warm › fabric › a blanket). Rejecting it breaks
+    drill-down — a working mechanism worth more than one extra placeholder.
+    """
+    for root in ("an object", "a place", "a person", "a problem", "a routine"):
+        assert not facets.is_vacuous(root), root
+    # A single identifying word is always enough to save a value.
+    assert not facets.is_vacuous("right side")     # "side" alone would not be
+    assert not facets.is_vacuous("lifting things")  # "things" alone would not be
+    assert facets.is_vacuous("side")
+    # Direction buckets are all stopwords — no content tokens, never vacuous.
+    for bucket in facets.DIRECTION_BUCKETS.values():
+        assert not facets.is_vacuous(bucket), bucket
+
+
 def test_an_aggravation_question_credits_why_not_how() -> None:
     # A live round spent 25 of 57 questions on what made the pain worse, filed
     # every answer under `how` ("an action wanted"), and then double-checked

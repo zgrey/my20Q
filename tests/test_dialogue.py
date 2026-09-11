@@ -1996,10 +1996,11 @@ def test_explore_probability_decays_with_yeses(topics: list[Topic]) -> None:
     assert rnd._explore_probability(0) > rnd._explore_probability(4)  # decays
 
 
-async def test_exploration_decays_as_yeses_accrue(topics: list[Topic]) -> None:
-    # With the RNG pinned just under the initial rate, early questions explore;
-    # once enough yeses accrue the decayed probability drops below the pin and
-    # exploration stops. (min_yes is huge so the round never synthesizes.)
+async def test_a_slot_that_keeps_minting_values_keeps_exploring(
+    topics: list[Topic],
+) -> None:
+    # RNG pinned just under the initial rate. (min_yes is huge so the round
+    # never synthesizes.)
     seen: list[bool] = []
     state = {"q": 0}
 
@@ -2031,14 +2032,115 @@ async def test_exploration_decays_as_yeses_accrue(topics: list[Topic]) -> None:
         tuning=ReasoningTuning(min_yes_for_synthesis=99, explore_decay=2 / 3),
         rng=_FixedRandom(0.4),  # pinned just under the initial 0.667 rate
     )
-    await rnd.open()  # yeses=0 -> p=0.667 > 0.4 -> explore
+    await rnd.open()  # the focus slot knows nothing -> p=0.667 > 0.4 -> explore
     assert seen[0] is True
-    # p decays 0.667 -> 0.444 -> 0.296, crossing the pinned 0.4 once. Counted on
-    # the DELIBERATE calls, not the turns: double-checks are interleaved now and
-    # make no deliberate call at all, so turn N is no longer draw N.
-    while len(seen) < 3 and not rnd.is_terminal and rnd._pending is not None:
+    # W2-X: the decay follows what the FOCUS SLOT knows, not how long the round
+    # has run — and this mock confirms a DIFFERENT value every turn, so the
+    # slot's leading family never accumulates however many yeses arrive. A slot
+    # that keeps producing new contenders has not converged, and exploration
+    # correctly stays on. Under the old round-level rule these same answers
+    # would have driven it to ~0, which is the §1i failure in miniature.
+    while len(seen) < 4 and not rnd.is_terminal and rnd._pending is not None:
         await rnd.answer(Answer.YES)
-    assert seen[:3] == [True, True, False]
+    assert all(seen), seen
+
+
+def _drillable_round(topics: list[Topic], *, what: int, where: int, tail: str) -> Round:
+    """A physical_health round whose focus policy provably reaches DRILL (P5).
+
+    Both core slots confident (so P2 cannot fire) and every modifier holding a
+    value (so P4 cannot fire), no rejected synthesis (so P1 cannot fire), and
+    `what` carries a RIVAL — without one it dominates its slot and RETIRES out
+    of the drill pool entirely, which is also the real §1i shape (discomfort 9.5
+    beside pain 6.0). The rival is kept more than `facet_split_margin` behind so
+    P3 cannot fire either. `tail` names the slot the last answered question
+    focused, which is what `_run_working` reads.
+    """
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {
+        "what": ["pain", "aching"], "where": ["arm"], "how": ["rest"],
+        "when": ["now"], "why": ["a fall"], "who": ["Rob"],
+    }
+    fill = {"what": ("what", "pain", what), "where": ("where", "arm", where)}
+    hist: list[dict] = []
+    for cat, val, n in fill.values():
+        hist += [
+            {"kind": "query", "text": f"{cat}{i}", "answer": "yes",
+             "slots": {cat: val}, "focus": cat} for i in range(n)
+        ]
+    # the rival, far enough back that the slot is neither retired nor tied
+    hist += [
+        {"kind": "query", "text": f"rival{i}", "answer": "yes",
+         "slots": {"what": "aching"}, "focus": "what"} for i in range(what - 3)
+    ]
+    for cat, val in (("how", "rest"), ("when", "now"), ("why", "a fall"),
+                     ("who", "Rob")):
+        hist.append({"kind": "query", "text": f"m-{cat}", "answer": "yes",
+                     "slots": {cat: val}, "focus": cat})
+    tail_val = {"what": "pain", "where": "arm", "how": "rest"}[tail]
+    hist.append({"kind": "query", "text": f"tail-{tail}", "answer": "yes",
+                 "slots": {tail: tail_val}, "focus": tail})
+    rnd._history = hist
+    return rnd
+
+
+def test_established_core_slots_are_drilled_weakest_first(
+    topics: list[Topic],
+) -> None:
+    """W2-X: the §1i starvation, as a unit.
+
+    `what` 16.5 and `where` 7.0, both CORE for physical_health and both
+    established — and `what` drew 32 of 69 focuses purely because the topic
+    lists it first. The old sort had a weakest-family key that could never be
+    reached, because `facet_priority` is unique per category.
+    """
+    rnd = _drillable_round(topics, what=8, where=3, tail="how")
+    board = rnd._replay_board()
+    focus, directive, _ = rnd._pick_focus(board, rnd._history)
+    assert directive == "drill"
+    assert focus == "where", "the established core slot that knows LEAST"
+
+
+def test_a_working_ladder_keeps_its_place_despite_its_mass(
+    topics: list[Topic],
+) -> None:
+    """The counterweight: a ladder gets heavy BECAUSE it is working.
+
+    Demoting it mid-climb steers away from the one thing going right, so the
+    mass demotion stands down while the slot's tail run is still producing.
+    """
+    rnd = _drillable_round(topics, what=8, where=3, tail="what")
+    board = rnd._replay_board()
+    focus, _d, _s = rnd._pick_focus(board, rnd._history)
+    assert focus == "what", "a producing run is not demoted for being heavy"
+
+
+def test_explore_probability_follows_the_slot_not_the_round(
+    topics: list[Topic],
+) -> None:
+    """The §1i failure, as a unit.
+
+    That round had 32 yeses — so the OLD round-level decay had driven
+    exploration to ~0 — while `where` still had no real answer at all. The round
+    looked settled; the slot did not.
+    """
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend(),
+                tuning=ReasoningTuning(explore_decay=2 / 3))
+    rnd._seed_values = {"what": ["pain"], "where": ["arm"]}
+    rnd._history = [
+        {"kind": "query", "text": f"q{i}", "answer": "yes",
+         "slots": {"what": "pain"}} for i in range(6)
+    ]
+    board = rnd._replay_board()
+
+    known = rnd._slot_confirmation_depth(board, "what")    # 6.0 / 2.0 ready
+    unknown = rnd._slot_confirmation_depth(board, "where")  # nothing at all
+    assert known == 3.0 and unknown == 0.0
+
+    p_known = rnd._explore_probability(known)
+    p_unknown = rnd._explore_probability(unknown)
+    assert p_unknown > p_known          # explore where we are ignorant…
+    assert p_unknown > 0.6 and p_known < 0.25   # …and exploit where we are not
 
 
 # ------------------------------------------- autopsy instrumentation (W2-O)

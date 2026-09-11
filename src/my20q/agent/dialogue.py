@@ -1247,10 +1247,19 @@ class Round:
         # value (profile dropped) with probability explore_decay**(yeses+1).
         # The yes-count resets after each synthesis attempt and each restart,
         # so exploration re-opens whenever the round re-opens.
-        yeses = self._yes_since_last_synth(seg)
+        # W2-X: exploration is a property of the SLOT, not of the round. The old
+        # argument was the round's yes count, so by q32 of the 09-11 round the
+        # probability had decayed to ~0 — at exactly the moment `where` still
+        # had no real answer. The round looked settled; the slot did not.
+        # Explore where we are ignorant, exploit where we are confident.
+        #
+        # `dig` joins the exclusions: a dig must KEEP its confirmed anchor, and
+        # exploring is defined as dropping the profile and reaching for a
+        # brand-new value, which is the one thing that turn must not do.
+        depth = self._slot_confirmation_depth(board, focus)
         exploratory = (
-            directive not in ("split", "pin")
-            and self._rng.random() < self._explore_probability(yeses)
+            directive not in ("split", "pin", "dig")
+            and self._rng.random() < self._explore_probability(depth)
         )
         # Each asked entry carries its asserted slot categories so the repeat
         # gate can tell a same-anchor DRILL (new category) from a reword;
@@ -1466,12 +1475,50 @@ class Round:
             for c in facets.CATEGORIES
             if c not in muted and not self._retired(board, c) and _mass(c) > 0
         ]
+        # W2-X: within the CORE block, ask about the slot that knows least.
+        #
+        # The old key order put `facet_priority` third and mass fourth — and
+        # `order` is a unique index per category, so no two slots ever tied on
+        # it and the mass key was UNREACHABLE. The docstring above has promised
+        # "weakest family last as the final tie-break" since W1-B and it has
+        # never once executed: on the 09-11 board `what` (16.5 mass) drew 32 of
+        # 69 focuses while `where` (7.0) drew 9, purely because physical_health
+        # lists `what` first — and both are CORE there.
+        #
+        # Mass is applied to core slots ONLY, deliberately. `facet_priority` is
+        # a per-topic statement about RELEVANCE and it is right about modifiers:
+        # my_people ranks `where` last because location is usually implied in
+        # caregiving, and a blunt mass-first sort would have had it drilling
+        # `where` ahead of a vague `what` — reverting a fix the 06-11 trial
+        # produced. Core slots are the ones that must settle before synthesis,
+        # so among those "which do I know least" outranks a static guess;
+        # modifiers are enrichment, where the topic's ordering still wins.
+        # …and only once that core slot is ESTABLISHED. Below the ready line a
+        # slot is still being discovered, and that is where drill ladders live
+        # (an object › keeps you warm › fabric › a blanket): a climbing ladder
+        # makes its own slot heavier, so a mass-first sort would steer away from
+        # the ladder precisely as it starts working. Above the line, coverage is
+        # already achieved and "which of these do I know least" is exactly the
+        # right question — which is when the 09-11 round began wasting its
+        # questions on a `what` it already knew.
+        # …and never while that slot is actively PRODUCING. A ladder gets heavy
+        # BECAUSE it is working, so demoting it mid-climb steers away from the
+        # one thing going right. `_run_working` is true only for the tail run,
+        # so this protects a ladder being climbed right now and stops protecting
+        # it the moment rotation moves on — at which point "merely heavy" is the
+        # honest description and the demotion is what we want.
+        def _rank_mass(c: str) -> float:
+            m = _mass(c)
+            if c not in core or m < T.facet_ready_points:
+                return 0.0
+            return 0.0 if self._run_working(seg, c) else m
+
         pool.sort(
             key=lambda c: (
                 c not in core,
                 _mass(c) >= T.facet_ready_points,
+                _rank_mass(c),
                 order.get(c, len(order)),
-                _mass(c),
             )
         )
         cat = first_fresh(pool)
@@ -1536,13 +1583,30 @@ class Round:
         """
         return all(self._family_confident(board, c) for c in self._core_facets())
 
-    def _explore_probability(self, yeses: int) -> float:
-        """Probability the next question probes fresh: ``explore_decay**(yeses+1)``.
+    def _explore_probability(self, confirmations: float) -> float:
+        """Probability the next question probes fresh: ``decay**(confirmations+1)``.
 
-        High when few yeses have accrued toward synthesis, decaying as the
-        round homes in (see config.ReasoningTuning.explore_decay).
+        Same curve and same knob as before (config.ReasoningTuning.explore_decay);
+        what changed is the variable. It used to be the ROUND's yes count, which
+        made exploration a property of how long the round had run rather than of
+        how much the slot being asked about actually knows — see
+        `_slot_confirmation_depth`.
         """
-        return self.tuning.explore_decay ** (yeses + 1)
+        return self.tuning.explore_decay ** (confirmations + 1)
+
+    def _slot_confirmation_depth(self, board: facets.Board, cat: str) -> float:
+        """Answers'-worth of evidence behind the focus slot's leading family.
+
+        Normalised by `facet_ready_points`, so 0.0 means "this slot knows
+        nothing" and 1.0 means "enough to call it established" — which is what
+        makes it a drop-in for the old yes count while meaning something
+        per-slot. Read off the same family mass every confidence check uses, so
+        it introduces no new notion of certainty.
+        """
+        fams = facets.families(board, cat, self._edges)
+        mass = fams[0][1] if fams else 0.0
+        ready = self.tuning.facet_ready_points
+        return max(0.0, mass) / ready if ready > 0 else 0.0
 
     def _inject_direction_buckets(
         self, seeds: dict[str, list[str]]
