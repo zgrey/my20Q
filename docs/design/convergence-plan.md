@@ -732,6 +732,104 @@ q58  "Is the pain in your wrist because you have been using it too much?"
 Verification also behaved: **6 checks in 58 questions**, roughly the 1-in-5 the
 W2-U measurement predicted, and none of them felt like the old 1-in-56 famine.
 
+## 1i. Evidence — the 09-11 trial: the fixes hold, and the board has a keystone defect
+
+Second synthetic run at the same target, on the fixed build (`2c5337e`).
+**93 questions, and it reached the wrist and drilled into it** — *"the side of
+your wrist closest to your thumb"*, *"near the crease where your wrist bends"*.
+§1h never got there in 57.
+
+### What validated
+
+**The flip fix (W2-T tail) is done.** Five flips, two of them inside clarifying
+mode, in BOTH phases, zero loops — the defect §1h caught at q56→q57:
+
+```
+q36 [CLARIFY/confirm, FLIPPED] "This is about only one specific area…, correct?"
+        was: "This is about MORE THAN one specific area…"
+        detail: ['where', 'one specific area of your body']   <- survived the flip
+   -> q37 moved on to `when`, q38 to `who`.  No re-issue.
+q39 [CLARIFY/dig, FLIPPED]     "Would NOT rubbing the area help…?"
+   -> q40, q41 kept digging.
+```
+
+Also live for the first time: a clarification closing as **`reframed`** — the
+dig landed rather than shrugging.
+
+**Not validated: D2 (aggravation → `why`).** This round phrased its cause
+questions as *"is the discomfort **because** X?"*, not *"does X make it
+**worse**?"*, so `asks_about_aggravation` barely fired. The fix is still
+essentially untested in the field.
+
+### The keystone defect — a vacuous placeholder leading a slot
+
+```
+where : "one specific area of your body" +4.0 | arm +1.0 | area +1.0 | forearm +1.0
+what  : discomfort +9.5 | pain +6.0
+```
+
+q2 and q4 asked *"Is the discomfort in one specific area of your body?"* and the
+engine credited that phrase as a `where` **value**. Three separate symptoms
+trace to it:
+
+1. `where` **looks settled**, so it drew 9 focuses to `what`'s 32;
+2. `wrist` never becomes the established `where` leader, so **Gate 4
+   (zero-information) stops suppressing redundant wrist questions**;
+3. the draft cannot weave the real location.
+
+`facets._VACUOUS` is four words — `feel / feeling / thing / stuff` — scoped to
+the exact phrase that burned §1d. It does not catch *"one specific area of your
+body"* or *"area"*. → **W2-Y**.
+
+### Redundancy is SEMANTIC, not lexical (owner report)
+
+Replaying all 91 captured questions through `auditor.is_repeat`: it would flag
+**16**, and a crude content-token overlap finds exactly **one** near-duplicate
+pair it missed. The gate is doing its lexical job. What it cannot see:
+
+```
+q92 "located only within the bones and skin of your wrist?"  -> yes
+q93 "Is the pain you are feeling confined to your wrist?"    -> yes
+```
+
+Almost no shared words. **Gate 4 is the mechanism that should catch this** — and
+the keystone defect above is why it didn't. Fixing W2-Y is the redundancy fix;
+lowering the lexical threshold instead would raise the re-ask rate, which W2-S
+already measured as the expensive failure.
+
+### Cockpit defects (not engine queue items, but caregiver-facing)
+
+**CB-1 · Input freezes during question generation.** `components.tsx:704` —
+the guiding-context input is `disabled={busy}`, as are the banner controls, so
+for the 10-25 s of each generation the caregiver **cannot even type**;
+keystrokes are dropped, not deferred. The guard protects something real —
+`add_context` and `replace` both mutate history and call `_advance()`, which
+would race an in-flight `_advance()` — so the fix is to decouple **capture**
+from **dispatch**: never block typing, queue the submit, apply on completion.
+
+**CB-2 · ⟳ Restate silently no-ops after the first press.** Reproduced:
+
+```
+BEFORE : 'I need/want pain …'
+AFTER 1: 'Yes, I am feeling pain right now.'   changed = True
+AFTER 2: 'Yes, I am feeling pain right now.'   changed = False
+```
+
+`restate()` passes the current draft as `rejected=[(current, "kinda")]` and then
+accepts whatever returns, **with no check that it changed**. The near-duplicate
+guard that caught this lived in the synthesis state machine, deleted when the
+banner replaced it (W1-C); `restate()` inherited a `synthesize` with no
+protection. Fix: reject an unchanged result, accumulate prior drafts across
+presses so each has more to avoid, and surface failure rather than no-op.
+
+### Process failure worth recording
+
+The server stopped before the JSONL export was saved, so **the round record with
+its entry flags is gone** — the transcript survived, the per-entry
+`verify`/`clarify`/`flipped_from` flags past q41 did not. Recording is off for
+synthetic personas by design, so the watcher is the only capture; it saved
+markdown only. Save the JSONL export too.
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -2147,6 +2245,65 @@ alone.
 **Depends on:** a decision about W2-V first — if the round stops wasting 25
 questions on an unfillable slot, the review pass has much less to catch.
 
+### W2-X · Explore/exploit driven by board score — Status: PROPOSED (owner, 09-11)
+
+**Owner's proposal.** *"We are exploring locked details too frequently instead
+of focusing exploration towards low scoring topics of the consensus board. We
+should plan a mechanism that explores more for low scores and exploits for high
+scores."*
+
+**It has a mechanical cause, and it is dead code.** `_pick_focus` sorts the
+drill pool on `(not core, established, facet_priority, mass)` and its docstring
+promises *"weakest family last as the final tie-break"*. `facet_priority` gives
+every category a **unique** index, so no two slots ever tie on key 3 — **key 4
+is unreachable and the weakest-slot rule has never once fired.** On the §1i
+board, moving mass ahead of priority flips the target from `what` to `where`.
+
+**Two levers are conflated, and neither is score-aware:**
+
+*(a) WHICH slot.* Keep core-first and unestablished-before-established (that is
+coverage), then rank by **ascending mass**, demoting `facet_priority` to the
+final tie-break. It still earns its keep — my_people ranks `where` last because
+it is usually implied — it just stops overriding "this slot knows nothing".
+
+*(b) HOW to ask — explore vs exploit.* Today one global coin flip,
+`explore_decay ** (yeses + 1)`. That is a **round-level** quantity and it is the
+wrong one: §1i had 32 yeses, so exploration had decayed to ~0 at exactly the
+moment `where` still had no real answer. The round looked settled; the slot did
+not. Replace it with a per-slot **settledness** `s(c) ∈ [0,1]` from the two
+quantities `family_confident` already uses — leading family mass against
+`ready_points`, and the margin over the runner-up — then
+`p_explore(c) = 1 − s(c)`.
+
+One quantity drives both: **rank slots by ascending `s`, explore in proportion
+to `1 − s`.** Retirement stays as the hard cutoff at the top end.
+
+**Depends on W2-Y.** Settledness is read off the board, so a *false* settle
+defeats it — and §1i has one. `1 − s` only aims attention correctly if `s` is
+honest.
+
+### W2-Y · Vacuous placeholders beyond the four-word list — Status: PROPOSED (09-11, §1i)
+
+**Problem.** `where: "one specific area of your body" +4.0` led the slot while
+`arm` / `forearm` / `wrist` sat at +1.0. `facets._VACUOUS` is
+`feel / feeling / thing / stuff` and `is_vacuous` only rejects a value made up
+ENTIRELY of those — scoped to the §1d phrase that prompted it.
+
+**Why it is the keystone:** it defeats W2-X's settledness, defeats Gate 4's
+redundancy suppression (the real value never becomes "established"), and blocks
+the draft weave. Three §1i symptoms, one cause.
+
+**Proposal sketch (needs owner iteration).** A placeholder is a value that
+identifies nothing *in its own slot*: "one specific area of your body" is a
+perfectly good English phrase and a useless `where`. Candidates — a per-slot
+placeholder-stem list (`area`, `part`, `place`, `side` alone for `where`;
+`feeling`, `sensation` alone for `what`), a head-token check against the slot's
+own gloss, or refusing values that merely restate the question's own framing
+("one specific area of your body" is the wording of the question that asked it).
+**Risks:** over-rejecting real values — "my side" is a legitimate `where`. The
+existing rule is deliberately narrow for that reason, so widening it wants the
+bench and a replay against §1h/§1i before it lands.
+
 ### W3-I · Mass-scaled confidence checks — Status: PROPOSED
 
 **Problem (audit F1/F2; A5).** Absolute thresholds (ready 2.0 / margin 1.0 /
@@ -2235,5 +2392,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | **W2-U** | **Check every new detail · conflict trigger · gated detail walk · the dig** | **IMPLEMENTED (09-10)** — checks fire on the draft's new details (1-in-56 → 1-in-4.7 live, 0.4 s each); a rise-then-fall score is a second clarify trigger (1 per 26 q, 65% of rounds never fire); the mode is GATED on a scored detail existing; clarifying confirms the draft in templated questions at ZERO LLM calls, then DIGS — anchor held, axis turned — when every detail holds. Demarcated in the cockpit. Owner-directed |
 | **W2-V** | **An unfillable slot absorbs the round** | PROPOSED (09-10, §1h D1) — ~25 of 57 questions lost to `why` because a run of KINDAS extends the rotation guard without bound. Needs owner iteration (focus policy); D2's fix may shrink it first — measure |
 | **W2-W** | **Role-separated review agents** (proposer · grammarian · physician · logistician) | PROPOSED (owner, 09-10) — right diagnosis of §1h; the open question is how much of it is deterministic. 3 of the 4 catches are decidable from the board and question text with no model call |
+| **W2-X** | **Explore/exploit driven by board score** | PROPOSED (owner, 09-11) — the "weakest slot" tie-break in `_pick_focus` is provably UNREACHABLE; `what` drew 32 of 69 focuses at 16.5 mass while `where` drew 9 at 7.0. Per-slot settledness should drive both slot ranking and explore probability. Depends on W2-Y |
+| **W2-Y** | **Vacuous placeholders beyond the four-word list** | PROPOSED (09-11, §1i) — **the keystone**: `where: "one specific area of your body" +4.0` beat arm/forearm/wrist at +1.0, which defeats W2-X's settledness, Gate 4's redundancy suppression, and the draft weave |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | **REJECTED (owner, 09-10)** — fatigue is not a cost this engine models; the caregiver and patient end the session |
