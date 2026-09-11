@@ -645,7 +645,10 @@ export function InputTile(props: InputProps) {
 
   const submit = () => {
     const v = text.trim();
-    if (v && !busy) {
+    // No `busy` check: a question takes 10-25s to generate and the caregiver
+    // must be able to type and send throughout. The app layer queues the
+    // request and dispatches it when the in-flight call returns (CB-1).
+    if (v && !terminal) {
       onSend(v);
       setText("");
       // Release the keyboard so the y/n/k/s answer shortcuts work again right
@@ -701,13 +704,13 @@ export function InputTile(props: InputProps) {
           type="text"
           placeholder="Type context to steer the questioning…"
           value={text}
-          disabled={busy}
+          disabled={terminal}
           onInput={(e) => setText((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
           }}
         />
-        <button class="send" onClick={submit} disabled={busy || !text.trim()}>
+        <button class="send" onClick={submit} disabled={terminal || !text.trim()}>
           Send
         </button>
       </div>
@@ -798,8 +801,12 @@ export function ProposalBanner(props: BannerProps) {
     );
   }
 
+  // No `busy` check (CB-1): the caregiver may open a segment, pick a candidate
+  // and apply it while a question is generating. The app layer queues the
+  // request — what must not happen is two `_advance()` calls at once, and that
+  // is enforced there, not by freezing the editor for 10-25s at a time.
   const apply = (newValue: string) => {
-    if (selected && !busy) {
+    if (selected) {
       onReplace(selected.category, selected.value, newValue.trim());
       setSelected(null);
       setTyped("");
@@ -826,7 +833,6 @@ export function ProposalBanner(props: BannerProps) {
         <span class="banner-actions">
           <button
             class="banner-btn"
-            disabled={busy}
             onClick={onSpeak}
             title="Speak this draft aloud"
           >
@@ -834,17 +840,25 @@ export function ProposalBanner(props: BannerProps) {
           </button>
           <button
             class="banner-btn"
-            disabled={busy}
             onClick={onRestate}
             title="Say the same thing slightly differently"
           >
             ⟳ Restate
           </button>
+          {/* ✓ deliberately STAYS gated while busy. Speak is client-side TTS
+              and Restate only touches the draft cache, so both are safe to
+              queue — but ✓ ends the round and produces the spoken utterance,
+              and the in-flight answer may move the board underneath it. The
+              caregiver must be accepting the draft they can actually see. */}
           <button
             class="banner-btn accept"
             disabled={busy}
             onClick={onAccept}
-            title="Accept — this is the message"
+            title={
+              busy
+                ? "Wait for the next question — the draft may still change"
+                : "Accept — this is the message"
+            }
           >
             ✓
           </button>

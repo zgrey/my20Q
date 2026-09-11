@@ -1789,6 +1789,94 @@ def test_a_caregiver_edit_is_not_a_conflict(topics: list[Topic]) -> None:
     assert rnd._score_conflict() is None
 
 
+# ------------------------------------------------- CB-2 · ⟳ Restate must restate
+
+
+def _restate_backend(replies: list[str]) -> MockBackend:
+    """Drill protocol, with the synthesize call returning `replies` in order."""
+    state = {"q": 0, "s": 0}
+
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "starting GUESSES" in system:
+            return json.dumps(SEED_SLOTS)
+        if "DOUBLE-CHECK" in system:
+            m = re.search(r':\s+"(.+)"', messages[1]["content"])
+            return json.dumps({"question": f"Is it {m.group(1) if m else 'that'}?"})
+        if "pin down the ONE specific" in system:
+            return "thinking"
+        if "Convert a drafted question" in system:
+            word = _SUBJECTS[state["q"] % len(_SUBJECTS)]
+            state["q"] += 1
+            return json.dumps(
+                {"question": f"Is it about {word}?", "slots": {"what": word},
+                 "preface": "", "rationale": "x"}
+            )
+        out = replies[min(state["s"], len(replies) - 1)]  # synthesize
+        state["s"] += 1
+        return json.dumps({"utterance": out})
+
+    return MockBackend(responder=responder)
+
+
+async def test_restate_rejects_an_unchanged_wording(topics: list[Topic]) -> None:
+    """The 09-11 defect: press ⟳ twice, second press silently does nothing.
+
+    `restate()` accepted whatever `synthesize` returned without checking it had
+    changed, so a model that repeated itself left the caregiver pressing a
+    button that appeared dead.
+    """
+    same = "I am feeling pain right now."
+    rnd = Round(
+        _topic(topics, "physical_health"),
+        llm=_restate_backend([same, same, same]),
+        rng=_FixedRandom(0.99),
+    )
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    assert rnd.banner()["state"] == "draft"
+
+    await rnd.restate()
+    assert rnd.banner()["text"] == same  # the first press lands
+
+    # The model now only ever repeats itself: say so instead of no-op'ing.
+    with pytest.raises(RuntimeError, match="same wording"):
+        await rnd.restate()
+    assert rnd.banner()["text"] == same  # …and the draft is left intact
+
+
+async def test_restate_accumulates_what_it_has_already_said(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(
+        _topic(topics, "physical_health"),
+        llm=_restate_backend(["First wording.", "Second wording.", "Third one."]),
+        rng=_FixedRandom(0.99),
+    )
+    await rnd.open()
+    await rnd.answer(Answer.YES)
+    for expected in ("First wording.", "Second wording.", "Third one."):
+        await rnd.restate()
+        assert rnd.banner()["text"] == expected
+    # Every wording worn so far is carried forward, so the NEXT press has all
+    # of them to avoid rather than only the latest.
+    assert "First wording." in rnd._restated
+    assert "Third one." in rnd._restated
+
+
+def test_same_wording_is_stricter_than_the_repeat_gate() -> None:
+    from my20q.agent.auditor import same_wording
+
+    assert same_wording("I am feeling pain right now.", "I am feeling pain right now!")
+    assert same_wording("I need a drink", "i need a drink")
+    # A genuine rephrase is a SUCCESS for restate even though it is close —
+    # this is a different question from "is this query redundant".
+    assert not same_wording(
+        "I am feeling pain right now.", "Right now, I am in pain."
+    )
+    assert not same_wording("I would like a drink.", "Could I have some water?")
+
+
 def test_futile_pair_bans_the_drilled_value(topics: list[Topic]) -> None:
     rnd = Round(_topic(topics, "my_people"), llm=MockBackend())
     seg = [

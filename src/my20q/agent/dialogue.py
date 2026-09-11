@@ -53,6 +53,7 @@ from enum import StrEnum
 from typing import Literal
 
 from my20q.agent import facets
+from my20q.agent.auditor import same_wording
 from my20q.agent.reasoner import Reasoner, ReasonerAction, ReasonerError
 from my20q.agent.safety import EMERGENCY_SCREEN
 from my20q.config import Config, Mode, ReasoningTuning
@@ -258,6 +259,10 @@ class Round:
         # board-readiness the banner renders the code template instead.
         self._draft_text: str = ""
         self._draft_weave: dict[str, str] = {}
+        #: Wordings this weave has already worn, so repeated ⟳ Restate presses
+        #: have something new to avoid each time. Draft cache, not belief — it
+        #: never touches the board and is discarded when the weave moves.
+        self._restated: list[str] = []
         # Refinement edges (child → parent per category), derived alongside
         # every full board replay from history tags + the lexical fallback —
         # reading structure only; scores stay flat and text-anchored.
@@ -1161,16 +1166,35 @@ class Round:
             if self._draft_text and self._draft_weave == weave
             else self._template_draft(weave)
         )
+        # Every wording this weave has already worn, so a SECOND press has more
+        # to avoid than the first. Reset when the weave moves — a new draft is a
+        # new sentence and the old rejections no longer describe it.
+        if self._draft_weave != weave:
+            self._restated = []
+        seen = [t for t in [*self._restated, current] if t]
         # The existing rephrase machinery is exactly restate's semantics:
         # "kinda" = close — keep the gist, change the wording.
-        action = await self._reasoner.synthesize(
-            leaders=weave,
-            history=self._history,
-            rejected=[(current, Answer.KINDA.value)],
-            **self._reasoner_ctx(),
+        for _ in range(2):
+            action = await self._reasoner.synthesize(
+                leaders=weave,
+                history=self._history,
+                rejected=[(t, Answer.KINDA.value) for t in seen[-4:]],
+                **self._reasoner_ctx(),
+            )
+            if not any(same_wording(action.content, t) for t in seen):
+                self._restated = [*seen, action.content][-6:]
+                self._draft_text = action.content
+                self._draft_weave = dict(weave)
+                return
+            seen.append(action.content)
+        # Two attempts, same sentence both times. Say so rather than storing it
+        # and appearing to have done nothing: restate used to accept whatever
+        # came back without checking it had changed, so the second press onwards
+        # was a silent no-op (CB-2, found in the 09-11 trial).
+        raise RuntimeError(
+            "restate: the model keeps returning the same wording — "
+            "try an edit on the draft instead"
         )
-        self._draft_text = action.content
-        self._draft_weave = dict(weave)
 
     def _edit_mutes(self) -> set[str]:
         """Slots the caregiver dismissed via ✗-edits (recomputed → undo-safe)."""
