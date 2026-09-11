@@ -652,10 +652,67 @@ def action_like(value: str) -> bool:
     return any(_stem(t) in _ACTION_VERBS or t in _ACTION_VERBS for t in tokens[:2])
 
 
-def remap_slot(cat: str, value: str) -> str:
-    """Re-file a model-tagged pair into the right category (action → how)."""
+#: Words ending in "-ing" that are NOT gerunds. Without this "bring it" reads as
+#: a nominal phrase and draws the wrong clarification frame.
+_ING_NOT_GERUND = frozenset(
+    [
+        "bring", "thing", "things", "sing", "ring", "king", "string", "during",
+        "nothing", "something", "anything", "everything", "morning", "evening",
+        "spring", "wing", "swing", "cling", "sting", "being",
+    ]
+)
+
+
+def gerund_led(value: str) -> bool:
+    """Whether a value opens with a gerund — "lifting things", not "lift it".
+
+    The two read as different parts of speech and will not share a sentence
+    frame: "You want to lift it" is English, "You want to lifting things" is
+    not — and the second was spoken aloud to a patient in a live round.
+    """
+    tokens = _TOKEN_RE.findall(value.casefold())
+    if not tokens:
+        return False
+    head = tokens[0]
+    return head.endswith("ing") and len(head) > 4 and head not in _ING_NOT_GERUND
+
+
+#: Frames that ask what makes a symptom WORSE. A yes to "does lifting things
+#: make the pain worse?" says lifting is a TRIGGER; it is not a request to lift
+#: anything. Crediting it to `how` ("an action wanted") gave a live round a
+#: draft reading "especially when I have to lift things" and double-checks —
+#: "do you want to lift things?" — that correctly came back no every time,
+#: which then dragged the round into clarifying mode over and over.
+_AGGRAVATION_RE = re.compile(
+    r"\b(?:makes?\s+(?:\w+\s+){0,3}worse"
+    r"|get(?:s|ting)?\s+worse"
+    r"|(?:worse|bothersome)\s+(?:when|if)"
+    r"|worse\s+(?:when|if))",
+    re.IGNORECASE,
+)
+
+
+def asks_about_aggravation(text: str) -> bool:
+    """Whether a question asks what makes a symptom worse, not what is wanted."""
+    return bool(_AGGRAVATION_RE.search(text))
+
+
+def remap_slot(cat: str, value: str, question: str = "") -> str:
+    """Re-file a model-tagged pair into the right category.
+
+    Two rules, both deterministic and text-anchored:
+
+    - an action-led value tagged ``what`` belongs in ``how``;
+    - an action credited to ``how`` by an AGGRAVATION question is not a wanted
+      action at all. It is what provokes the symptom — which is ``why``. The
+      round that exposed this spent 25 of 57 questions on cause and aggravation
+      while ``why`` stayed empty and starving: the questions were answering
+      ``why`` all along and filing it under ``how``.
+    """
     if cat == "what" and action_like(value):
-        return "how"
+        cat = "how"
+    if cat == "how" and question and asks_about_aggravation(question):
+        return "why"
     return cat
 
 

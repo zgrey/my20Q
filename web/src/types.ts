@@ -60,6 +60,11 @@ export interface RoundEvent {
   diagnostic: Diagnostic | null;
   // The question this one replaced via the opposition button ("" otherwise).
   flipped_from: string;
+  // The round is CLARIFYING: confirming the draft one detail at a time after a
+  // contradiction. Drives the conversation demarcation and the tile flag, so
+  // the pointed questions read as a deliberate pass over the draft rather than
+  // the engine having lost the thread.
+  clarifying: boolean;
 }
 
 export interface HistoryEntry {
@@ -82,6 +87,12 @@ export interface HistoryEntry {
     number
   >;
   rejections?: string[];
+  // W2-T. `contested` marks a double-check the person answered "no" on: it
+  // scores NOTHING, because a bare re-ask drops the context that made the
+  // original confirmation mean something. `clarify` marks a question asked to
+  // resolve that contradiction, which is scored normally either way.
+  contested?: boolean;
+  clarify?: boolean;
 }
 
 // One woven slot of the live draft, with its confidence band.
@@ -182,4 +193,20 @@ export interface RoundRecord {
     focus?: string;
     slots?: Record<string, string>;
   };
+  // Contradictions the round opened and how each closed (W2-T). Record-only
+  // by owner decision — nothing here is surfaced during a session, and
+  // "unresolved" describes the DIALOGUE, never the person.
+  clarifications?: {
+    // Which trigger opened it: a double-check answered "no", or a detail whose
+    // score rose and then fell.
+    reason: "contradicted" | "non-monotonic";
+    category: string;
+    value: string;
+    trigger_question: string;
+    attempts: { text: string; answer: Answer | null; phase?: string }[];
+    // "localized" = a detail came back no, naming the wrong piece;
+    // "confirmed" = every detail held; "reframed" = a dig found the missing
+    // angle; "unresolved" = the walk settled nothing.
+    outcome: "confirmed" | "localized" | "reframed" | "unresolved" | "open";
+  }[];
 }

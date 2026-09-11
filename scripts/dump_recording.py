@@ -38,6 +38,10 @@ def _summary(r: dict) -> None:
         if q.get("answer") == "yes" and q.get("informative") is False
     )
     verifies = sum(1 for q in queries if q.get("verify"))
+    contested = sum(1 for q in queries if q.get("contested"))
+    unresolved = sum(
+        1 for c in (r.get("clarifications") or []) if c.get("outcome") == "unresolved"
+    )
     flips = sum(1 for q in queries if q.get("flipped_from"))
     bans = [q["ban"] for q in entries if q.get("kind") == "edit" and q.get("ban")]
     mutes = [q["mute"] for q in entries if q.get("kind") == "edit" and q.get("mute")]
@@ -57,6 +61,10 @@ def _summary(r: dict) -> None:
         f"             farming-yeses={farming}  verifies={verifies}  "
         f"flips={flips}  diagnostics={diags}  restarts={restarts}"
     )
+    if contested or unresolved:
+        print(
+            f"             contradictions={contested}  unresolved={unresolved}"
+        )
     # The banner metric (W2-O): the query at which the board first turned
     # propose-ready, and how many were asked after that point. A round that
     # was answerable at q9 and ran to q18 spent half its questions past the
@@ -117,6 +125,21 @@ def dump(path: str) -> None:
                 pq = r["pending_question"]
                 extra = f"  focus={pq['focus']}" if pq.get("focus") else ""
                 print(f"    UNANSWERED at end: {pq.get('text', '')!r}{extra}")
+            # Every clarification the round opened, why, and how it closed. An
+            # "unresolved" line is a fact about the DIALOGUE — the walk did not
+            # settle anything — never a claim about the person.
+            for c in r.get("clarifications") or []:
+                trigger = c.get("reason", "?")
+                print(
+                    f"    CLARIFY [{trigger}] {c.get('category', '?')}="
+                    f"{c.get('value', '')!r} -> {c.get('outcome', '?')}"
+                    f" after {len(c.get('attempts') or [])} q"
+                )
+                if c.get("trigger_question") or c.get("verify_question"):
+                    q = c.get("trigger_question") or c.get("verify_question")
+                    print(f"      triggered by: {q!r}")
+                for a in c.get("attempts") or []:
+                    print(f"      · {a.get('text', '')!r} -> {a.get('answer')}")
             board = r.get("board") or {}
             if board.get("seeds"):
                 for cat, vals in board["seeds"].items():
@@ -172,7 +195,9 @@ def dump(path: str) -> None:
                         "informative" if q["informative"] else "FARMING-YES"
                     )
                 if q.get("verify"):
-                    flags.append("VERIFY")
+                    flags.append("CONTESTED" if q.get("contested") else "VERIFY")
+                if q.get("clarify"):
+                    flags.append("CLARIFY")
                 if q.get("flipped_from"):
                     flags.append(f"FLIPPED (was {q['flipped_from']!r})")
                 if q.get("ban"):

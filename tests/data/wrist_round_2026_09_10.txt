@@ -1,0 +1,68 @@
+# Captured 2026-09-10 — SYNTHETIC persona (Demo Persona), recording OFF.
+#
+# One live round against the target "I think I broke my wrist", 57 questions,
+# autopsied in docs/design/convergence-plan.md 1h. It carries NO patient data:
+# the run was `serve_cerberus.sh synthetic`, /api/health reported
+# real_patient=false, and the "stroke recovery" / "your spouse" questions trace
+# to synthetic_demo.yaml ("An older adult recovering from a stroke, living at
+# home with a spouse"), not to any real profile.
+#
+# Format: <question text> | <answer>
+
+Are you feeling any pain right now? | Yes
+Is the pain you are feeling right now in your arm? | Yes
+Is the pain you are feeling in your forearm? | Kinda
+Is it arm you want to talk about? | Yes
+Are you talking about this pain with your spouse? | No
+Are you talking about this pain with a caregiver? | No
+Is the pain you are feeling happening now? | Yes
+Are you thinking about needing to talk to a doctor about this pain? | Yes
+Do you mean now? | Yes
+Is it doctor you want to talk to? | Yes
+Is the pain you are feeling related to your stroke recovery? | No
+Is the pain you are feeling caused by physical activity? | Kinda
+Do you need to rest? | No
+Would changing your position help the pain? | Kinda
+Is the pain you are feeling sharp? | Yes
+Is the pain you are feeling related to circulation? | No
+Does repeating movements make the pain worse? | Yes
+Does lifting things make the pain worse? | Yes
+Do you want repeating movements? | No
+You want to repeating movements, correct? | No
+Do you want to lift things? | No
+You want to lifting things, correct? | No
+Is the pain you are feeling because you have been doing too much activity? | No
+Is the pain related to lifting things? | Kinda
+Is the pain you are feeling more bothersome when you lift things compared to when you repeat movements? | Yes
+Is the pain you are feeling because of muscle fatigue? | No
+Is the pain you are feeling related to doing activities over a long period of time? | No
+Is the pain you are feeling in your arm related to inflammation in your joints? | No
+This is about arm, correct? | Yes
+This is about pain, correct? | Yes
+You want to lifting things, correct? | No
+Does the pain get worse if you have to move your arm back and forth many times? | Yes
+Does the pain get worse when you lift things? | Yes
+Does the pain get worse if you have to do the same motion many times in a row? | Kinda
+Is the pain worse when you have to support weight with your arm? | Yes
+Is the pain you are feeling because of a circulation issue? | No
+Does the pain get worse if you have to hold your arm in one position for a long time? | No
+Is the pain you are feeling because of overuse? | Kinda
+Is the pain you are feeling located in your shoulder? | No
+Is the pain you are feeling because of inflammation in your joints? | No
+Is the pain getting worse because of bad circulation? | No
+Is the pain worse when you are just holding your arm in a certain position for a long time? | Kinda
+Is the pain worse when you have to keep your arm bent at a certain angle? | Kinda
+Is the pain you are feeling related to the tendons in your arm? | No
+This is about arm, correct? | Yes
+This is about pain, correct? | Yes
+You want to not lifting things, correct? | Yes
+You want to not lifting things, correct? | Yes
+You want to lifting things, correct? | No
+Is the pain related to the strength of the muscles in your arm? | No
+This is about arm, correct? | Yes
+This is about pain, correct? | Yes
+This is about wrist, correct? | Yes
+You want to dropping things, correct? | No
+You don't want to lift things, correct? | Yes
+You want to lifting things, correct? | No
+Is the pain in your wrist because you have been using it too much? | Kinda

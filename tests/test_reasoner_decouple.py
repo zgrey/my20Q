@@ -202,6 +202,7 @@ async def test_gate4_exempts_split_questions() -> None:
     assert action.content == "Do you need Zach to move it?"
 
 
+
 async def test_repeat_gate_rejects_and_reprompts() -> None:
     repeat = {"question": "Is it a picture?", "slots": {"what": "a picture"},
               "preface": "", "rationale": "x"}

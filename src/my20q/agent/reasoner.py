@@ -135,6 +135,20 @@ class ReasonerAction:
     #: A deliberate double-check of a single locked pair (verify-on-lock) —
     #: gate-exempt by construction, recorded so a pair is never re-verified.
     verify: bool = False
+    #: A CLARIFY turn: one step of a clarification. Recorded, so the record
+    #: shows both that a clarification opened and how it closed.
+    clarify: bool = False
+    #: Which step: "confirm" (a scored detail put to the person, templated by
+    #: `Round._clarify_action` with no LLM call) or "dig" (the anchor held and
+    #: the axis changed, which is a real question and goes through the model).
+    #: They close a clarification on OPPOSITE answers — a no ends a confirm, a
+    #: yes ends a dig — so the phase travels on the entry.
+    clarify_phase: str = ""
+    #: The (category, value) this clarification step is ABOUT. Tracked
+    #: separately from ``slots`` because the caregiver can flip the question,
+    #: which rewrites the text and may re-tag the slots — and the walk still has
+    #: to know that detail was put to the person, or it re-asks it forever.
+    clarify_detail: tuple[str, str] | None = None
     #: Refinement tags: {category: parent value} — the asserted value is a
     #: MORE SPECIFIC version of that existing contender ("tingling" refines
     #: "discomfort"). Anchored to the board: the parent must already exist.
@@ -334,6 +348,7 @@ class Reasoner:
         focus: str,
         directive: str,
         split_pair: tuple[str, str] | None = None,
+        anchor: tuple[str, str] | None = None,
         history: list[dict],
         edges: facets.Edges | None = None,
         asked: list | None = None,
@@ -359,6 +374,11 @@ class Reasoner:
         — the cheap expected-information-gain proxy). After the retry budget,
         the best clean question is accepted; otherwise raises for the engine's
         recovery path.
+
+        A clarification's CONFIRM step never reaches here — it is templated by
+        the engine and makes no LLM call. Its DIG step does: ``anchor`` is a
+        detail the person has just confirmed, ``focus`` is the axis being tried
+        instead, and the question must keep the one while changing the other.
         """
         # `asked` entries are either bare texts or (text, slot-categories)
         # pairs; the categories feed the repeat gate's slot-aware exemption
@@ -384,6 +404,7 @@ class Reasoner:
                     focus=focus,
                     directive=directive,
                     split_pair=split_pair,
+                    anchor=anchor,
                     edges=edges,
                     asked=asked_texts,
                     seed_context=seed_context,
@@ -795,7 +816,7 @@ def _anchored_slots(
         clean = sanitize_llm_text(value)[:MAX_VALUE_CHARS].strip()
         if not clean or not facets.mentions(question, clean):
             continue
-        cat = facets.remap_slot(cat, clean)
+        cat = facets.remap_slot(cat, clean, question)
         if cat in out:
             continue  # a re-filed action never overwrites an explicit how-tag
         out[cat] = facets.canonical_value(board, cat, clean)

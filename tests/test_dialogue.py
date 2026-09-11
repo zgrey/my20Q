@@ -10,6 +10,7 @@ import pytest
 
 from my20q.agent import facets
 from my20q.agent.dialogue import (
+    MAX_CLARIFY_QUERIES,
     SOFT_RESET_NO_STREAK,
     Answer,
     Round,
@@ -1389,10 +1390,403 @@ async def test_context_locked_pair_gets_a_double_check(
     ev = await rnd.answer(Answer.NO)  # the double-check is rejected
     entry = next(h for h in rnd.history if h.get("verify"))
     assert entry["answer"] == "no"
+    # W2-T: the contradiction is HELD, not scored. The pair keeps 1 + 2 = 3.0
+    # (it used to be knocked to 2.0 immediately) and the entry is marked
+    # contested, so the anchored clarification carries the real evidence.
+    assert entry["contested"] is True
     board = rnd._replay_board()
-    assert board["what"]["a drink"] == 2.0  # 1 + 2 − 1: normal scoring
-    # Still confident, but spent — the round moves on, no re-verification.
+    assert board["what"]["a drink"] == 3.0
+    # Never re-verified, and the round is now clarifying rather than moving on.
     assert rnd._pending is not None and not rnd._pending.verify
+    state = rnd._clarify_state()
+    assert state is not None
+    assert (state["category"], state["value"]) == ("what", "a drink")
+    assert state["reason"] == "contradicted" and state["asked"] == 0
+
+
+# ------------------------------------- clarifying mode (W2-T / W2-U)
+
+
+def _clarify_backend(value: str = "a drink") -> MockBackend:
+    """The drill protocol, plus a caregiver note that credits `value`.
+
+    Clarification questions are TEMPLATED by the engine and make no LLM call at
+    all, so this backend never has to produce one — which is itself the thing
+    worth noticing about the design.
+    """
+    state = {"q": 0}
+
+    def responder(messages: list) -> str:
+        system = messages[0]["content"]
+        if "starting GUESSES" in system:  # seed
+            return json.dumps(SEED_SLOTS)
+        if "HIGH-TRUST" in system:  # expand (caregiver note)
+            return json.dumps({"slots": {"what": [value]}})
+        if "DOUBLE-CHECK" in system:  # the double-check turn
+            return json.dumps({"question": f"Can you confirm it is {value}?"})
+        if "OPPOSITE button" in system:  # the caregiver flips the question
+            return json.dumps(
+                {"question": f"Is it something other than {value}?",
+                 "slots": {"what": value}}
+            )
+        if "pin down the ONE specific" in system:  # deliberate
+            return "thinking it through..."
+        if "Convert a drafted question" in system:  # format
+            word = _SUBJECTS[state["q"] % len(_SUBJECTS)]
+            state["q"] += 1
+            return json.dumps(
+                {"question": f"Is it about {word}?", "slots": {"what": word},
+                 "preface": "", "rationale": "drill"}
+            )
+        return json.dumps({"utterance": _UTTERANCES[0]})
+
+    return MockBackend(responder=responder)
+
+
+async def _contradicted(topics: list[Topic], value: str = "a drink") -> Round:
+    """A round sitting on a fresh contradiction, clarifying-mode question pending."""
+    rnd = Round(
+        _topic(topics, "physical_health"),
+        llm=_clarify_backend(value),
+        rng=_FixedRandom(0.99),
+    )
+    await rnd.open()
+    await rnd.answer(Answer.YES)  # confirms the seeded value at +1
+    # The note must SAY the value or W2-M drops it — that is the point of W2-M.
+    await rnd.add_context(f"she pointed at her cup — she wants {value}")  # +2
+    assert rnd._pending is not None and rnd._pending.verify  # the double-check
+    await rnd.answer(Answer.NO)  # …contradicted
+    return rnd
+
+
+async def test_clarify_walks_the_draft_one_detail_at_a_time(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    assert rnd._pending is not None
+    action = rnd._pending
+    assert action.clarify is True
+    assert action.focus == "what"
+    # Owner-specified shape: pointed, one detail, no LLM call behind it.
+    assert action.content == "This is about a drink, correct?"
+    assert action.slots == {"what": "a drink"}
+    # The mode announces itself ALOUD, because the patient hears the questions
+    # rather than reading the demarcated conversation.
+    assert action.preface == "Let me check this one piece at a time —"
+    # …and the cockpit is told to demarcate.
+    ev = rnd._pending_event()
+    assert ev.clarifying is True
+
+
+def test_clarify_question_emphasises_what_distinguishes_a_refinement() -> None:
+    q = Round._clarify_question("where", "right foot", parent="foot")
+    assert q == "This is about RIGHT foot, correct?"
+    # No parent: nothing to contrast against, so nothing is emphasised.
+    assert Round._clarify_question("where", "foot") == "This is about foot, correct?"
+    assert Round._clarify_question("why", "thirsty") == (
+        "This is because of thirsty, correct?"
+    )
+    # `how` holds verb phrases, and the default frame reads as broken English
+    # around them ("This is about call them, correct?" — a real live output).
+    assert Round._clarify_question("how", "call them") == (
+        "You want to call them, correct?"
+    )
+    # …but `how` also holds GERUNDS, which break the infinitive frame the other
+    # way. "You want to lifting things, correct?" was spoken to a patient in a
+    # live round. The frame follows the value's form, not its slot.
+    assert Round._clarify_question("how", "lifting things") == (
+        "This is about lifting things, correct?"
+    )
+    assert Round._clarify_question("how", "bring it") == (
+        "You want to bring it, correct?"  # -ing, but not a gerund
+    )
+
+
+def test_clarify_details_walk_the_chain_coarse_to_fine(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["pain"], "where": ["right foot"]}
+    rnd._history = [
+        {"kind": "query", "text": "Pain?", "answer": "yes", "slots": {"what": "pain"}},
+        {"kind": "query", "text": "Foot?", "answer": "yes", "slots": {"where": "foot"}},
+        {"kind": "query", "text": "Right foot?", "answer": "yes",
+         "slots": {"where": "right foot"}, "refines": {"where": "foot"}},
+    ]
+    board = rnd._replay_board()
+    details = rnd._clarify_details(board)
+    # "foot" before "right foot" — the general detail is confirmed before the
+    # one that distinguishes it, exactly as specified.
+    assert ("where", "foot") in details
+    assert details.index(("where", "foot")) < details.index(("where", "right foot"))
+    assert ("what", "pain") in details
+
+
+async def test_clarify_ends_on_the_first_no_which_localizes_the_error(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    board_before = rnd._replay_board()["what"]["a drink"]
+    await rnd.answer(Answer.NO)
+    assert rnd._clarify_state() is None  # localized — the walk is done
+    # The contradicted double-check still scored nothing; the ANCHORED question
+    # is what carries the loss, and it lands once.
+    assert rnd._replay_board()["what"]["a drink"] == board_before - 1.0
+    assert rnd.clarifications[0]["outcome"] == "localized"
+
+
+async def test_clarify_confirms_the_draft_and_the_belief_survives(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    # 1 (yes) + 2 (note) — the double-check's "no" never scored.
+    assert rnd._replay_board()["what"]["a drink"] == 3.0
+    await rnd.answer(Answer.YES)
+    assert rnd._replay_board()["what"]["a drink"] == 4.0
+    assert rnd.clarifications[0]["outcome"] == "confirmed"
+
+
+async def test_clarify_never_ends_the_round(topics: list[Topic]) -> None:
+    rnd = await _contradicted(topics)
+    for _ in range(MAX_CLARIFY_QUERIES):  # "kinda" settles nothing
+        if rnd._pending is None or not rnd._pending.clarify:
+            break
+        await rnd.answer(Answer.KINDA)
+    assert rnd.outcome is None  # not terminal, not a diagnostic
+    record = rnd.clarifications[0]
+    # The record states a fact about the DIALOGUE, never about the person.
+    assert set(record) == {
+        "reason", "category", "value", "trigger_question", "attempts", "outcome"
+    }
+    assert record["outcome"] in ("unresolved", "open", "confirmed")
+
+
+async def test_flipping_a_clarification_stays_in_the_mode_and_advances_it(
+    topics: list[Topic],
+) -> None:
+    """The opposition button inside clarifying mode (live report, 09-10).
+
+    A flip builds a fresh action, so without carrying the mode across it (a)
+    dropped the cockpit demarcation and (b) — because the walk tracked progress
+    by question TEXT — never registered the detail as asked, and re-issued the
+    identical template on the very next turn.
+    """
+    rnd = await _contradicted(topics)
+    before = rnd._pending
+    assert before is not None and before.clarify
+    detail = before.clarify_detail
+    assert detail is not None
+
+    ev = await rnd.flip()
+    flipped = rnd._pending
+    assert flipped is not None
+    assert flipped.content != before.content  # a genuinely different question
+    assert flipped.clarify is True and ev.clarifying is True  # mode survives
+    assert flipped.clarify_detail == detail  # …and knows what it is about
+
+    await rnd.answer(Answer.YES)
+    # The walk MOVED ON — it does not re-ask the question that was flipped away.
+    nxt = rnd._pending
+    assert nxt is None or nxt.content != before.content
+    state = rnd._clarify_state()
+    if state is not None and state["phase"] == "confirm":
+        assert state["next"] != detail
+
+
+async def test_a_flipped_clarification_decides_nothing(
+    topics: list[Topic],
+) -> None:
+    # A flipped question asserts its OWN slots, so its answer cannot be read as
+    # confirming or denying the detail the step was about — it counts as asked
+    # and nothing more. A "no" here must not localize.
+    rnd = await _contradicted(topics)
+    await rnd.flip()
+    await rnd.answer(Answer.NO)
+    entry = next(h for h in rnd.history if h.get("flipped_from"))
+    assert entry["clarify"] is True
+    assert rnd.clarifications[0]["outcome"] != "localized"
+
+
+async def test_undo_reopens_the_clarification(topics: list[Topic]) -> None:
+    """Clarify state is DERIVED, so rewinding an answer rewinds the mode too."""
+    rnd = await _contradicted(topics)
+    await rnd.answer(Answer.NO)
+    assert rnd._clarify_state() is None
+    await rnd.undo()
+    state = rnd._clarify_state()
+    assert state is not None and state["reason"] == "contradicted"
+
+
+def test_contested_no_neither_scores_nor_counts_as_a_no(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink"]}
+    rnd._history = [
+        {"kind": "query", "text": "Is it a drink you want?", "answer": "yes",
+         "slots": {"what": "a drink"}},
+        {"kind": "query", "text": "Is it a drink?", "answer": "no",
+         "slots": {"what": "a drink"}, "verify": True, "contested": True},
+    ]
+    assert rnd._replay_board()["what"]["a drink"] == 1.0  # the yes survives
+    assert rnd._consec_no_streak() == 0  # an ambiguity, not a no
+    # …and it must never mark its own value as an exhausted avenue, which would
+    # forbid the very question the clarification is about to ask.
+    assert rnd._futile_pair(rnd._history * 2) is None
+    state = rnd._clarify_state()
+    assert state is not None and state["reason"] == "contradicted"
+
+
+# ---- the second trigger: a score that rises and then falls
+
+
+def test_score_conflict_fires_on_a_rise_then_fall(topics: list[Topic]) -> None:
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["pain", "a drink"]}
+    rnd._history = [
+        {"kind": "query", "text": "Pain?", "answer": "yes", "slots": {"what": "pain"}},
+        {"kind": "query", "text": "Still pain?", "answer": "no",
+         "slots": {"what": "pain"}},
+    ]
+    conflict = rnd._score_conflict()
+    assert conflict is not None
+    assert (conflict["category"], conflict["value"]) == ("what", "pain")
+    assert conflict["peak"] == 1.0
+
+
+def test_a_conflict_with_nothing_scored_does_not_open_the_mode(
+    topics: list[Topic],
+) -> None:
+    """The gate: no scored detail means nothing to clarify, so do not enter.
+
+    `pain` rose to 1.0 and fell back to 0.0, taking it off the draft. There is
+    a conflict, but no object to clarify — asking about it would interrogate a
+    value the board has already discarded.
+    """
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["pain"]}
+    rnd._history = [
+        {"kind": "query", "text": "Pain?", "answer": "yes", "slots": {"what": "pain"}},
+        {"kind": "query", "text": "Still pain?", "answer": "no",
+         "slots": {"what": "pain"}},
+    ]
+    assert rnd._score_conflict() is not None  # the conflict IS detected
+    assert rnd._clarify_details(rnd._replay_board()) == []  # …but nothing scored
+    assert rnd._clarify_state() is None  # …so the mode stays shut
+
+
+def test_a_conflict_opens_the_mode_once_a_detail_is_scored(
+    topics: list[Topic],
+) -> None:
+    # Same conflict, but `a drink` is still standing — that scored detail is
+    # the object to clarify, so the mode opens and walks it.
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["pain"], "how": ["bring it"]}
+    rnd._history = [
+        {"kind": "query", "text": "Pain?", "answer": "yes", "slots": {"what": "pain"}},
+        {"kind": "query", "text": "Bring it?", "answer": "yes",
+         "slots": {"how": "bring it"}},
+        {"kind": "query", "text": "Still pain?", "answer": "no",
+         "slots": {"what": "pain"}},
+    ]
+    state = rnd._clarify_state()
+    assert state is not None
+    assert state["reason"] == "non-monotonic"
+    assert state["phase"] == "confirm"
+    # The conflicted value is off the draft, so it is NOT what gets walked —
+    # the scored detail is.
+    assert ("what", "pain") not in state["details"]
+    assert state["next"] == ("how", "bring it")
+
+
+# ---- phase 2: every detail held, so the FRAMING is what is wrong
+
+
+def test_dig_axes_keep_the_anchor_and_change_the_angle(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend())
+    rnd._seed_values = {"who": ["Rob"], "how": ["remind"]}
+    rnd._history = [
+        {"kind": "query", "text": "Rob?", "answer": "yes", "slots": {"who": "Rob"}},
+    ]
+    axes = rnd._clarify_dig_axes(rnd._replay_board(), "who")
+    # Owner's rule: a confirmed `who` is dug at from every OTHER angle.
+    assert "who" not in axes
+    assert set(axes) == {"what", "when", "where", "why", "how"}
+
+
+async def test_all_details_confirmed_turns_into_a_dig(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    state = rnd._clarify_state()
+    assert state is not None and state["phase"] == "confirm"
+    # Say yes to every scored detail the walk puts up.
+    for _ in range(6):
+        state = rnd._clarify_state()
+        if state is None or state["phase"] != "confirm":
+            break
+        await rnd.answer(Answer.YES)
+    state = rnd._clarify_state()
+    assert state is not None
+    # Nothing was wrong with the details, so the round digs at the anchor from
+    # a different axis instead of declaring itself finished.
+    assert state["phase"] == "dig"
+    assert state["anchor"] == ("what", "a drink")
+    assert state["axis"] != "what"
+    assert rnd._pending is not None and rnd._pending.clarify
+    assert rnd._pending.clarify_phase == "dig"
+    # The controller ASKED for the new axis. This mock tags `what` whatever it
+    # is asked, so W2-P re-attributes the focus to what the question actually
+    # asserts — and `focus_requested` is what keeps the axis recoverable, which
+    # is also what stops the walk retrying the same axis forever.
+    p = rnd._pending
+    assert (p.focus_requested or p.focus) == state["axis"]
+
+
+async def test_a_dig_that_lands_closes_the_clarification(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    for _ in range(6):
+        state = rnd._clarify_state()
+        if state is None or state["phase"] != "confirm":
+            break
+        await rnd.answer(Answer.YES)
+    assert (rnd._clarify_state() or {}).get("phase") == "dig"
+    # A dig closes on YES — the opposite of a confirm, because a yes here is
+    # the missing frame rather than a detail holding.
+    await rnd.answer(Answer.YES)
+    assert rnd._clarify_state() is None
+
+
+def test_score_that_only_ever_falls_is_not_a_conflict(topics: list[Topic]) -> None:
+    # A wrong guess being eliminated is ordinary progress — it was never believed.
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a snack"]}
+    rnd._history = [
+        {"kind": "query", "text": "A snack?", "answer": "no",
+         "slots": {"what": "a snack"}},
+        {"kind": "query", "text": "Sure it is not a snack?", "answer": "no",
+         "slots": {"what": "a snack"}},
+    ]
+    assert rnd._score_conflict() is None
+    assert rnd._clarify_state() is None
+
+
+def test_a_caregiver_edit_is_not_a_conflict(topics: list[Topic]) -> None:
+    # Striking a value is the caregiver being RIGHT, not the board disagreeing
+    # with itself — it must never drag the round into clarifying mode.
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["a drink"]}
+    rnd._history = [
+        {"kind": "query", "text": "A drink?", "answer": "yes",
+         "slots": {"what": "a drink"}},
+        {"kind": "edit", "text": "not a drink", "answer": None,
+         "ban": {"category": "what", "value": "a drink"}},
+    ]
+    assert rnd._score_conflict() is None
 
 
 def test_futile_pair_bans_the_drilled_value(topics: list[Topic]) -> None:
@@ -1470,6 +1864,7 @@ def test_deliberate_messages_carry_focus_and_directive() -> None:
     assert "ALREADY ASKED" in content and "Is it about food?" in content
 
 
+
 def test_history_formatting_dumps_noise_after_restart() -> None:
     from my20q.agent.prompts import _format_history
 
@@ -1524,6 +1919,12 @@ async def test_exploration_decays_as_yeses_accrue(topics: list[Topic]) -> None:
         system = messages[0]["content"]
         if "starting GUESSES" in system:
             return json.dumps(SEED_SLOTS)
+        if "DOUBLE-CHECK" in system:
+            # Required now that every new detail draws a check: a mock without
+            # this branch falls through to the synthesis reply, the verify call
+            # finds no question, and the round restarts out of recovery.
+            m = re.search(r':\s+"(.+)"', messages[1]["content"])
+            return json.dumps({"question": f"Is it {m.group(1) if m else 'that'}?"})
         if "pin down the ONE specific" in system:
             seen.append("EXPLORE" in messages[1]["content"])
             return "thinking"
@@ -1544,10 +1945,12 @@ async def test_exploration_decays_as_yeses_accrue(topics: list[Topic]) -> None:
     )
     await rnd.open()  # yeses=0 -> p=0.667 > 0.4 -> explore
     assert seen[0] is True
-    await rnd.answer(Answer.YES)  # next at yeses=1 -> p=0.444 > 0.4 -> explore
-    assert seen[1] is True
-    await rnd.answer(Answer.YES)  # next at yeses=2 -> p=0.296 < 0.4 -> no explore
-    assert seen[2] is False
+    # p decays 0.667 -> 0.444 -> 0.296, crossing the pinned 0.4 once. Counted on
+    # the DELIBERATE calls, not the turns: double-checks are interleaved now and
+    # make no deliberate call at all, so turn N is no longer draw N.
+    while len(seen) < 3 and not rnd.is_terminal and rnd._pending is not None:
+        await rnd.answer(Answer.YES)
+    assert seen[:3] == [True, True, False]
 
 
 # ------------------------------------------- autopsy instrumentation (W2-O)
@@ -1610,7 +2013,10 @@ async def test_banner_ready_transition_is_recoverable(topics: list[Topic]) -> No
     flags = [h["banner"]["ready"] for h in rnd.history if h.get("banner")]
     # The edge itself is the metric: the record now says which query it was.
     assert flags[0] is False and flags[-1] is True
-    assert flags.index(True) == len(flags) - 1  # exactly one false -> true edge
+    # Exactly one false -> true edge — readiness is reached once and then held.
+    # (Which query that is shifts as the double-check cadence changes, so the
+    # monotonicity is the claim, not the index.)
+    assert flags == sorted(flags)
 
 
 async def test_banner_is_stamped_even_when_the_next_question_fails(
@@ -1757,8 +2163,13 @@ def _ladder_backend(ladder: list[str]) -> MockBackend:
     return MockBackend(responder=responder)
 
 
-async def _drive(rnd: Round, answers: list[Answer]) -> None:
-    """Answer in sequence, pressing Retry through any diagnostic card."""
+async def _drive(rnd: Round, answers: list[Answer], stop=None) -> None:
+    """Answer in sequence, pressing Retry through any diagnostic card.
+
+    ``stop`` ends the drive early once the state under test is reached — which
+    matters now that double-checks interleave with questioning, so "N answers"
+    no longer means "N questions of the kind this test is about".
+    """
     for a in answers:
         for _ in range(3):
             if rnd.is_terminal:
@@ -1769,6 +2180,8 @@ async def _drive(rnd: Round, answers: list[Answer]) -> None:
         else:
             return
         await rnd.answer(a)
+        if stop is not None and stop():
+            return
 
 
 async def test_drill_ladder_builds_edges_and_moves_the_draft(
@@ -1781,7 +2194,16 @@ async def test_drill_ladder_builds_edges_and_moves_the_draft(
     rnd = Round(_topic(topics, "general"), llm=_ladder_backend(ladder),
                 rng=_FixedRandom(0.99))
     await rnd.open()
-    await _drive(rnd, [Answer.YES] * 10)
+    # Drive until the ladder is walked rather than a fixed number of turns:
+    # double-checks now interleave with drills, so the turn count that reaches
+    # the bottom rung moved — and overshooting mints values past the ladder.
+    await _drive(
+        rnd,
+        [Answer.YES] * 20,
+        stop=lambda: (
+            facets.frontier(rnd._replay_board(), "what", rnd._edges) or ("",)
+        )[0] == ladder[-1],
+    )
 
     board = rnd._replay_board()
     assert rnd._edges["what"], "a drilled ladder must link, even with no refines tag"
@@ -1828,7 +2250,7 @@ async def test_drill_parent_is_recorded_for_the_autopsy(
                 llm=_ladder_backend(["an object", "keeps you warm", "a blanket"]),
                 rng=_FixedRandom(0.99))
     await rnd.open()
-    await _drive(rnd, [Answer.YES] * 10)
+    await _drive(rnd, [Answer.YES] * 20)
     drills = [h for h in rnd.history if h.get("drill_parent")]
     assert drills, "the ladder the controller walked must be recoverable"
     assert all(isinstance(h["drill_parent"], str) for h in drills)

@@ -634,6 +634,202 @@ number, which is how instruments get bent toward the answer you wanted.
 
 ---
 
+## 1h. Evidence — the 09-10 synthetic wrist round: the board is request-shaped
+
+First run on the clarifying-mode stack, **synthetic persona, no patient data**
+(`serve_cerberus.sh synthetic`). Target: *"I think I broke my wrist."* One
+round, **57 questions**, and the engine never once asked whether it was her
+wrist — the caregiver had to type it into the synthesis editor at q53.
+
+| | |
+|---|---|
+| **3 of 57** | questions tried to narrow the LOCATION — q2 arm, q3 forearm, q39 shoulder |
+| **25 of 57** | asked about cause or aggravation (14 + 11) |
+| **4 of 57** | asked WHO — spouse, caregiver, doctor — on a round where nobody is the answer |
+| **16 of 57** | were clarifications, including the flip loop below |
+| answers | 24 yes / 24 no / 9 kinda |
+
+Fourteen further questions *mentioned* "arm", but as the setting for a cause
+question, never to narrow it: *"Is the pain you are feeling in your arm related
+to inflammation in your joints?"*
+
+### The root cause — a request-shaped board on a report-shaped need
+
+Owner's framing, and it is the right one: *"high level topics imply a form of
+questioning that isn't utilized. When talking about 'my body', if pain emerges
+as a detail then why would I ever want pain?"*
+
+The 5W1H board is **request-shaped**. `how` is defined as *an action wanted*;
+the template draft is literally `"I need/want {what} … for/from {who}"`. That
+fits *"I need Rob to move the picture."* It does not fit *"I think I broke my
+wrist"*, which is a **report**: there is no who, the why is an injury, and there
+is no action the person wants. The engine still had those slots to fill, so it
+filled them with the nearest available material — and the material to hand was
+aggravation:
+
+```
+q17 "Does repeating movements make the pain worse?"  -> yes   how: repeating movements
+q18 "Does lifting things make the pain worse?"       -> yes   how: lifting things
+q21 "Do you want to lift things?"                    -> no    (correctly!)
+q22 "You want to lifting things, correct?"           -> no
+```
+
+The double-checks were right to come back no — she does not want to lift
+things. But each one was a *contradiction*, which opened clarifying mode, which
+walked the draft, which re-asked… The clarifying machinery worked exactly as
+designed on a board that was wrong underneath it.
+
+**The satisfying part:** those 25 questions were answering **`why`** all along
+and filing it under `how`. `why` sat empty the entire round — and an empty
+modifier slot is exactly what the focus policy probes at priority 4.
+
+### Three defects, in order of damage
+
+**D1 — an unfillable slot absorbs the round (NOT YET FIXED, see W2-V).** Both
+core slots went confident early (`pain`, `arm`), so the policy dropped to
+"probe an empty modifier" and picked `why`. Every guess drew no or **kinda**,
+and `_run_working` treats a kinda as *this run is producing*, which extends past
+`MAX_CATEGORY_RUN` without bound. Nine kindas kept `why`/`how` alive for ~25
+questions while `where` — already "confident" at `arm` — was never revisited.
+
+**D2 — `how` credited from aggravation questions (FIXED 09-10).**
+`remap_slot` now re-files an action credited to `how` by an aggravation
+question into `why`, where it belongs. Ten of the eleven aggravation questions
+in this round are caught by the deterministic frame test; the eleventh was
+already a cause question. One rule fixes three symptoms: the `how` pollution,
+the bogus double-checks, and `why` starving.
+
+**D3 — the clarification frame broke on gerunds (FIXED 09-10).** *"You want to
+lifting things, correct?"* was spoken aloud, repeatedly. The frame is now chosen
+by the value's grammatical **form**, not its slot: gerunds take *"This is about
+lifting things"*, bare verbs take *"You want to call them"*. `bring` is the trap
+— it ends in `-ing` and is not a gerund.
+
+### The flip loop (FIXED 09-10, see W2-T tail)
+
+Caught verbatim in the log, and the clearest single reproduction of the bug:
+
+```
+q56 "You don't want to lift things, correct?"  -> Yes   the caregiver's flip
+q57 "You want to lifting things, correct?"     -> No    the template, again
+```
+
+Note which one is better English. **The model's flip repaired the frame that
+the template had broken** — which is what identified D3 as the defect rather
+than the flip.
+
+### What worked
+
+The arm→wrist swap in the synthesis editor landed cleanly and the walk picked
+the new detail up on the very next turn:
+
+```
+q53  arm -> wrist
+q54  "This is about wrist, correct?"                          -> yes
+q58  "Is the pain in your wrist because you have been using it too much?"
+```
+
+Verification also behaved: **6 checks in 58 questions**, roughly the 1-in-5 the
+W2-U measurement predicted, and none of them felt like the old 1-in-56 famine.
+
+## 1i. Evidence — the 09-11 trial: the fixes hold, and the board has a keystone defect
+
+Second synthetic run at the same target, on the fixed build (`2c5337e`).
+**93 questions, and it reached the wrist and drilled into it** — *"the side of
+your wrist closest to your thumb"*, *"near the crease where your wrist bends"*.
+§1h never got there in 57.
+
+### What validated
+
+**The flip fix (W2-T tail) is done.** Five flips, two of them inside clarifying
+mode, in BOTH phases, zero loops — the defect §1h caught at q56→q57:
+
+```
+q36 [CLARIFY/confirm, FLIPPED] "This is about only one specific area…, correct?"
+        was: "This is about MORE THAN one specific area…"
+        detail: ['where', 'one specific area of your body']   <- survived the flip
+   -> q37 moved on to `when`, q38 to `who`.  No re-issue.
+q39 [CLARIFY/dig, FLIPPED]     "Would NOT rubbing the area help…?"
+   -> q40, q41 kept digging.
+```
+
+Also live for the first time: a clarification closing as **`reframed`** — the
+dig landed rather than shrugging.
+
+**Not validated: D2 (aggravation → `why`).** This round phrased its cause
+questions as *"is the discomfort **because** X?"*, not *"does X make it
+**worse**?"*, so `asks_about_aggravation` barely fired. The fix is still
+essentially untested in the field.
+
+### The keystone defect — a vacuous placeholder leading a slot
+
+```
+where : "one specific area of your body" +4.0 | arm +1.0 | area +1.0 | forearm +1.0
+what  : discomfort +9.5 | pain +6.0
+```
+
+q2 and q4 asked *"Is the discomfort in one specific area of your body?"* and the
+engine credited that phrase as a `where` **value**. Three separate symptoms
+trace to it:
+
+1. `where` **looks settled**, so it drew 9 focuses to `what`'s 32;
+2. `wrist` never becomes the established `where` leader, so **Gate 4
+   (zero-information) stops suppressing redundant wrist questions**;
+3. the draft cannot weave the real location.
+
+`facets._VACUOUS` is four words — `feel / feeling / thing / stuff` — scoped to
+the exact phrase that burned §1d. It does not catch *"one specific area of your
+body"* or *"area"*. → **W2-Y**.
+
+### Redundancy is SEMANTIC, not lexical (owner report)
+
+Replaying all 91 captured questions through `auditor.is_repeat`: it would flag
+**16**, and a crude content-token overlap finds exactly **one** near-duplicate
+pair it missed. The gate is doing its lexical job. What it cannot see:
+
+```
+q92 "located only within the bones and skin of your wrist?"  -> yes
+q93 "Is the pain you are feeling confined to your wrist?"    -> yes
+```
+
+Almost no shared words. **Gate 4 is the mechanism that should catch this** — and
+the keystone defect above is why it didn't. Fixing W2-Y is the redundancy fix;
+lowering the lexical threshold instead would raise the re-ask rate, which W2-S
+already measured as the expensive failure.
+
+### Cockpit defects (not engine queue items, but caregiver-facing)
+
+**CB-1 · Input freezes during question generation.** `components.tsx:704` —
+the guiding-context input is `disabled={busy}`, as are the banner controls, so
+for the 10-25 s of each generation the caregiver **cannot even type**;
+keystrokes are dropped, not deferred. The guard protects something real —
+`add_context` and `replace` both mutate history and call `_advance()`, which
+would race an in-flight `_advance()` — so the fix is to decouple **capture**
+from **dispatch**: never block typing, queue the submit, apply on completion.
+
+**CB-2 · ⟳ Restate silently no-ops after the first press.** Reproduced:
+
+```
+BEFORE : 'I need/want pain …'
+AFTER 1: 'Yes, I am feeling pain right now.'   changed = True
+AFTER 2: 'Yes, I am feeling pain right now.'   changed = False
+```
+
+`restate()` passes the current draft as `rejected=[(current, "kinda")]` and then
+accepts whatever returns, **with no check that it changed**. The near-duplicate
+guard that caught this lived in the synthesis state machine, deleted when the
+banner replaced it (W1-C); `restate()` inherited a `synthesize` with no
+protection. Fix: reject an unchanged result, accumulate prior drafts across
+presses so each has more to avoid, and surface failure rather than no-op.
+
+### Process failure worth recording
+
+The server stopped before the JSONL export was saved, so **the round record with
+its entry flags is gone** — the transcript survived, the per-entry
+`verify`/`clarify`/`flipped_from` flags past q41 did not. Recording is off for
+synthetic personas by design, so the watcher is the only capture; it saved
+markdown only. Save the JSONL export too.
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -1155,7 +1351,16 @@ exception to "no engine change before the bench". It is deterministic and
 unit-testable without a bench, it silently disables an already-shipped feature,
 and it corrupts the recorded dataset every session it survives.
 
-### W2-L · Verify-turn safety — Status: PARTLY IMPLEMENTED (09-08)
+### W2-L · Verify-turn safety — Status: IMPLEMENTED (09-08 wording, 09-10 scoring)
+
+> **Closed 09-10 by W2-T.** The open half below — *"should a verify
+> disagreement erase the pair (−1.0) or open a split"* — is decided, and the
+> answer is neither: the disagreement now **scores nothing at all**, and the
+> split it opens is *anchored* (re-ask the confirmed question with its context
+> restored) rather than a free guess. What the entry below could not see is
+> **why** q006's "no" was noise-like: the double-check had stripped the anchor
+> the yes depended on. Owner-decided 09-10, reversing W2-F's "scoring is the
+> normal rule". See **W2-T**.
 
 > **Landed 09-08 — the wording half only.** `prompts.verify_messages` no
 > longer hands the model its slot gloss as a label to reuse: each slot now
@@ -1509,7 +1714,28 @@ claimed: any convergence win. The wall is now *readiness*, and the next thing
 worth measuring is why a slot that has stopped fragmenting still rarely gets
 two clear points ahead of its rival.
 
-### W2-Q · `yes_memory` integrity and same-session read-back — Status: PROPOSED (09-08, §1d C7)
+### W2-Q · `yes_memory` integrity and same-session read-back — Status: CLOSED (09-10) — integrity IMPLEMENTED, read-back DECLINED
+
+> **Integrity landed 09-10.** `round_id` is the recording's uuid, `session_id`
+> is written alongside it, and `dated_path` keys on the same **UTC** clock as
+> the `at` timestamps inside — one clock, both places. A confirmed yes now
+> joins back to the exact round it came from.
+>
+> **Read-back DECLINED (owner, 09-10): in-round contradictions only.** Feeding
+> logged yeses into the seed/ask prompts as established facts is the wrong side
+> of the two-layer boundary this entry flagged: injecting a logged yes as a
+> prior is precisely *letting last round's need predict this round's*, which
+> the dialogue philosophy forbids. The r2/r4 case is instead re-read as a
+> **contradiction**, and W2-T catches that class in-round — where noticing a
+> conflict produces a *question*, never a belief, and scores nothing until the
+> person answers.
+>
+> **Residual, stated plainly:** the literal 09-01 case was **cross-round** (r2
+> confirmed, r4 denied minutes later), and in-round-only does not catch it. A
+> yes confirmed in an earlier round of the same session and denied in this one
+> still passes unremarked. That is a deliberate cost of keeping the two-layer
+> rule intact, not an oversight — reopen it only with trial evidence that the
+> cross-round case recurs.
 
 **Problem.** 09-01 r2 confirmed *tingling in toes*; r4, same topic, minutes
 later, re-asked about tingling and got **no**. The log held the answer.
@@ -1606,6 +1832,478 @@ still wins on its own score); complexity. **Acceptance:** dishes-round
 replay weaves a specific value by the 3rd proposal; bench convergence Δ on
 all three fixtures; no honest-tile regression.
 
+### W2-T · Clarifying mode — Status: IMPLEMENTED (09-10)
+
+**Owner proposal, 2026-09-10.** *"When a double-check is proposed and the answer
+contradicts, CC should enter a 'clarifying mode' that merges all yes answers and
+walks through a deep dive on the 'yes'-specific context in an attempt to split.
+… If clarifying mode fails to clarify then perhaps it is because the interviewee
+is confused. This is not a terminal condition, the model should persist with
+questioning and attempting to build context until the user is happy. Fatigue is
+not an issue. The interviewee can quit when they please."*
+
+**Problem — the contradiction usually isn't one.** §1d's q006 is the case: a
+**yes** to *tingling in toes*, then one question later a **no** to a bare
+*tingling*, which halved the pair and killed the round. Those two answers do not
+conflict. **The verify turn re-asks the value stripped of the anchor that made
+the original yes mean anything.** W2-L fixed the *slot-gloss* leak in that
+question (§1d C3); it never touched the anchor-stripping, which is the larger
+half. A single noisy-looking "no" was then applied at full −1.0 against a
+confirmation the person had actually given.
+
+Reproduced live on gemma4 while building this, unprompted by any fixture:
+
+```
+Q1  "Are you feeling any pain right now?"        -> yes   {what: pain, when: right now}
+    caregiver note: "she keeps pointing — it is definitely pain"   (what: pain = 3.0)
+Q2  "Do you mean pain?"                          -> NO    <- the anchor is gone
+```
+
+**The mechanism.** A double-check answered "no" opens a *contradiction*:
+
+1. **The verify-no is CONTESTED, not scored** (owner decision, 09-10 —
+   deliberately reversing W2-F's "scoring is the normal rule"). Replay skips it
+   entirely: no points, no direction buckets. It is also transparent to
+   `_consec_no_streak` and excluded from `_futile_pair`, which would otherwise
+   mark the contested value as an exhausted avenue and forbid the very question
+   the clarification is about to ask. A bare re-ask that contradicts is an
+   **ambiguity**, and an ambiguity is not evidence.
+2. **The clarification restores the anchor.** A new `clarify` directive at
+   focus-policy **priority 0** — ahead of pin/probe/split/drill, and exempt from
+   the rotation guard, because a board that is *confidently wrong* about a slot
+   has no other progress worth making. The prompt is handed both questions
+   verbatim (`_clarify_block`) plus the caregiver note when the pair was
+   note-established, because a model cannot restore a context it was never
+   shown.
+3. **The evidence is whatever the anchored question gets.** Scored normally: a
+   yes restores and credits the pair, a no debits it once — and it is now a
+   *well-anchored* no, worth far more than the bare one.
+4. **It closes on the first answer that separates** — a clean yes or no.
+   `kinda`/`not sure` separate nothing, which is what `MAX_CLARIFY_QUERIES = 3`
+   bounds. Running out is recorded `unresolved`, releases the focus, and the
+   round goes straight back to normal questioning. **Nothing here is terminal.**
+
+Two gates relax for a clarify turn, and only two: the zero-information gate
+stands down (re-asking an established pair is the point), and the repeat gate
+forgets the **original confirming question** — never the double-check, so the
+model may return to the fuller question but can never re-emit the bare one that
+just failed to land. A clarify turn is still subject to the repeat gate for its
+*own* earlier attempts: three tries means three genuinely different ways of
+restoring the context, not the same re-ask three times.
+
+Live end-to-end, same round as above:
+
+```
+Q3  "Is the pain you are pointing to happening right now?"  -> yes   what: pain = 4.0
+    clarifications: [{what: pain, outcome: confirmed}]      outcome: None (still live)
+```
+
+The model restored **both** anchors — the caregiver's note *and* the original
+`when: right now`. The clarification is a visibly better question than the
+double-check that caused the problem.
+
+**On "diagnosing confusion" — owner decision: record only, no cockpit surface.**
+An exhausted contradiction is recorded as a fact about the **dialogue**
+(`outcome: unresolved`, with the attempts), never as a judgement about the
+person. The engine cannot distinguish "the interviewee is confused" from "my
+questions are bad", and in every trial recorded so far the answer has been the
+latter — the slot-gloss leak, the fabricated `what: pain`, the bare verify. A
+cognitive claim about a real patient does not belong in the dataset on that
+evidence. The cockpit already has the honest channel for it: the caregiver's
+**Confused ↔ Clear** slider (`components.tsx`), which feeds every prompt through
+`_context_block` — a human making the judgement, not the engine.
+
+**What this closes.** W2-L's parked half (*"should a verify disagreement erase
+the pair or open a split"*) — answered: neither erases, the split is anchored
+rather than free. W2-Q's parked half — see its entry; the read-back is
+**declined**, and the in-round contradiction is caught by this instead.
+
+**Not claimed at the time.** No bench number: `--noise` manufactures flipped
+answers, but `_verify_due` then only fired on a pair made confident by a
+**caregiver note**, which the bench never produces — a live ε=0.25 run recorded
+`verifies: 0`. The open question was whether contradictions were frequent enough
+to matter at all, given checks fired once in ~38 questions.
+
+**Answered the same day by W2-U**, and the answer was that the rate was the
+defect: measured properly it was **1 in 56**, with 77% of rounds never checking
+anything. Checks now fire on every new detail (1 in 4.7 live), and a
+non-monotonic score is a second trigger — so the mechanism this entry built now
+has something to do. The anchored-restore question specified here was superseded
+by W2-U's templated detail walk; the *scoring* half — a contradicted check
+counts for nothing — is unchanged and load-bearing.
+
+**Touches:** `reasoner` (`clarify` flag + two gate relaxations), `prompts`
+(`_DIRECTIVE_NOTE["clarify"]`, `_clarify_block`), `dialogue`
+(`_clarify_state`/`_confirming_source`/`clarifications`, priority 0, contested
+replay), `recorder` + `api` (record field), `dump_recording`, `bench`,
+`web/types.ts`, 11 tests. **Replay-safe:** every bit of clarify state is
+DERIVED from history, so undo stays pop-and-recompute — asserted by test.
+
+### W2-U · Check every new detail · the conflict trigger · the detail walk — Status: IMPLEMENTED (09-10)
+
+Owner-directed, same day as W2-T and building directly on it. Three parts.
+
+---
+
+**(a) Verification fires on every NEW DETAIL, not at lock.**
+
+`_verify_due` required the slot to be family-CONFIDENT. That condition and the
+`≤ 1 yes` condition fight each other: a detail with one yes sits at 1.0 and is
+not confident; the usual way it *becomes* confident is by earning the second
+yes, which then disqualifies it. Measured across all 92 recorded rounds / 1956
+questions:
+
+| | |
+|---|---|
+| **1 check per 56 questions** | not the 1-in-38 the docs had been quoting, which was one good day |
+| **71 of 92 rounds (77%)** | never checked anything at all |
+| **14 of the 21 that did** | hit the budget of 2 immediately — it bound whenever it engaged |
+| **30 of 35** | fired on a value a caregiver NOTE had lifted over the bar, not one an answer confirmed |
+| **185 of 294 (63%)** | of all confirmed details rest on exactly **one** answer |
+
+The confidence condition is deleted. Any slot whose **frontier** — the value the
+banner is actually weaving — rests on ≤ 1 yes is checked once, so the caregiver
+holds one invariant: **the draft never says anything you have not confirmed
+twice.** A frontier below one full answer is skipped: that is a stand-in, and
+checking it spends a question confirming a shrug.
+
+The per-round budget is gone. Both reasons it existed had expired: a
+contradicted check used to DESTROY the belief (W2-L) — W2-T removed that — and
+a check is a *single* LLM call with no deliberate phase against a normal
+question's two. What replaces it is narrower: at most **two checks in a row**
+(a note landing two details deserves two; five reads as an interrogation), and
+never a check of a pair the question immediately before already asserted, which
+is asking the same thing twice in a row whatever the engine calls it.
+
+Measured live afterwards: **1 check per 4.7 questions**, median **0.4 s**
+against **6.7 s** for an ordinary question.
+
+---
+
+**(b) A non-monotonic score is the second trigger.**
+
+> Owner's rule: *"Solid details should exhibit monotonic scores. If a score
+> grows then starts to drop, this implies conflict or a bad question and should
+> trigger the clarification mode."*
+
+`_score_conflict` replays the segment and flags any value that rose to at least
+one full answer and then fell. A value that only ever fell was never believed —
+that is an ordinary wrong guess. Drops caused by a caregiver **edit** are
+excluded: striking a value is the caregiver being right, not the board
+disagreeing with itself.
+
+Calibrated before shipping, across every recorded round: **one per 26
+questions**, with **65% of rounds never triggering** — a live signal, not a
+constant one.
+
+The first live run proved the case better than the spec did. Three questions in:
+
+```
+q1 "Are you feeling any unusual sensations in your body right now?" -> yes  {when: now}
+q2 "Are you feeling any pain right now?"                            -> no
+   …the "no" was about PAIN, and it deducted from `when: now`.
+q3 CLARIFY "This is about now, correct?"                            -> yes   restored
+```
+
+The asymmetric-no rule targets the lowest-scoring asserted pair, so a **no** to
+a composite question lands on whichever component happened to be weakest — here
+destroying a belief the person had never contradicted. **The conflict trigger
+catches collateral damage from composite questions**, a failure mode that had
+not been named before. No double-check was involved at all.
+
+---
+
+**(c) Clarifying mode is GATED on there being something to clarify.**
+
+> Owner, 2026-09-10: *"If there is nothing to clarify, we should never enter
+> clarification mode. Clarification should be gated by at least a single scored
+> detail emerging. Those scored details are precisely the objects requiring
+> clarification."*
+
+The first implementation force-inserted the conflicted pair into the walk even
+when its score had gone — and the very first live run did exactly that, asking
+*"This is about now, correct?"* about a value that had already fallen off the
+draft. The objects of a clarification are the **scored** details, so:
+`_clarify_state` now returns `None` when the weave is empty, and the conflicted
+pair leads the walk only while it is still on the draft. A trigger whose value
+has been discarded no longer has the round interrogating a phantom.
+
+Confirmed live: a round answered all-yes never enters the mode at all.
+
+**(d) Clarifying mode walks the draft, one pointed detail at a time.**
+
+> Owner's spec: *if a proposed synthesis is "I am experiencing pain in my right
+> foot" then details requiring change should be mined and questions become
+> "This is about pain, correct?" / "This is about your foot, correct?" / "This
+> is about your RIGHT foot, correct?"*
+
+Details are mined from the **weave** (what the banner is actually saying) and
+each is expanded along its refinement chain, so "right foot" yields *foot* then
+*right foot* — the general detail confirmed before the one that distinguishes
+it. The distinguishing words are upper-cased against the parent, so two adjacent
+questions about the same limb read as two different questions.
+
+Walking every detail rather than only the suspect one is deliberate: a
+contradiction surfaces on one value, but a composite draft does not say WHICH
+part is wrong. The walk **localizes** it — the same logic `pin` already uses
+after a rejected proposal. It **ends on the first "no"** (the wrong piece is
+named); if every detail holds, the draft was right and the trigger was a bad
+question.
+
+Confirm questions are **templated, not generated** — zero LLM calls, so a whole
+confirm walk is cheaper than one ordinary question, and it cannot fabricate or
+fail a gate. The `clarify` directive, `_clarify_block` and the two gate
+relaxations added for W2-T were deleted as dead code the same day. `how` gets
+its own frame: it holds verb phrases, and the default reads as broken English
+around them (*"This is about call them, correct?"*, a real live output).
+
+**(e) When every detail holds, the framing is wrong — so DIG.**
+
+> Owner, 2026-09-10: *"Yes to clarifications about the appropriate detail
+> indicate something about framing is wrong. So try different framings. For
+> example, if the detail is who then a dig would try what, when, where, why,
+> how."*
+
+Phase 1 ending in all-yes is not "nothing was wrong" — it says the **details**
+are right and the round is relating them wrongly. Phase 2 therefore **keeps the
+anchor and changes the axis**: a confirmed `who` is dug at from what / when /
+where / why / how, unestablished slots first, since a missing frame is likelier
+to be a dimension nothing has been pinned on.
+
+The two phases close a clarification on **opposite answers**, which is why the
+phase travels on the history entry: a **no** ends a confirm (it localizes the
+wrong detail), a **yes** ends a dig (it *is* the missing frame). Anything else
+moves to the next axis; running out settles nothing and ends nothing.
+
+A dig is the one clarification step that does call the model — *"is this about
+where Rob is?"* is a question, not a template — and it routes through
+`_propose_question` with a `dig` directive so it shares the repeat gate's
+memory, the established set, bans and direction classification with an ordinary
+ask. Note that W2-P re-attribution applies: the mock in the tests tags one
+category whatever it is asked, so `focus_requested` is what keeps the axis
+recoverable — and what stops the walk retrying the same axis forever.
+
+Live, the whole chain in one round:
+
+```
+q03 [CHECK]           "Is it my daughter you want to talk to?"            -> no
+q04 [CLARIFY/confirm] "This is about my daughter, correct?"               -> yes
+q05 [CLARIFY/confirm] "This is about call them, correct?"                 -> yes
+q06 [CLARIFY/dig]     "Are you thinking about showing your daughter a picture?"
+                      anchor=(who, my daughter)  axis=what                -> yes
+```
+
+The anchor is kept verbatim, the angle turns from *who* to *what*, and the yes
+closes the clarification with new information rather than with a shrug.
+
+**The tension this raises, and why the design survives it.** These pointed
+questions are exactly the shape that failed as W2-T's Q2 — a value stripped of
+its context. What makes them safe is that the context moved: it is carried by
+the **mode**, not the question text. Hence the demarcation the owner specified —
+a rule across the conversation, a "Clarifying" flag on the tile, an accent on
+each clarifying turn. The patient HEARS rather than reads, so the frame reaches
+them through the spoken preface instead: *"Let me check this one piece at a
+time —"*, then *"Still checking —"*.
+
+**Confusion stays unnamed.** The cockpit surface added here says the ENGINE is
+clarifying; it never says the person is confused. That distinction is the whole
+of the earlier record-only decision and is unchanged: an exhausted walk records
+`unresolved`, a fact about the dialogue. The caregiver's **Confused ↔ Clear**
+slider remains the only place a judgement about the person is made, by a human.
+
+---
+
+**Live end-to-end** (gemma4, one round, seeded "her right foot has been
+hurting"): 14 questions — 3 checks, 3 clarifying, banner woven. The walk:
+
+```
+q03 [CHECK]   "Do you mean right now?"                  -> no   (contested, scored nothing)
+q04 [CLARIFY] "This is about right now, correct?"
+q05 [CLARIFY] "This is about pain, correct?"
+q06 [CLARIFY] "This is about feet, correct?"
+```
+
+**Bench regression check before merge (09-10), main vs branch, seed 7, n=1 each:**
+
+| scenario | | q | restarts | diags | ready at | yes/no | focus |
+|---|---|---|---|---|---|---|---|
+| foot-pain | main | 12 | 1 | 0 | never | 3/9 | what 8 · where 4 |
+| | **branch** | 12 | 1 | 0 | **q4** | **8/4** | what 3 · where 3 · when 2 · who 4 |
+| call-daughter | main | 5 | 3 | **4** | never | 1/4 | who 4 · how 1 |
+| | **branch** | 12 | **1** | **0** | **q7** | **9/3** | who 3 · **how 5** · where 2 · when 1 · why 1 |
+| rob-kitchen | main | 7 | 2 | **4** | never | 0/7 | who 5 · how 1 · what 1 |
+| | branch | 12 | 6 | 1 | never | 1/11 | who 10 · how 2 |
+
+**The stop condition did not fire.** `how` is a CORE facet in `my_people` and
+the worry was that re-filing it to `why` would starve it: instead call-daughter
+focused `how` **five times against main's one** and went from a round that died
+at q5 with four diagnostics to one that reached readiness at q7.
+
+`rob-kitchen` is bad on **both** sides — and worse on main by the measures that
+matter (four diagnostics to one, zero yeses to one, dead at q7 rather than
+running to the cap). It is the dishes round's lineage and the hardest scenario
+on the board; its collapse is pre-existing, not caused by this work.
+
+**Not claimed:** n=1 per scenario on a single seed, on an instrument this repo
+has already recorded as *a good veto and a poor endorser*. This clears the merge
+gate by failing to veto. It does not validate the fixes — the live trial does.
+
+**Touches:** `dialogue` (`_verify_due` rewrite, `_score_conflict`,
+`_clarify_details`/`_clarify_question`/`_clarify_action`, `_clarify_state`
+rewrite, `RoundEvent.clarifying`), `reasoner` + `prompts` (dead W2-T path
+removed), `api` (`EventOut.clarifying`), `web` (demarcation, flag, styles),
+`dump_recording`, `bench`, tests. **Replay-safe:** all clarify state stays
+DERIVED from history.
+
+**Consequence worth knowing.** Checking every new detail consumes questions, and
+several existing tests failed for an honest reason — a fixed drive of N answers
+no longer reaches the same board. One test mock also had no DOUBLE-CHECK branch
+at all; that was harmless while checks were rare and threw the round into
+restart recovery once they were routine. Any new mock driving a round needs that
+branch.
+
+### W2-V · An unfillable slot must not absorb the round — Status: PROPOSED (09-10, §1h D1)
+
+**Problem.** The largest single waste in the wrist round: ~25 of 57 questions
+went to `why`/`how` while `where` sat at `arm` and the target was `wrist`. Two
+rules compound:
+
+1. focus priority 4 — *every core slot confident → probe an EMPTY modifier* —
+   picks `why`, which for a broken wrist has no answer worth having;
+2. `_run_working` treats **kinda** as "this run is producing", so a run of
+   kindas extends past `MAX_CATEGORY_RUN` **without bound**. Nine kindas held
+   the slot for twenty-five questions.
+
+Rule 2 is the load-bearing one, and its own docstring gives the intent away:
+*"Lets a working drill-ladder extend past MAX_CATEGORY_RUN; the first miss
+(no / not-sure) ends the extension."* A ladder that climbs on kindas is not
+working — it is a slot that cannot resolve.
+
+**Proposal (needs owner iteration — this is the focus policy).**
+(a) Cap the working extension: a run may extend, but not indefinitely —
+`MAX_CATEGORY_RUN + n` total, or require a **yes** (not a kinda) to extend.
+(b) Declare a modifier slot EXHAUSTED after k consecutive non-yes probes and
+drop it from the priority-4 pool for the rest of the segment, the way
+`_futile_pair` already retires a dead avenue.
+(c) Re-open a confident-but-coarse core slot for drilling when no modifier is
+making progress — `where: arm` with nothing beneath it is not finished.
+
+**Note:** D2's fix (aggravation → `why`) may reduce this on its own, since `why`
+was empty *because* its answers were being filed under `how`. **Measure before
+building** — this is exactly the case where the next trial tells us whether
+there is anything left to fix.
+
+### W2-W · Role-separated review agents — Status: PROPOSED (owner, 09-10)
+
+**Owner's proposal.** Define multiple agents with clear roles: a **question
+proposer**, a **grammatical expert**, a **physician**, and a **logical mock
+patient** that pushes back — *"is this logical given emergent details?"*, *"I
+just told you this is about my arm so obviously it is not about someone else's
+arm."* The logistician is also the intended guard for the §1h root cause: under
+"my body", once `pain` has emerged, the round should never ask what the patient
+*wants* pain for.
+
+**Why this is the right diagnosis.** Every defect in §1h is a question that a
+competent reader would have caught before it was asked:
+
+| Live question | Which role catches it |
+|---|---|
+| *"You want to lifting things, correct?"* | grammarian |
+| *"Do you want to lift things?"* (after "lifting makes it worse") | logistician |
+| *"Are you talking about this pain with your spouse?"* ×4 | logistician |
+| 25 cause questions, 3 location questions, for a suspected fracture | physician |
+
+**The cost, stated honestly.** Latency is already the binding constraint —
+9.6 s/question, 86% of it the deliberate phase, and W2-S measured that adding
+prompt constraint makes *this* model fail harder, not better. A four-role
+review pass is 4× the calls on every question. That is the thing to design
+around, not to discover afterwards.
+
+**Cheaper shapes worth costing first, in ascending order:**
+
+1. **The grammarian is not a model.** D3 was fixed with one form test and a
+   19-word denylist. Deterministic text rules already carry `_META_PHRASES`,
+   `action_like` and `is_repeat`; grammar belongs with them, at zero latency.
+2. **The logistician is mostly a board query.** *"I just told you it's my arm"*
+   is `where` already confirmed; *"why would I want pain?"* is a symptom `what`
+   under a body topic. Both are readable off the board with no model call — and
+   a code-level guard cannot itself hallucinate.
+3. **The physician is a topic prior, not a reviewer.** "Suspected fracture →
+   ask location, onset, and whether it can bear weight, before cause" is a
+   per-topic question ORDER. `topics.yaml` already carries `core_facets`,
+   `facet_priority` and `reasoning_hint`; §1h says those are right for
+   physical_health and were simply overridden by the priority-4 rule.
+4. **Only the adversarial patient plausibly needs a model**, and only as a
+   gate on the drafted question — one extra fast call, not four.
+
+**Open question for iteration:** whether roles 1–3 as deterministic checks get
+most of the benefit at none of the latency, leaving a single adversarial
+reviewer as the only new model call. §1h suggests they might: three of the four
+rows in the table above are decidable from the board and the question text
+alone.
+
+**Depends on:** a decision about W2-V first — if the round stops wasting 25
+questions on an unfillable slot, the review pass has much less to catch.
+
+### W2-X · Explore/exploit driven by board score — Status: PROPOSED (owner, 09-11)
+
+**Owner's proposal.** *"We are exploring locked details too frequently instead
+of focusing exploration towards low scoring topics of the consensus board. We
+should plan a mechanism that explores more for low scores and exploits for high
+scores."*
+
+**It has a mechanical cause, and it is dead code.** `_pick_focus` sorts the
+drill pool on `(not core, established, facet_priority, mass)` and its docstring
+promises *"weakest family last as the final tie-break"*. `facet_priority` gives
+every category a **unique** index, so no two slots ever tie on key 3 — **key 4
+is unreachable and the weakest-slot rule has never once fired.** On the §1i
+board, moving mass ahead of priority flips the target from `what` to `where`.
+
+**Two levers are conflated, and neither is score-aware:**
+
+*(a) WHICH slot.* Keep core-first and unestablished-before-established (that is
+coverage), then rank by **ascending mass**, demoting `facet_priority` to the
+final tie-break. It still earns its keep — my_people ranks `where` last because
+it is usually implied — it just stops overriding "this slot knows nothing".
+
+*(b) HOW to ask — explore vs exploit.* Today one global coin flip,
+`explore_decay ** (yeses + 1)`. That is a **round-level** quantity and it is the
+wrong one: §1i had 32 yeses, so exploration had decayed to ~0 at exactly the
+moment `where` still had no real answer. The round looked settled; the slot did
+not. Replace it with a per-slot **settledness** `s(c) ∈ [0,1]` from the two
+quantities `family_confident` already uses — leading family mass against
+`ready_points`, and the margin over the runner-up — then
+`p_explore(c) = 1 − s(c)`.
+
+One quantity drives both: **rank slots by ascending `s`, explore in proportion
+to `1 − s`.** Retirement stays as the hard cutoff at the top end.
+
+**Depends on W2-Y.** Settledness is read off the board, so a *false* settle
+defeats it — and §1i has one. `1 − s` only aims attention correctly if `s` is
+honest.
+
+### W2-Y · Vacuous placeholders beyond the four-word list — Status: PROPOSED (09-11, §1i)
+
+**Problem.** `where: "one specific area of your body" +4.0` led the slot while
+`arm` / `forearm` / `wrist` sat at +1.0. `facets._VACUOUS` is
+`feel / feeling / thing / stuff` and `is_vacuous` only rejects a value made up
+ENTIRELY of those — scoped to the §1d phrase that prompted it.
+
+**Why it is the keystone:** it defeats W2-X's settledness, defeats Gate 4's
+redundancy suppression (the real value never becomes "established"), and blocks
+the draft weave. Three §1i symptoms, one cause.
+
+**Proposal sketch (needs owner iteration).** A placeholder is a value that
+identifies nothing *in its own slot*: "one specific area of your body" is a
+perfectly good English phrase and a useless `where`. Candidates — a per-slot
+placeholder-stem list (`area`, `part`, `place`, `side` alone for `where`;
+`feeling`, `sensation` alone for `what`), a head-token check against the slot's
+own gloss, or refusing values that merely restate the question's own framing
+("one specific area of your body" is the wording of the question that asked it).
+**Risks:** over-rejecting real values — "my side" is a legitimate `where`. The
+existing rule is deliberately narrow for that reason, so widening it wants the
+bench and a replay against §1h/§1i before it lands.
+
 ### W3-I · Mass-scaled confidence checks — Status: PROPOSED
 
 **Problem (audit F1/F2; A5).** Absolute thresholds (ready 2.0 / margin 1.0 /
@@ -1622,10 +2320,25 @@ construction), then let the bench pick defaults for long rounds.
 W2-G existing so the change is measured, not vibed. **Acceptance:** bench:
 fewer late-round fail-loops at unchanged early-round behavior.
 
-### W4-J · Fatigue-aware stopping — Status: PROPOSED
+### W4-J · Fatigue-aware stopping — Status: REJECTED (owner, 09-10)
 
-**Problem (audit G6).** "Never self-end" is right, but the engine happily
-asks 95 questions; fatigue is a clinical cost the policy never sees.
+> **Rejected 09-10, owner decision.** *"This is not a terminal condition, the
+> model should persist with questioning and attempting to build context until
+> the user is happy. Fatigue is not an issue. The interviewee can quit when
+> they please."*
+>
+> The premise below — that fatigue is a clinical cost the policy must model —
+> is declined for this patient: **the caregiver and patient end the session,
+> and the engine has no standing to anticipate that for them.** The parts of
+> the proposal that were actually about question *quality* rather than stopping
+> already shipped anyway: W1-B retirement stops re-drilling a settled slot, and
+> W1-C's ready-glow is exactly the "ready to propose" cue, without the stopping
+> logic attached. The query cap stays the only terminator, and it stays off by
+> default. Reopen only if a caregiver asks for it.
+
+**Problem (audit G6) — the rejected premise.** "Never self-end" is right, but
+the engine happily asks 95 questions; fatigue is a clinical cost the policy
+never sees.
 
 **Proposal.** Once every non-retired core slot is confident and the weave is
 stable (W1-C's comparison), modifier questions must justify themselves: stop
@@ -1666,14 +2379,20 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W2-F | Verify-on-lock + repeat exemption | **IMPLEMENTED** (06-11) — but see W2-L: §1d found it unsafe in production |
 | **W2-G** | **Noise bench** | **IMPLEMENTED (09-08)** — gate **F2**: ε-noise, `--compare`, §1 metrics read off the round record, 15 tests. Fixed two defects in the instrument (unreachable accept gate, `not_sure`-biased simulator) |
 | **W2-K** | **Value identity — anchoring + folding** | **IMPLEMENTED (09-08)** — drill-down restored; verified by replay (`right side › right leg › right thigh`) |
-| W2-L | Verify-turn safety | **PARTLY IMPLEMENTED (09-08)** — wording fixed; the verify-no scoring question stays open (owner-decided, wants the bench) |
+| **W2-L** | **Verify-turn safety** | **IMPLEMENTED** — wording 09-08; the scoring half closed 09-10 by W2-T (a verify-no scores nothing and opens an anchored split) |
 | **W2-M** | **Caregiver-note fidelity** | **IMPLEMENTED (09-09)** — the note is the anchor, never the board; half the spec was already fixed by W2-K |
 | W2-N | Restart keeps the profile prior | **IMPLEMENTED (09-08)** — one line |
 | **W2-O** | **Autopsy instrumentation** | **IMPLEMENTED (09-08)** — record carries seed context, per-query banner/timing/rejections, restart positions, pending question; **F2 precondition cleared** |
 | **W2-P** | **Focus/content divergence** | **IMPLEMENTED (09-09)** — re-attribution, NOT the specified gate (see W2-S). First bench run ever to reach readiness (2/9). Axis guard still unbuilt |
-| W2-Q | `yes_memory` integrity + same-session read-back | PROPOSED (09-08, §1d C7) |
+| **W2-Q** | **`yes_memory` integrity + same-session read-back** | **CLOSED (09-10)** — integrity implemented (uuid round id, session id, one UTC clock); read-back **DECLINED** by owner as a two-layer violation, in-round contradictions covered by W2-T. Cross-round case knowingly left uncaught |
 | **W2-R** | **Draft does not follow the leader** | **IMPLEMENTED (09-09)** — drill-inferred edges, parented to the FRONTIER. Measured on the bench: round health up (farming yeses to zero, diagnostics halved), **convergence and readiness unmoved at 0/9**. Kept, not claimed as a win |
 | W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |
 | W2-S | Prompt-side re-ask reduction | **TRIED AND REJECTED (09-09)** — measured 3 ways; constraining the model more doubled diagnostics and early-ending rounds. Latency lever is not prompt-side. See §1e |
+| **W2-T** | **Clarifying mode** | **IMPLEMENTED (09-10)** — a contradicted double-check scores NOTHING and opens a clarification; never terminal. Owner-proposed; closes W2-L and W2-Q. Its anchored-restore question was superseded the same day by W2-U's detail walk |
+| **W2-U** | **Check every new detail · conflict trigger · gated detail walk · the dig** | **IMPLEMENTED (09-10)** — checks fire on the draft's new details (1-in-56 → 1-in-4.7 live, 0.4 s each); a rise-then-fall score is a second clarify trigger (1 per 26 q, 65% of rounds never fire); the mode is GATED on a scored detail existing; clarifying confirms the draft in templated questions at ZERO LLM calls, then DIGS — anchor held, axis turned — when every detail holds. Demarcated in the cockpit. Owner-directed |
+| **W2-V** | **An unfillable slot absorbs the round** | PROPOSED (09-10, §1h D1) — ~25 of 57 questions lost to `why` because a run of KINDAS extends the rotation guard without bound. Needs owner iteration (focus policy); D2's fix may shrink it first — measure |
+| **W2-W** | **Role-separated review agents** (proposer · grammarian · physician · logistician) | PROPOSED (owner, 09-10) — right diagnosis of §1h; the open question is how much of it is deterministic. 3 of the 4 catches are decidable from the board and question text with no model call |
+| **W2-X** | **Explore/exploit driven by board score** | PROPOSED (owner, 09-11) — the "weakest slot" tie-break in `_pick_focus` is provably UNREACHABLE; `what` drew 32 of 69 focuses at 16.5 mass while `where` drew 9 at 7.0. Per-slot settledness should drive both slot ranking and explore probability. Depends on W2-Y |
+| **W2-Y** | **Vacuous placeholders beyond the four-word list** | PROPOSED (09-11, §1i) — **the keystone**: `where: "one specific area of your body" +4.0` beat arm/forearm/wrist at +1.0, which defeats W2-X's settledness, Gate 4's redundancy suppression, and the draft weave |
 | W3-I | Mass-scaled confidence | PROPOSED |
-| W4-J | Fatigue-aware stopping | PROPOSED |
+| W4-J | Fatigue-aware stopping | **REJECTED (owner, 09-10)** — fatigue is not a cost this engine models; the caregiver and patient end the session |

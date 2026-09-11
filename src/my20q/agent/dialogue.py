@@ -99,11 +99,48 @@ MAX_CATEGORY_RUN = 2
 #: down one avenue).
 FUTILE_STREAK = 4
 
-#: Double-check (verify-on-lock) turns allowed per round. A pair that turns
-#: confident on a SINGLE yes — or on a caregiver boost the patient never
-#: confirmed — gets one gate-exempt re-ask before the engine builds on it;
-#: the budget keeps verification from ever feeling like nagging.
-VERIFY_BUDGET = 2
+#: Double-checks are no longer capped per round (owner, 2026-09-10). Every new
+#: detail the draft picks up gets confirmed once, so the caregiver can hold one
+#: invariant: *the banner never says anything you have not confirmed twice.* The
+#: old budget of 2 existed only because a contradicted check used to DESTROY the
+#: belief (W2-L) — W2-T removed that cost, and a verify is a single LLM call
+#: against a normal question's two, making it the cheapest question asked.
+#:
+#: What is capped is a RUN. Each pair is checked at most once ever, so the
+#: natural rate is set by how often a new detail appears; the failure mode left
+#: is several landing at once — a caregiver note crediting three slots would
+#: draw three consecutive "just to double-check" turns and read as an
+#: interrogation. Two in a row is fine and often right (a note that lands two
+#: details deserves two checks); a third must wait behind an ordinary question.
+VERIFY_MAX_RUN = 2
+
+#: Ceiling on one clarification episode. The detail walk is normally bounded by
+#: how many details the draft has; this is the backstop for a draft that somehow
+#: mines more. Running out is never a failure and never ends anything.
+MAX_CLARIFY_QUERIES = 8
+
+#: The clarifying-mode question frame (owner-specified, 2026-09-10). Pointed and
+#: deterministic — in clarifying mode the CONTEXT is carried by the mode itself
+#: (the banner shows the sentence, the conversation is demarcated, and the
+#: spoken preface announces the walk), which frees each question to name exactly
+#: one detail. Costs ZERO LLM calls, so a whole walk is cheaper than one
+#: ordinary question.
+CLARIFY_FRAME = "This is about {value}, correct?"
+CLARIFY_FRAME_WHY = "This is because of {value}, correct?"
+#: `how` holds VERB phrases — "call them", "bring it", "tell them something" —
+#: and the default frame reads as broken English around them ("This is about
+#: call them, correct?", seen in the first live run). But `how` ALSO holds
+#: gerunds, and this frame breaks on those the other way: "You want to lifting
+#: things, correct?" was spoken to a patient in the second live run, and the
+#: caregiver kept reaching for the opposition button to escape it. The frame is
+#: therefore chosen by the value's grammatical FORM, not by its slot.
+CLARIFY_FRAME_HOW = "You want to {value}, correct?"
+
+#: Spoken once, at the top of a clarification — the patient HEARS the questions
+#: rather than reading the banner, so the frame the demarcation gives the
+#: caregiver has to reach them some other way.
+CLARIFY_PREFACE_OPEN = "Let me check this one piece at a time —"
+CLARIFY_PREFACE = "Still checking —"
 
 _NO_LLM_TEXT = (
     "No language model is configured, so questions cannot be generated. "
@@ -132,6 +169,11 @@ class RoundEvent:
     # The question this one replaced via the opposition button — lets the
     # cockpit mark a flipped question instead of presenting it as a new turn.
     flipped_from: str = ""
+    # The round is CLARIFYING: confirming the draft one detail at a time after
+    # a contradiction. The cockpit demarcates the conversation and shows a
+    # "clarifying" banner, so the pointed questions read as a deliberate pass
+    # over the draft rather than the engine losing the thread.
+    clarifying: bool = False
 
 
 class Round:
@@ -337,6 +379,26 @@ class Round:
             entry["flipped_from"] = pending.flipped_from
         if pending.kind == "query" and pending.verify:
             entry["verify"] = True
+            # W2-T: a double-check answered "no" CONTRADICTS a pair the board
+            # holds confidently — `_verify_due` fires on nothing else. Scoring
+            # it erases the confirmation on the strength of a question that
+            # dropped the very context which made that confirmation mean
+            # something ("Is there tingling in your toes?" yes → "Is it
+            # tingling?" no, which halved the pair and killed the 09-01 round).
+            # Mark it CONTESTED instead: replay scores it as nothing, and the
+            # anchored clarification that follows carries the real evidence —
+            # in whichever direction it points.
+            if a is Answer.NO:
+                entry["contested"] = True
+        if pending.kind == "query" and pending.clarify:
+            entry["clarify"] = True
+            # "confirm" put a scored detail to the person; "dig" kept a
+            # confirmed detail and changed the axis. The two close a
+            # clarification on opposite answers, so the phase has to be on the
+            # entry — a no ends a confirm, a yes ends a dig.
+            entry["clarify_phase"] = pending.clarify_phase or "confirm"
+            if pending.clarify_detail:
+                entry["clarify_detail"] = list(pending.clarify_detail)
         if pending.kind == "query" and pending.refines:
             entry["refines"] = dict(pending.refines)
         # What the controller was drilling into (W2-R). Recorded on every drill,
@@ -493,6 +555,16 @@ class Round:
         self._consec_failures = 0
         self.engine = "reasoning"
         self._superseded.append(pending.content)
+        # A flip during a clarification stays PART of that clarification. The
+        # flipped action is built fresh by the reasoner, so without this it
+        # loses the mode (the cockpit drops the demarcation) and, worse, the
+        # walk never registers that this detail was put to the person and
+        # re-issues the identical templated question on the very next turn.
+        if pending.clarify:
+            action.clarify = True
+            action.clarify_phase = pending.clarify_phase
+            action.clarify_detail = pending.clarify_detail
+            action.focus_requested = pending.focus_requested or pending.focus
         if self.topic.direction:
             who_names = [v for v, _ in facets.live(board, "who")]
             if action.slots.get("who"):
@@ -570,10 +642,28 @@ class Round:
 
             board = self._replay_board()
             focus = ""
-            pair = self._verify_due(board)
-            if pair is not None:
-                # Verify-on-lock: double-check a pair that turned confident
-                # on a single answer before building on it.
+            clarify = self._clarify_state()
+            if clarify is not None and not clarify["unresolved"]:
+                # CLARIFYING MODE outranks everything, including the
+                # double-check that may have opened it: the board is
+                # confidently wrong, so there is no other progress worth
+                # making. Confirming a detail is templated — no LLM call at
+                # all; digging at a confirmed anchor is a real question and
+                # goes through the model, but only on the rarer branch where
+                # every detail has already held.
+                if clarify["phase"] == "confirm":
+                    action = self._clarify_action(clarify)
+                    focus = action.focus
+                else:
+                    action, board, focus = await self._propose_question(
+                        seg, dig=clarify
+                    )
+                    action.clarify = True
+                    action.clarify_phase = "dig"
+                    action.preface = CLARIFY_PREFACE
+            elif (pair := self._verify_due(board)) is not None:
+                # Confirm a new detail the draft has picked up, before the
+                # round builds anything else on top of it.
                 action = await self._reasoner.verify(
                     category=pair[0],
                     value=pair[1],
@@ -1112,13 +1202,23 @@ class Round:
         return out
 
     async def _propose_question(
-        self, seg: list[dict]
+        self, seg: list[dict], *, dig: dict | None = None
     ) -> tuple[ReasonerAction, facets.Board, str]:
-        """Ask the next question at the controller-chosen focus slot."""
+        """Ask the next question at the controller-chosen focus slot.
+
+        ``dig`` overrides the focus policy for a clarification's phase-2 turn:
+        the anchor is a detail the person has just confirmed, and the focus is
+        the axis being tried instead. Everything else — the repeat gate's
+        memory, the established set, bans, direction classification — is shared
+        with an ordinary ask, which is the whole reason it routes through here.
+        """
         assert self._reasoner is not None
         T = self.tuning
         board = self._replay_board()
-        focus, directive, split_pair = self._pick_focus(board, seg)
+        if dig is not None:
+            focus, directive, split_pair = dig["axis"], "dig", None
+        else:
+            focus, directive, split_pair = self._pick_focus(board, seg)
         # Exploration DECAYS as yeses accrue toward synthesis — probe a fresh
         # value (profile dropped) with probability explore_decay**(yeses+1).
         # The yes-count resets after each synthesis attempt and each restart,
@@ -1152,6 +1252,7 @@ class Round:
             focus=focus,
             directive=directive,
             split_pair=split_pair,
+            anchor=dig["anchor"] if dig is not None else None,
             history=self._history,
             edges=self._edges,
             asked=asked,
@@ -1218,18 +1319,21 @@ class Round:
     ) -> tuple[str, str, tuple[str, str] | None]:
         """Choose the focus slot + directive — the question-strategy policy.
 
+        Runs only when the round is NOT clarifying and no detail is owed a
+        double-check; `_advance` handles both of those ahead of this.
+
         Priorities (code decides strategy; the model only does language):
-        0. PIN the weakest slot of a just-rejected utterance — a kinda/no on a
+        1. PIN the weakest slot of a just-rejected utterance — a kinda/no on a
            proposal means one of its details is off; target it instead of
            re-confirming the parts that already scored (this automates the
            "FOCUS on WHAT" note the caregiver had to type in two trials).
-        1. PROBE a core slot with no positively-led contender — coverage first,
+        2. PROBE a core slot with no positively-led contender — coverage first,
            so synthesis is never missing its essential pieces.
-        2. SPLIT a slot whose top two contenders are tied — matching scores
+        3. SPLIT a slot whose top two contenders are tied — matching scores
            carry no decision, so separate them.
-        3. Every core slot confident → PROBE an empty modifier slot (fresh
+        4. Every core slot confident → PROBE an empty modifier slot (fresh
            coverage beats re-drilling).
-        4. DRILL a LIVE slot — any slot with a positive leader, core or not,
+        5. DRILL a LIVE slot — any slot with a positive leader, core or not,
            that has not RETIRED. Core slots outrank modifiers; unestablished
            leaders outrank established ones (coverage first); then the
            topic's ``facet_priority`` order (data, not logic — e.g. my_people
@@ -1271,7 +1375,7 @@ class Round:
                     return c
             return None
 
-        # 0. After a rejected utterance: pin its weakest used slot until it is
+        # 1. After a rejected utterance: pin its weakest used slot until it is
         #    confident (then fall through to the normal policy).
         last_syn = next(
             (h for h in reversed(seg) if h.get("kind") == "synthesis"), None
@@ -1293,7 +1397,7 @@ class Round:
                 if fresh(cat):
                     return cat, "pin", None
 
-        # 1. Unestablished core slots — no family confirmed above zero yet.
+        # 2. Unestablished core slots — no family confirmed above zero yet.
         open_core = []
         for cat in core:
             fams = facets.families(board, cat, self._edges)
@@ -1303,13 +1407,13 @@ class Round:
         if cat is not None:
             return cat, "probe", None
 
-        # 2. Tied top contenders anywhere (core first) — split them.
+        # 3. Tied top contenders anywhere (core first) — split them.
         for cat in core + others:
             pair = facets.tied_top(board, cat, margin=T.facet_split_margin)
             if pair is not None and fresh(cat):
                 return cat, "split", (pair[0][0], pair[1][0])
 
-        # 3. Every core slot is confident → enrich an empty modifier slot.
+        # 4. Every core slot is confident → enrich an empty modifier slot.
         if all(self._family_confident(board, c) for c in core):
             open_other = []
             for c in others:
@@ -1320,7 +1424,7 @@ class Round:
             if alt is not None:
                 return alt, "probe", None
 
-        # 4. Drill a live slot (core or not; retired slots are out —
+        # 5. Drill a live slot (core or not; retired slots are out —
         #    re-drilling a settled answer is the metronome). Rank: core block
         #    first; within a block, UNESTABLISHED families (below ready) before
         #    established ones (coverage is information; refinement can wait);
@@ -1480,7 +1584,10 @@ class Round:
             if kind != "query":
                 continue
             answer = h.get("answer")
-            if answer == Answer.NOT_SURE.value:
+            if answer == Answer.NOT_SURE.value or h.get("contested"):
+                # W2-T: a contested double-check must never mark its own value
+                # as an exhausted avenue — that would forbid the very question
+                # the clarification is about to ask.
                 continue
             if answer != Answer.NO.value:
                 break
@@ -1501,18 +1608,53 @@ class Round:
         return None
 
     def _verify_due(self, board: facets.Board) -> tuple[str, str] | None:
-        """The (category, leader) pair owed a double-check, if any.
+        """The (category, value) pair owed a double-check, if any.
 
-        Verify-on-lock: a slot whose leader is CONFIDENT on the strength of
-        at most one patient yes — one noisy answer, or a caregiver-context
-        boost the patient never confirmed at all — gets one gate-exempt
-        re-ask before the engine builds on it (Rényi–Ulam: re-ask under
-        noise; SCA: verify what matters). Never re-verify a pair; never
-        exceed VERIFY_BUDGET per round; >= 2 yeses never need it. Core slots
-        are checked first.
+        **Verify every NEW DETAIL the draft picks up** (owner, 2026-09-10).
+        Whenever a slot's FRONTIER — the value the banner is actually weaving —
+        rests on at most one patient yes, confirm it once, so the caregiver can
+        hold one invariant: *the draft never says anything you have not
+        confirmed twice.* (Rényi–Ulam: re-ask under noise; SCA: verify what
+        matters.) Never re-check a pair, never check a value the caregiver
+        chose herself, and never more than VERIFY_MAX_RUN in a row.
+
+        This used to additionally require the slot to be family-CONFIDENT,
+        which shut the window almost always: a detail with one yes is not
+        confident enough to qualify, and the usual way it becomes confident is
+        by earning the SECOND yes — which then disqualifies it. Measured across
+        every recorded round, that fired **once per 56 questions**, 77% of
+        rounds never checked anything at all, and 30 of the 35 checks that did
+        happen were on values a caregiver NOTE had lifted over the bar — while
+        63% of all confirmed details rest on exactly one answer. The confidence
+        condition is gone; the rate limit replaces the per-round budget.
         """
+        # A run of checks at the tail — several details landing at once.
+        run = 0
+        for h in reversed(self._history):
+            if h.get("kind") != "query":
+                continue
+            if not h.get("verify"):
+                break
+            run += 1
+        if run >= VERIFY_MAX_RUN:
+            return None
+
+        # The pairs the question IMMEDIATELY BEFORE this one asserted. Re-asking
+        # one of them on the very next turn is asking the same thing twice in a
+        # row, whatever the engine calls it — the check is still owed, it just
+        # waits a turn. Read off the last ENTRY, not the last query: a caregiver
+        # note landing between the two is precisely the case where an immediate
+        # check is right, because the patient never confirmed that detail at all.
+        last = self._history[-1] if self._history else None
+        just_asserted: set[tuple[str, str]] = (
+            {(c, v) for c, v in (last.get("slots") or {}).items()}
+            if last is not None
+            and last.get("kind") == "query"
+            and not last.get("verify")
+            else set()
+        )
+
         verified: set[tuple[str, str]] = set()
-        spent = 0
         yes_counts: dict[tuple[str, str], int] = {}
         for h in self._history:
             if h.get("kind") == "edit":
@@ -1531,7 +1673,6 @@ class Round:
             if h.get("kind") != "query":
                 continue
             if h.get("verify"):
-                spent += 1
                 for cat, val in (h.get("slots") or {}).items():
                     verified.add((cat, val))
             if h.get("answer") == Answer.YES.value:
@@ -1544,24 +1685,372 @@ class Round:
                 if d in facets.DIRECTION_BUCKETS:
                     pair = ("how", facets.DIRECTION_BUCKETS[d])
                     yes_counts[pair] = yes_counts.get(pair, 0) + 1
-        if spent >= VERIFY_BUDGET:
-            return None
         core = self._core_facets()
         muted = self._edit_mutes()
         others = [
             c for c in facets.CATEGORIES if c not in core and c not in muted
         ]
         for cat in core + others:
-            if not self._family_confident(board, cat):
-                continue
-            # Verify the FRONTIER — the value the draft would actually weave.
+            # Check the FRONTIER — the value the draft is actually weaving.
             top = facets.frontier(board, cat, self._edges)
-            if top is None:
+            if top is None or top[1] < facets.YES_POINTS:
+                # Below one full answer the frontier is a stand-in, not a
+                # detail the draft is committing to. Checking it would spend a
+                # question confirming a shrug.
                 continue
             pair = (cat, top[0])
-            if pair not in verified and yes_counts.get(pair, 0) <= 1:
+            if pair in verified or pair in just_asserted:
+                continue
+            if yes_counts.get(pair, 0) <= 1:
                 return pair
         return None
+
+    def _clarify_action(self, state: dict) -> ReasonerAction:
+        """The next pointed confirm of a clarification walk — no LLM call.
+
+        Templated on purpose. In clarifying mode the context is carried by the
+        MODE — the banner shows the sentence, the conversation is demarcated,
+        and the preface announces the walk aloud — which frees each question to
+        name exactly one detail. That also makes a whole walk cheaper than a
+        single ordinary question, and it cannot fabricate or fail a gate.
+        """
+        cat, value = state["next"]
+        why = (
+            "a double-check contradicted a detail the person had confirmed"
+            if state["reason"] == "contradicted"
+            else "this detail's support rose and then started to fall"
+        )
+        return ReasonerAction(
+            kind="query",
+            content=self._clarify_question(cat, value, state["parent"]),
+            rationale=f"Clarifying — {why}. Confirming the draft one detail at a time.",
+            preface=(
+                CLARIFY_PREFACE_OPEN if state["asked"] == 0 else CLARIFY_PREFACE
+            ),
+            slots={cat: value},
+            focus=cat,
+            clarify=True,
+            clarify_phase="confirm",
+            clarify_detail=(cat, value),
+        )
+
+    def _score_conflict(self) -> dict | None:
+        """A detail whose score ROSE and then FELL — the conflict signal (W2-U).
+
+        Owner's rule (2026-09-10): *a solid detail should exhibit monotonic
+        scores.* A value that climbs and then drops means either the belief is
+        genuinely in conflict or the questions about it are bad — and in both
+        cases the round should stop guessing and go and check. A value that only
+        ever fell was never believed: that is an ordinary wrong guess, not a
+        conflict, which is why a peak of at least one full answer is required.
+
+        Only drops caused by an ANSWER count. A caregiver edit floors a value
+        deliberately, which is the caregiver being right, not a conflict.
+
+        Measured across every recorded round: **one per 26 questions**, with 65%
+        of rounds never triggering — a live signal, not a constant one.
+        """
+        seg_start = len(self._history) - len(self._segment())
+        peak: dict[tuple[str, str], float] = {}
+        prev: dict[tuple[str, str], float] = {}
+        found: dict | None = None
+        asked = 0
+        for i in range(seg_start, len(self._history) + 1):
+            board = self._replay_board(upto=i)
+            entry = self._history[i - 1] if i > seg_start else None
+            by_answer = entry is not None and entry.get("kind") == "query"
+            if by_answer and entry is not None and entry.get("answer"):
+                asked += 1
+            for cat in facets.CATEGORIES:
+                for val, score in board.get(cat, {}).items():
+                    key = (cat, val)
+                    top = max(peak.get(key, score), score)
+                    peak[key] = top
+                    before = prev.get(key)
+                    prev[key] = score
+                    if before is None or not by_answer:
+                        continue
+                    if score < before and top >= facets.YES_POINTS:
+                        found = {
+                            "category": cat,
+                            "value": val,
+                            "peak": top,
+                            "score": score,
+                            "at_query": asked,
+                        }
+        return found
+
+    def _clarify_details(self, board: facets.Board) -> list[tuple[str, str]]:
+        """The draft's details, coarse→fine — what a clarification walks.
+
+        Mined from the WEAVE (what the banner is actually saying) and expanded
+        along each value's refinement chain, so "right foot" yields both "foot"
+        and "right foot". The walk therefore confirms the general detail before
+        the distinguishing one, which is how the owner specified it:
+
+            "This is about pain, correct?"
+            "This is about your foot, correct?"
+            "This is about your RIGHT foot, correct?"
+
+        Walking every detail rather than only the suspect one is deliberate. A
+        contradiction surfaces on one value, but a composite draft does not say
+        WHICH part is wrong — a "no" to pain-in-the-right-foot may be about the
+        foot. The walk localizes it; that is the same logic the `pin` directive
+        already uses after a rejected proposal.
+        """
+        out: list[tuple[str, str]] = []
+        weave = self._weave(board)
+        for cat in self._facet_order():
+            val = weave.get(cat)
+            if not val:
+                continue
+            for node in facets.chain(self._edges.get(cat, {}), val):
+                if (cat, node) not in out:
+                    out.append((cat, node))
+        return out
+
+    @staticmethod
+    def _clarify_question(category: str, value: str, parent: str = "") -> str:
+        """One pointed confirm for a single detail.
+
+        When the detail REFINES another, the words that distinguish it are
+        upper-cased, so the contrast against the parent just confirmed is
+        visible: "foot" → "This is about RIGHT foot, correct?". That emphasis is
+        for the caregiver reading it — piper voices the word the same either
+        way — and it is what makes two adjacent questions about the same limb
+        read as two different questions.
+        """
+        shown = value
+        if parent:
+            pset = {w.strip(".,!?'\"").casefold() for w in parent.split()}
+            shown = " ".join(
+                w if w.strip(".,!?'\"").casefold() in pset else w.upper()
+                for w in value.split()
+            )
+        if category == "why":
+            frame = CLARIFY_FRAME_WHY
+        elif category == "how" and not facets.gerund_led(value):
+            # "call them" / "bring it" need the infinitive frame; "lifting
+            # things" is already a noun phrase and takes the plain one.
+            frame = CLARIFY_FRAME_HOW
+        else:
+            frame = CLARIFY_FRAME
+        return frame.format(value=shown)
+
+    def _clarify_state(self) -> dict | None:
+        """The open clarification, if any — the mode, its walk, and its next ask.
+
+        DERIVED from history and never stored — like `_verify_due` and
+        `_futile_pair` — so undo rewinds the mode for free.
+
+        **Two triggers** (owner, 2026-09-10), both meaning "the board is
+        confidently wrong and guessing further is waste":
+
+        1. a double-check answered "no" (that entry is marked `contested`);
+        2. a detail whose score rose and then fell — see `_score_conflict`.
+
+        **Gated on there being something to clarify** (owner, 2026-09-10). The
+        objects of a clarification are the SCORED details — the values the draft
+        is actually built from. With none of those on the board there is nothing
+        to talk about and the mode must not open at all; a trigger whose value
+        has already fallen out of the draft would otherwise leave the round
+        interrogating a phantom, which is what the first live run did.
+
+        **Phase 1 — CONFIRM.** Each scored detail in turn, the conflicted one
+        first, coarse→fine. A "no" LOCALIZES the error onto one detail and ends
+        the clarification; normal questioning resumes with that detail knocked
+        down. "kinda"/"not sure" settle nothing and the walk continues.
+
+        **Phase 2 — DIG.** Every detail came back yes, so the details are not
+        the problem: *the framing is* (owner). The anchor is right and the round
+        is relating it wrongly, so a dig KEEPS the anchor and changes the AXIS —
+        a confirmed `who` is dug at from what / when / where / why / how. A "yes"
+        finds the missing frame and ends the clarification with new information;
+        anything else moves to the next axis.
+
+        Running out of axes settles nothing, and that is not a failure and never
+        ends anything: the state comes back `unresolved`, the focus policy
+        releases, and the round goes back to normal questioning (owner: not a
+        terminal condition — the interviewee quits when they please).
+
+        Scoped to the live segment: a restart replaces the board wholesale, so a
+        conflict about the pre-restart board no longer describes anything.
+        """
+        seg = self._segment()
+        opened, reason = -1, ""
+        for i, h in enumerate(seg):
+            if h.get("kind") == "query" and h.get("contested"):
+                opened, reason = i, "contradicted"
+        conflict = self._score_conflict()
+        if opened < 0:
+            if conflict is None:
+                return None
+            cat, value = conflict["category"], conflict["value"]
+            reason = "non-monotonic"
+            opened = len(seg)  # the walk starts from here
+        else:
+            entry = seg[opened]
+            cat, value = next(iter((entry.get("slots") or {}).items()), ("", ""))
+        if not cat or not value:
+            return None
+
+        board = self._replay_board()
+        details = self._clarify_details(board)
+        if not details:
+            return None  # nothing scored on the draft — nothing to clarify
+        # The conflicted detail leads — but only while it is still ON the draft.
+        # Once its score is gone it is not one of the objects to clarify any
+        # more, and the details that remain are.
+        if (cat, value) in details:
+            details.remove((cat, value))
+            details.insert(0, (cat, value))
+
+        asked: list[dict] = []
+        for h in seg[opened + 1 :] if reason == "contradicted" else seg:
+            if h.get("kind") != "query" or not h.get("clarify"):
+                continue
+            asked.append(h)
+            answer = h.get("answer")
+            phase = h.get("clarify_phase", "confirm")
+            if h.get("flipped_from"):
+                # The caregiver re-pointed this question, so it is a DIFFERENT
+                # question asserting its own slots — its answer scores the board
+                # normally but cannot be read as confirming or denying the
+                # detail the step was about. The step counts as asked; it just
+                # does not decide anything.
+                continue
+            if phase == "confirm" and answer == Answer.NO.value:
+                return None  # localized — that detail is the wrong one
+            if phase == "dig" and answer == Answer.YES.value:
+                return None  # the missing frame is found
+
+        state = {
+            "reason": reason,
+            "category": cat,
+            "value": value,
+            "details": details,
+            "asked": len(asked),
+            "phase": "",
+            "next": None,
+            "parent": "",
+            "anchor": details[0],
+            "axis": "",
+            "unresolved": True,
+            "conflict": conflict if reason == "non-monotonic" else None,
+        }
+        if len(asked) >= MAX_CLARIFY_QUERIES:
+            return state
+
+        # Phase 1: any scored detail not yet put to the person. Keyed on the
+        # DETAIL, not the question text — a flip rewrites the text, and keying
+        # on text meant a flipped clarification was re-asked verbatim forever.
+        # Text is kept as the fallback for entries written before the detail was
+        # recorded.
+        done = {tuple(d) for h in asked if (d := h.get("clarify_detail"))}
+        done_text = {h.get("text", "") for h in asked}
+        for d_cat, d_val in details:
+            if (d_cat, d_val) in done:
+                continue
+            parent = self._edges.get(d_cat, {}).get(d_val, "")
+            if self._clarify_question(d_cat, d_val, parent) not in done_text:
+                state.update(
+                    phase="confirm", next=(d_cat, d_val), parent=parent,
+                    unresolved=False,
+                )
+                return state
+
+        # Phase 2: every detail held, so dig at the anchor from another axis.
+        tried = {
+            h.get("focus_requested") or h.get("focus", "")
+            for h in asked
+            if h.get("clarify_phase") == "dig"
+        }
+        for axis in self._clarify_dig_axes(board, details[0][0]):
+            if axis not in tried:
+                state.update(phase="dig", axis=axis, unresolved=False)
+                return state
+        return state
+
+    def _clarify_dig_axes(self, board: facets.Board, anchor_cat: str) -> list[str]:
+        """The axes a dig tries, in order — every facet but the anchor's own.
+
+        Owner's rule (2026-09-10): a yes to the clarification says the DETAIL is
+        right, so what is wrong is how the round is framing it. Keep the anchor,
+        change the axis — a confirmed `who` is dug at from what / when / where /
+        why / how. Unestablished slots come first: a missing frame is likelier
+        to be a dimension nothing has been pinned on than one that already
+        carries a value.
+        """
+        muted = self._edit_mutes()
+        axes = [
+            c for c in self._facet_order() if c != anchor_cat and c not in muted
+        ]
+        axes.sort(key=lambda c: self._family_confident(board, c))
+        return axes
+
+    @property
+    def clarifications(self) -> list[dict]:
+        """Every clarification this round opened, and how each one closed.
+
+        Recorded for autopsy. An `unresolved` entry states a fact about the
+        DIALOGUE — the walk did not settle anything — and never a judgement
+        about the person, which the engine has no standing to make and could not
+        distinguish from its own questions being bad.
+        """
+        out: list[dict] = []
+        episode: dict | None = None
+        for h in self._history:
+            if h.get("kind") != "query":
+                continue
+            if h.get("contested"):
+                episode = {
+                    "reason": "contradicted",
+                    "category": "",
+                    "value": "",
+                    "trigger_question": h.get("text", ""),
+                    "attempts": [],
+                    "outcome": "open",
+                }
+                cat, value = next(iter((h.get("slots") or {}).items()), ("", ""))
+                episode["category"], episode["value"] = cat, value
+                out.append(episode)
+                continue
+            if not h.get("clarify"):
+                continue
+            if episode is None or episode["outcome"] != "open":
+                episode = {
+                    "reason": "non-monotonic",
+                    "category": h.get("focus", ""),
+                    "value": (h.get("slots") or {}).get(h.get("focus", ""), ""),
+                    "trigger_question": "",
+                    "attempts": [],
+                    "outcome": "open",
+                }
+                out.append(episode)
+            answer = h.get("answer")
+            phase = h.get("clarify_phase", "confirm")
+            episode["attempts"].append(
+                {"text": h.get("text", ""), "answer": answer, "phase": phase}
+            )
+            if h.get("flipped_from"):
+                # Decides nothing — the caregiver re-pointed the question, so
+                # its answer is about ITS slots. Mirrors `_clarify_state`.
+                continue
+            if phase == "confirm" and answer == Answer.NO.value:
+                episode["outcome"] = "localized"
+            elif phase == "dig" and answer == Answer.YES.value:
+                episode["outcome"] = "reframed"
+            elif len(episode["attempts"]) >= MAX_CLARIFY_QUERIES:
+                episode["outcome"] = "unresolved"
+        for ep in out:
+            held = [
+                a for a in ep["attempts"] if a.get("phase", "confirm") == "confirm"
+            ]
+            if ep["outcome"] == "open" and held and all(
+                a["answer"] == Answer.YES.value for a in held
+            ):
+                ep["outcome"] = "confirmed"
+        return out
 
     @staticmethod
     def _confirmed_pairs(board: facets.Board) -> set[tuple[str, str]]:
@@ -1708,6 +2197,8 @@ class Round:
                 break
             if kind != "query":
                 continue  # caregiver context / diagnostics are transparent
+            if h.get("contested"):
+                continue  # W2-T: an ambiguity, not a no — see _replay_board
             answer = h.get("answer")
             if answer == Answer.NO.value:
                 streak += 1
@@ -1858,6 +2349,12 @@ class Round:
                                 board[cat][key] = facets.ELIMINATE_FLOOR
                         board = facets.apply_context(board, {cat: [new]})
             elif kind == "query":
+                # W2-T: a CONTESTED double-check scores nothing at all — not
+                # the pair, not the direction buckets. Its evidence is deferred
+                # to the clarification that follows, which asks the same thing
+                # with the context restored and is scored normally either way.
+                if h.get("contested"):
+                    continue
                 answer = h.get("answer")
                 slots = h.get("slots")
                 if answer and slots:
@@ -2062,6 +2559,7 @@ class Round:
             engine=self.engine,
             facets=board_view or [],
             flipped_from=action.flipped_from,
+            clarifying=action.clarify,
         )
 
 
