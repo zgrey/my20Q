@@ -1247,18 +1247,27 @@ class Round:
         # value (profile dropped) with probability explore_decay**(yeses+1).
         # The yes-count resets after each synthesis attempt and each restart,
         # so exploration re-opens whenever the round re-opens.
-        # W2-X: exploration is a property of the SLOT, not of the round. The old
-        # argument was the round's yes count, so by q32 of the 09-11 round the
-        # probability had decayed to ~0 — at exactly the moment `where` still
-        # had no real answer. The round looked settled; the slot did not.
-        # Explore where we are ignorant, exploit where we are confident.
+        # Directives split into EXPLORATION and EXPLOITATION (owner, 09-11):
         #
-        # `dig` joins the exclusions: a dig must KEEP its confirmed anchor, and
-        # exploring is defined as dropping the profile and reaching for a
-        # brand-new value, which is the one thing that turn must not do.
+        #   explore | probe  find a value for a slot that has none
+        #   exploit | drill  the leader is confirmed but vague — go deeper
+        #   exploit | split  two known contenders tie — separate them
+        #   exploit | pin    nail the exact value of a slot the draft got wrong
+        #   exploit | dig    hold a confirmed anchor, turn the axis
+        #
+        # The exploratory flag drops the patient profile and reaches for a
+        # BRAND-NEW value, so it belongs to exploration only. It used to be
+        # allowed on `drill` as well, which asks the model to go deeper on the
+        # confirmed leader AND to ignore it — contradictory instructions in one
+        # prompt. PROBE is now the only directive that can explore.
+        #
+        # W2-X: the probability is a property of the SLOT, not of the round. The
+        # old argument was the round's yes count, so by q32 of the 09-11 round
+        # it had decayed to ~0 — at exactly the moment `where` still had no real
+        # answer. The round looked settled; the slot did not.
         depth = self._slot_confirmation_depth(board, focus)
         exploratory = (
-            directive not in ("split", "pin", "dig")
+            directive == "probe"
             and self._rng.random() < self._explore_probability(depth)
         )
         # Each asked entry carries its asserted slot categories so the repeat
@@ -1475,49 +1484,28 @@ class Round:
             for c in facets.CATEGORIES
             if c not in muted and not self._retired(board, c) and _mass(c) > 0
         ]
-        # W2-X: within the CORE block, ask about the slot that knows least.
+        # Three keys, not four. The fourth used to be ascending `_mass` and was
+        # provably UNREACHABLE: `order` is a unique index per category, so no
+        # two slots ever tied on it. Removing it changes no behaviour.
         #
-        # The old key order put `facet_priority` third and mass fourth — and
-        # `order` is a unique index per category, so no two slots ever tied on
-        # it and the mass key was UNREACHABLE. The docstring above has promised
-        # "weakest family last as the final tie-break" since W1-B and it has
-        # never once executed: on the 09-11 board `what` (16.5 mass) drew 32 of
-        # 69 focuses while `where` (7.0) drew 9, purely because physical_health
-        # lists `what` first — and both are CORE there.
+        # It was also BACKWARDS, which is why its absence never hurt. DRILL is
+        # an EXPLOITATION move — "the leader is confirmed but still vague, go
+        # deeper" — so it wants the slot we are most sure of; an ascending mass
+        # key asks for the one we are least sure of, and there is nothing there
+        # to refine. The coverage-first behaviour it looked like it was
+        # providing is really key 2, which puts unestablished slots first.
         #
-        # Mass is applied to core slots ONLY, deliberately. `facet_priority` is
-        # a per-topic statement about RELEVANCE and it is right about modifiers:
-        # my_people ranks `where` last because location is usually implied in
-        # caregiving, and a blunt mass-first sort would have had it drilling
-        # `where` ahead of a vague `what` — reverting a fix the 06-11 trial
-        # produced. Core slots are the ones that must settle before synthesis,
-        # so among those "which do I know least" outranks a static guess;
-        # modifiers are enrichment, where the topic's ordering still wins.
-        # …and only once that core slot is ESTABLISHED. Below the ready line a
-        # slot is still being discovered, and that is where drill ladders live
-        # (an object › keeps you warm › fabric › a blanket): a climbing ladder
-        # makes its own slot heavier, so a mass-first sort would steer away from
-        # the ladder precisely as it starts working. Above the line, coverage is
-        # already achieved and "which of these do I know least" is exactly the
-        # right question — which is when the 09-11 round began wasting its
-        # questions on a `what` it already knew.
-        # …and never while that slot is actively PRODUCING. A ladder gets heavy
-        # BECAUSE it is working, so demoting it mid-climb steers away from the
-        # one thing going right. `_run_working` is true only for the tail run,
-        # so this protects a ladder being climbed right now and stops protecting
-        # it the moment rotation moves on — at which point "merely heavy" is the
-        # honest description and the demotion is what we want.
-        def _rank_mass(c: str) -> float:
-            m = _mass(c)
-            if c not in core or m < T.facet_ready_points:
-                return 0.0
-            return 0.0 if self._run_working(seg, c) else m
-
+        # W2-X briefly replaced it with a weakest-first rule scoped to core /
+        # established / non-producing slots. Reverted (owner, 09-11): it
+        # inverted drill's meaning, and it was treating a symptom of W2-Y. With
+        # the placeholder rejected, the 09-11 board picks `where` (mass 1.0,
+        # unestablished) over `what` (9.5) under THIS ranking unchanged —
+        # verified by replaying that board both ways. What had defeated key 2
+        # was a placeholder making `where` look established, not the ordering.
         pool.sort(
             key=lambda c: (
                 c not in core,
                 _mass(c) >= T.facet_ready_points,
-                _rank_mass(c),
                 order.get(c, len(order)),
             )
         )

@@ -2260,7 +2260,31 @@ questions on an unfillable slot, the review pass has much less to catch.
 > had no answer. Also excludes `dig`: that turn must keep its anchor, and
 > exploring is defined as dropping the profile to reach for a new value.
 >
-> **(b) The dead tie-break, made live — but scoped three times over:**
+> **(b) The dead tie-break — CORRECTED BY OWNER, 09-11, and reverted.**
+>
+> > *"Drill core slots that aren't producing doesn't make sense. We shouldn't
+> > drill on something we are unsure about. We drill to refine on topics for
+> > which we're confident."*
+>
+> Right, and the directive text says so: *"DRILL the leader: it is confirmed but
+> still vague. Ask a MORE SPECIFIC version of it."* **Drill is exploitation.** A
+> weakest-first drill ranking asks the engine to refine the thing it is least
+> sure of, which is not a thing that can be refined. Every scoping retreat
+> below was a symptom of the rule being wrong at the root, not of it needing
+> narrower conditions.
+>
+> **And it was never needed.** Replaying the 09-11 board with the placeholder
+> removed: `where` (mass 1.0, unestablished) is picked over `what` (9.5) under
+> the ORIGINAL ranking, unchanged. Key 2 — *unestablished before established* —
+> already does the coverage job. The placeholder was not beating the ordering;
+> it was **lying to it**, by making `where` look established. **W2-Y alone
+> fixes §1i.**
+>
+> The dead fourth key is simply deleted: unreachable, and backwards had it ever
+> been reached.
+>
+> *The three scoping attempts, kept because each names a mechanism sitting on
+> that key:*
 >
 > 1. *Mass before `facet_priority`* — the original proposal. **Reverted a
 >    trial-derived fix:** my_people ranks `where` last because location is
@@ -2276,13 +2300,38 @@ questions on an unfillable slot, the review pass has much less to catch.
 >    down while `_run_working` holds, so a producing run keeps its place and a
 >    merely-heavy one does not.
 >
-> Final rule: **among core slots that are established and not currently
-> producing, drill the one that knows least.** Everything else is untouched.
+> **Final state: the drill ranking is unchanged from before W2-X**, minus the
+> dead key. Only (a) shipped.
 >
-> **The lesson, which is the general one:** three separate validated mechanisms
-> (topic relevance ordering, drill-down, the working-run extension) all sat on
-> the ranking key, and none was visible from the key itself. The map's evidence
-> column exists for exactly this.
+> **(c) Directives are now classified explore/exploit** (owner, 09-11), and the
+> classification immediately paid:
+>
+> | | directive | what it does |
+> |---|---|---|
+> | **explore** | `probe` | find a value for a slot that has none |
+> | **exploit** | `drill` | the leader is confirmed but vague — go deeper |
+> | **exploit** | `split` | two known contenders tie — separate them |
+> | **exploit** | `pin` | nail the exact value the draft got wrong |
+> | **exploit** | `dig` | hold a confirmed anchor, turn the axis |
+>
+> The exploratory flag drops the patient profile and reaches for a BRAND-NEW
+> value — so it belongs to exploration only. It was allowed on `drill`, which
+> means the prompt could simultaneously say *go deeper on the confirmed leader*
+> and *ignore the board and try something new*. **`probe` is now the only
+> directive that can explore.**
+>
+> **The lesson, which is the general one:** three validated mechanisms (topic
+> relevance ordering, drill-down, the working-run extension) all sat on that one
+> ranking key, and none was visible from the key itself — but the real error was
+> upstream of all three: I was tuning the ordering of an EXPLOITATION move to do
+> an EXPLORATION job. The map's evidence column found the dead key; it took the
+> owner's classification to notice the key should not exist.
+>
+> **Still open (§1i, for the audit):** `FOC-P5`'s pool mixes established and
+> unestablished slots and its key 2 sorts unestablished first — i.e. the
+> exploitation directive is doing coverage work that belongs to `probe`.
+> Splitting that is the natural next refinement, and wants trial evidence
+> rather than another guess.
 
 ### W2-X · original proposal (owner, 09-11)
 
@@ -2457,7 +2506,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | **W2-U** | **Check every new detail · conflict trigger · gated detail walk · the dig** | **IMPLEMENTED (09-10)** — checks fire on the draft's new details (1-in-56 → 1-in-4.7 live, 0.4 s each); a rise-then-fall score is a second clarify trigger (1 per 26 q, 65% of rounds never fire); the mode is GATED on a scored detail existing; clarifying confirms the draft in templated questions at ZERO LLM calls, then DIGS — anchor held, axis turned — when every detail holds. Demarcated in the cockpit. Owner-directed |
 | **W2-V** | **An unfillable slot absorbs the round** | PROPOSED (09-10, §1h D1) — ~25 of 57 questions lost to `why` because a run of KINDAS extends the rotation guard without bound. Needs owner iteration (focus policy); D2's fix may shrink it first — measure |
 | **W2-W** | **Role-separated review agents** (proposer · grammarian · physician · logistician) | PROPOSED (owner, 09-10) — right diagnosis of §1h; the open question is how much of it is deterministic. 3 of the 4 catches are decidable from the board and question text with no model call |
-| **W2-X** | **Explore/exploit driven by board score** | **IMPLEMENTED (09-11)** — per-slot explore depth replaces the round-level decay; the unreachable weakest-slot key made live, scoped to ESTABLISHED, NON-PRODUCING core slots after three attempts broke topic-priority, then the ladder, then the ladder again. Owner-proposed — the "weakest slot" tie-break in `_pick_focus` is provably UNREACHABLE; `what` drew 32 of 69 focuses at 16.5 mass while `where` drew 9 at 7.0. Per-slot settledness should drive both slot ranking and explore probability. Depends on W2-Y |
+| **W2-X** | **Explore/exploit driven by board score** | **IMPLEMENTED (09-11)** — per-slot explore depth replaces the round-level decay; the weakest-slot ranking was REVERTED (owner: drill is exploitation — you refine what you are confident of), and W2-Y alone fixes the §1i starvation. Directives now classified explore/exploit; only `probe` may explore. Owner-proposed and owner-corrected — the "weakest slot" tie-break in `_pick_focus` is provably UNREACHABLE; `what` drew 32 of 69 focuses at 16.5 mass while `where` drew 9 at 7.0. Per-slot settledness should drive both slot ranking and explore probability. Depends on W2-Y |
 | **W2-Y** | **Vacuous placeholders beyond the four-word list** | **IMPLEMENTED (09-11)** — same rule shape, wider set; ladder roots deliberately excluded after a test caught "an object" being rejected. 0 false positives on 41 real values; confirmed live rejecting the §1i phrase — **the keystone**: `where: "one specific area of your body" +4.0` beat arm/forearm/wrist at +1.0, which defeats W2-X's settledness, Gate 4's redundancy suppression, and the draft weave |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | **REJECTED (owner, 09-10)** — fatigue is not a cost this engine models; the caregiver and patient end the session |

@@ -2045,75 +2045,45 @@ async def test_a_slot_that_keeps_minting_values_keeps_exploring(
     assert all(seen), seen
 
 
-def _drillable_round(topics: list[Topic], *, what: int, where: int, tail: str) -> Round:
-    """A physical_health round whose focus policy provably reaches DRILL (P5).
+def test_rejecting_the_placeholder_is_what_frees_the_starved_slot(
+    topics: list[Topic],
+) -> None:
+    """W2-Y alone fixes the §1i starvation — the drill ranking needed no change.
 
-    Both core slots confident (so P2 cannot fire) and every modifier holding a
-    value (so P4 cannot fire), no rejected synthesis (so P1 cannot fire), and
-    `what` carries a RIVAL — without one it dominates its slot and RETIRES out
-    of the drill pool entirely, which is also the real §1i shape (discomfort 9.5
-    beside pain 6.0). The rival is kept more than `facet_split_margin` behind so
-    P3 cannot fire either. `tail` names the slot the last answered question
-    focused, which is what `_run_working` reads.
+    On that board `where` was led by "one specific area of your body" at +4.0,
+    which made the slot look ESTABLISHED. Key 2 of the drill ranking already
+    puts unestablished slots ahead of established ones, so the placeholder was
+    never beating the ordering — it was lying to it.
+
+    That matters beyond this one slot: DRILL is an exploitation move, and a
+    weakest-first drill ranking (briefly shipped as W2-X, reverted) asks the
+    engine to refine the thing it is least sure of.
     """
     rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
-    rnd._seed_values = {
-        "what": ["pain", "aching"], "where": ["arm"], "how": ["rest"],
-        "when": ["now"], "why": ["a fall"], "who": ["Rob"],
+    rnd._seed_values = {"what": ["discomfort"], "where": ["arm"]}
+    rnd._edges = {c: {} for c in facets.CATEGORIES}
+    # Every modifier carries a value, so the empty-modifier probe cannot fire
+    # and the policy reaches DRILL.
+    mods = {"when": {"now": 1.0}, "who": {"Rob": 1.0},
+            "why": {"a fall": 1.0}, "how": {"rest": 1.0}}
+
+    # With the placeholder holding `where` at +4.0 both core slots look
+    # established, so key 2 cannot separate them and topic priority picks
+    # `what` — which is the slot that drew 32 of 69 focuses in §1i.
+    lying = {
+        "what": {"discomfort": 9.5, "pain": 6.0},
+        "where": {"one specific area of your body": 4.0, "arm": 1.0},
+        **mods,
     }
-    fill = {"what": ("what", "pain", what), "where": ("where", "arm", where)}
-    hist: list[dict] = []
-    for cat, val, n in fill.values():
-        hist += [
-            {"kind": "query", "text": f"{cat}{i}", "answer": "yes",
-             "slots": {cat: val}, "focus": cat} for i in range(n)
-        ]
-    # the rival, far enough back that the slot is neither retired nor tied
-    hist += [
-        {"kind": "query", "text": f"rival{i}", "answer": "yes",
-         "slots": {"what": "aching"}, "focus": "what"} for i in range(what - 3)
-    ]
-    for cat, val in (("how", "rest"), ("when", "now"), ("why", "a fall"),
-                     ("who", "Rob")):
-        hist.append({"kind": "query", "text": f"m-{cat}", "answer": "yes",
-                     "slots": {cat: val}, "focus": cat})
-    tail_val = {"what": "pain", "where": "arm", "how": "rest"}[tail]
-    hist.append({"kind": "query", "text": f"tail-{tail}", "answer": "yes",
-                 "slots": {tail: tail_val}, "focus": tail})
-    rnd._history = hist
-    return rnd
+    focus, directive, _ = rnd._pick_focus(lying, [])
+    assert (focus, directive) == ("what", "drill")
 
-
-def test_established_core_slots_are_drilled_weakest_first(
-    topics: list[Topic],
-) -> None:
-    """W2-X: the §1i starvation, as a unit.
-
-    `what` 16.5 and `where` 7.0, both CORE for physical_health and both
-    established — and `what` drew 32 of 69 focuses purely because the topic
-    lists it first. The old sort had a weakest-family key that could never be
-    reached, because `facet_priority` is unique per category.
-    """
-    rnd = _drillable_round(topics, what=8, where=3, tail="how")
-    board = rnd._replay_board()
-    focus, directive, _ = rnd._pick_focus(board, rnd._history)
-    assert directive == "drill"
-    assert focus == "where", "the established core slot that knows LEAST"
-
-
-def test_a_working_ladder_keeps_its_place_despite_its_mass(
-    topics: list[Topic],
-) -> None:
-    """The counterweight: a ladder gets heavy BECAUSE it is working.
-
-    Demoting it mid-climb steers away from the one thing going right, so the
-    mass demotion stands down while the slot's tail run is still producing.
-    """
-    rnd = _drillable_round(topics, what=8, where=3, tail="what")
-    board = rnd._replay_board()
-    focus, _d, _s = rnd._pick_focus(board, rnd._history)
-    assert focus == "what", "a producing run is not demoted for being heavy"
-
+    # W2-Y stops it being minted at all, so `where` sits at 1.0 —
+    # unestablished — and key 2 hands it the focus, ordering untouched.
+    assert facets.is_vacuous("one specific area of your body")
+    honest = {**lying, "where": {"arm": 1.0}}
+    focus, _directive, _ = rnd._pick_focus(honest, [])
+    assert focus == "where"
 
 def test_explore_probability_follows_the_slot_not_the_round(
     topics: list[Topic],
