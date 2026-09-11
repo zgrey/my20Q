@@ -121,6 +121,23 @@ def _normalize(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]+", " ", text.casefold()).split())
 
 
+def same_wording(a: str, b: str) -> bool:
+    """Whether two UTTERANCES say the same thing in the same words.
+
+    Deliberately stricter than `is_repeat`, and used for a different job: that
+    gate asks "is this question redundant", this asks "did ⟳ Restate actually
+    change anything". A rephrase is supposed to keep the meaning and change the
+    wording, so only near-identical TEXT counts as a failure to restate —
+    anything genuinely reworded is a success even if it is highly similar.
+    """
+    na, nb = _normalize(a), _normalize(b)
+    if not na or not nb:
+        return na == nb
+    if na == nb:
+        return True
+    return SequenceMatcher(None, na, nb).ratio() >= 0.95
+
+
 def is_repeat(
     question: str,
     asked: list[str],

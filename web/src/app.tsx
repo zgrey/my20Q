@@ -194,6 +194,45 @@ export function App() {
     }
   }, []);
 
+  // Queued caregiver edit, held while a question is being generated (CB-1).
+  //
+  // Typing must NEVER be blocked — a question takes 10-25s to generate, and
+  // disabling the field for that whole window threw away the keystrokes. But
+  // the request itself still has to wait: `add_context` and `replace` both
+  // mutate history and then call `_advance()`, so dispatching one mid-flight
+  // would put two `_advance()` calls on the same round. So capture is free and
+  // DISPATCH is serialised — which is the guard the old code was really for.
+  //
+  // Last write wins: a second edit queued before the first drains replaces it,
+  // rather than building a backlog the caregiver can no longer see or cancel.
+  const queued = useRef<(() => Promise<RoundState>) | null>(null);
+  const [queuedNote, setQueuedNote] = useState<string | null>(null);
+  // `busy` read through a ref so `enqueue` need not be re-created on every flip
+  // of it — a stale closure here would drop the edit silently.
+  const busyRef = useRef(busy);
+
+  const enqueue = useCallback(
+    (fn: () => Promise<RoundState>, note: string) => {
+      if (busyRef.current) {
+        queued.current = fn;
+        setQueuedNote(note);
+        return;
+      }
+      run(fn);
+    },
+    [run],
+  );
+
+  useEffect(() => {
+    busyRef.current = busy;
+    if (!busy && queued.current) {
+      const fn = queued.current;
+      queued.current = null;
+      setQueuedNote(null);
+      run(fn);
+    }
+  }, [busy, run]);
+
   const terminal = round?.outcome != null;
   const canAnswer =
     !!round &&
@@ -259,13 +298,18 @@ export function App() {
     }
   };
   const restateDraft = () => {
-    if (sessionId && round && !busy && !terminal) {
-      run(() => api.restate(sessionId, round.round_id));
+    if (sessionId && round && !terminal) {
+      enqueue(() => api.restate(sessionId, round.round_id), "restate queued");
     }
   };
   const replaceDraft = (category: string, oldValue: string, newValue: string) => {
-    if (sessionId && round && !busy && !terminal) {
-      run(() => api.replace(sessionId, round.round_id, category, oldValue, newValue));
+    if (sessionId && round && !terminal) {
+      enqueue(
+        () => api.replace(sessionId, round.round_id, category, oldValue, newValue),
+        newValue
+          ? `edit queued: ${category} → “${newValue}”`
+          : `edit queued: remove ${category}`,
+      );
     }
   };
   const retry = () => {
@@ -284,8 +328,11 @@ export function App() {
     if (sessionId && !busy) run(() => api.startRound(sessionId, id));
   };
   const sendContext = (text: string) => {
-    if (sessionId && round && !busy) {
-      run(() => api.addContext(sessionId, round.round_id, text));
+    if (sessionId && round && !terminal) {
+      enqueue(
+        () => api.addContext(sessionId, round.round_id, text),
+        `context queued: “${text}”`,
+      );
     }
   };
   const togglePause = () => {
@@ -424,6 +471,11 @@ export function App() {
         onSelectModel={selectModel}
       />
       {error && <div class="errorbar">{error}</div>}
+      {queuedNote && (
+        <div class="queuedbar" aria-live="polite">
+          {queuedNote} — applying when this question finishes
+        </div>
+      )}
       {concluded && round?.outcome === "synthesized" && round.final_utterance && (
         <ConclusionModal
           utterance={round.final_utterance}
