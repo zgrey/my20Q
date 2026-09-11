@@ -394,6 +394,8 @@ class Round:
             # clarification on opposite answers, so the phase has to be on the
             # entry — a no ends a confirm, a yes ends a dig.
             entry["clarify_phase"] = pending.clarify_phase or "confirm"
+            if pending.clarify_detail:
+                entry["clarify_detail"] = list(pending.clarify_detail)
         if pending.kind == "query" and pending.refines:
             entry["refines"] = dict(pending.refines)
         # What the controller was drilling into (W2-R). Recorded on every drill,
@@ -550,6 +552,16 @@ class Round:
         self._consec_failures = 0
         self.engine = "reasoning"
         self._superseded.append(pending.content)
+        # A flip during a clarification stays PART of that clarification. The
+        # flipped action is built fresh by the reasoner, so without this it
+        # loses the mode (the cockpit drops the demarcation) and, worse, the
+        # walk never registers that this detail was put to the person and
+        # re-issues the identical templated question on the very next turn.
+        if pending.clarify:
+            action.clarify = True
+            action.clarify_phase = pending.clarify_phase
+            action.clarify_detail = pending.clarify_detail
+            action.focus_requested = pending.focus_requested or pending.focus
         if self.topic.direction:
             who_names = [v for v, _ in facets.live(board, "who")]
             if action.slots.get("who"):
@@ -1716,6 +1728,7 @@ class Round:
             focus=cat,
             clarify=True,
             clarify_phase="confirm",
+            clarify_detail=(cat, value),
         )
 
     def _score_conflict(self) -> dict | None:
@@ -1892,6 +1905,13 @@ class Round:
             asked.append(h)
             answer = h.get("answer")
             phase = h.get("clarify_phase", "confirm")
+            if h.get("flipped_from"):
+                # The caregiver re-pointed this question, so it is a DIFFERENT
+                # question asserting its own slots — its answer scores the board
+                # normally but cannot be read as confirming or denying the
+                # detail the step was about. The step counts as asked; it just
+                # does not decide anything.
+                continue
             if phase == "confirm" and answer == Answer.NO.value:
                 return None  # localized — that detail is the wrong one
             if phase == "dig" and answer == Answer.YES.value:
@@ -1914,11 +1934,18 @@ class Round:
         if len(asked) >= MAX_CLARIFY_QUERIES:
             return state
 
-        # Phase 1: any scored detail not yet put to the person.
-        done = {h.get("text", "") for h in asked}
+        # Phase 1: any scored detail not yet put to the person. Keyed on the
+        # DETAIL, not the question text — a flip rewrites the text, and keying
+        # on text meant a flipped clarification was re-asked verbatim forever.
+        # Text is kept as the fallback for entries written before the detail was
+        # recorded.
+        done = {tuple(d) for h in asked if (d := h.get("clarify_detail"))}
+        done_text = {h.get("text", "") for h in asked}
         for d_cat, d_val in details:
+            if (d_cat, d_val) in done:
+                continue
             parent = self._edges.get(d_cat, {}).get(d_val, "")
-            if self._clarify_question(d_cat, d_val, parent) not in done:
+            if self._clarify_question(d_cat, d_val, parent) not in done_text:
                 state.update(
                     phase="confirm", next=(d_cat, d_val), parent=parent,
                     unresolved=False,
@@ -1994,15 +2021,26 @@ class Round:
                 }
                 out.append(episode)
             answer = h.get("answer")
-            episode["attempts"].append({"text": h.get("text", ""), "answer": answer})
-            if answer == Answer.NO.value:
+            phase = h.get("clarify_phase", "confirm")
+            episode["attempts"].append(
+                {"text": h.get("text", ""), "answer": answer, "phase": phase}
+            )
+            if h.get("flipped_from"):
+                # Decides nothing — the caregiver re-pointed the question, so
+                # its answer is about ITS slots. Mirrors `_clarify_state`.
+                continue
+            if phase == "confirm" and answer == Answer.NO.value:
                 episode["outcome"] = "localized"
+            elif phase == "dig" and answer == Answer.YES.value:
+                episode["outcome"] = "reframed"
             elif len(episode["attempts"]) >= MAX_CLARIFY_QUERIES:
                 episode["outcome"] = "unresolved"
         for ep in out:
-            tries = ep["attempts"]
-            if ep["outcome"] == "open" and tries and all(
-                a["answer"] == Answer.YES.value for a in tries
+            held = [
+                a for a in ep["attempts"] if a.get("phase", "confirm") == "confirm"
+            ]
+            if ep["outcome"] == "open" and held and all(
+                a["answer"] == Answer.YES.value for a in held
             ):
                 ep["outcome"] = "confirmed"
         return out

@@ -1424,6 +1424,11 @@ def _clarify_backend(value: str = "a drink") -> MockBackend:
             return json.dumps({"slots": {"what": [value]}})
         if "DOUBLE-CHECK" in system:  # the double-check turn
             return json.dumps({"question": f"Can you confirm it is {value}?"})
+        if "OPPOSITE button" in system:  # the caregiver flips the question
+            return json.dumps(
+                {"question": f"Is it something other than {value}?",
+                 "slots": {"what": value}}
+            )
         if "pin down the ONE specific" in system:  # deliberate
             return "thinking it through..."
         if "Convert a drafted question" in system:  # format
@@ -1545,6 +1550,52 @@ async def test_clarify_never_ends_the_round(topics: list[Topic]) -> None:
         "reason", "category", "value", "trigger_question", "attempts", "outcome"
     }
     assert record["outcome"] in ("unresolved", "open", "confirmed")
+
+
+async def test_flipping_a_clarification_stays_in_the_mode_and_advances_it(
+    topics: list[Topic],
+) -> None:
+    """The opposition button inside clarifying mode (live report, 09-10).
+
+    A flip builds a fresh action, so without carrying the mode across it (a)
+    dropped the cockpit demarcation and (b) — because the walk tracked progress
+    by question TEXT — never registered the detail as asked, and re-issued the
+    identical template on the very next turn.
+    """
+    rnd = await _contradicted(topics)
+    before = rnd._pending
+    assert before is not None and before.clarify
+    detail = before.clarify_detail
+    assert detail is not None
+
+    ev = await rnd.flip()
+    flipped = rnd._pending
+    assert flipped is not None
+    assert flipped.content != before.content  # a genuinely different question
+    assert flipped.clarify is True and ev.clarifying is True  # mode survives
+    assert flipped.clarify_detail == detail  # …and knows what it is about
+
+    await rnd.answer(Answer.YES)
+    # The walk MOVED ON — it does not re-ask the question that was flipped away.
+    nxt = rnd._pending
+    assert nxt is None or nxt.content != before.content
+    state = rnd._clarify_state()
+    if state is not None and state["phase"] == "confirm":
+        assert state["next"] != detail
+
+
+async def test_a_flipped_clarification_decides_nothing(
+    topics: list[Topic],
+) -> None:
+    # A flipped question asserts its OWN slots, so its answer cannot be read as
+    # confirming or denying the detail the step was about — it counts as asked
+    # and nothing more. A "no" here must not localize.
+    rnd = await _contradicted(topics)
+    await rnd.flip()
+    await rnd.answer(Answer.NO)
+    entry = next(h for h in rnd.history if h.get("flipped_from"))
+    assert entry["clarify"] is True
+    assert rnd.clarifications[0]["outcome"] != "localized"
 
 
 async def test_undo_reopens_the_clarification(topics: list[Topic]) -> None:

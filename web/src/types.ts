@@ -203,9 +203,10 @@ export interface RoundRecord {
     category: string;
     value: string;
     trigger_question: string;
-    attempts: { text: string; answer: Answer | null }[];
+    attempts: { text: string; answer: Answer | null; phase?: string }[];
     // "localized" = a detail came back no, naming the wrong piece;
-    // "confirmed" = every detail held; "unresolved" = the walk settled nothing.
-    outcome: "confirmed" | "localized" | "unresolved" | "open";
+    // "confirmed" = every detail held; "reframed" = a dig found the missing
+    // angle; "unresolved" = the walk settled nothing.
+    outcome: "confirmed" | "localized" | "reframed" | "unresolved" | "open";
   }[];
 }

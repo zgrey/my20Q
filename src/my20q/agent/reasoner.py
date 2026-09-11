@@ -144,6 +144,11 @@ class ReasonerAction:
     #: They close a clarification on OPPOSITE answers — a no ends a confirm, a
     #: yes ends a dig — so the phase travels on the entry.
     clarify_phase: str = ""
+    #: The (category, value) this clarification step is ABOUT. Tracked
+    #: separately from ``slots`` because the caregiver can flip the question,
+    #: which rewrites the text and may re-tag the slots — and the walk still has
+    #: to know that detail was put to the person, or it re-asks it forever.
+    clarify_detail: tuple[str, str] | None = None
     #: Refinement tags: {category: parent value} — the asserted value is a
     #: MORE SPECIFIC version of that existing contender ("tingling" refines
     #: "discomfort"). Anchored to the board: the parent must already exist.
