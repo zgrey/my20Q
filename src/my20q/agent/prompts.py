@@ -428,15 +428,6 @@ _DIRECTIVE_NOTE = {
         "narrower form). Known refinements show as parent›value on the board "
         "— go DEEPER than the finest confirmed one."
     ),
-    "clarify": (
-        "DIRECTIVE — CLARIFY a contradiction: the person CONFIRMED something, "
-        "then answered \"no\" when it was double-checked. Assume the two "
-        "answers do NOT conflict — the double-check almost certainly dropped "
-        "the context that made the first question make sense. Ask ONE plain "
-        "yes/no question that puts that context BACK: say the confirmed detail "
-        "together with what it was confirmed WITH. Do not guess a brand-new "
-        "value, and do not ask which of the two answers was right."
-    ),
     "pin": (
         "DIRECTIVE — PIN DOWN the focus slot: the last proposed message was "
         "CLOSE but not confirmed, and this slot is its weakest detail. Ask a "
@@ -477,33 +468,6 @@ _CAREGIVER_NOTE = (
 )
 
 
-def _clarify_block(clarify: dict | None) -> str:
-    """The two conflicting answers, verbatim — the material a CLARIFY splits.
-
-    Quoting the CONFIRMING question in full is the whole point: a bare
-    double-check ("Is it tingling?") strips the context that made the original
-    yes ("Is there tingling in your toes?") mean anything, and the model cannot
-    restore what it was never shown. When the confirmation came from a
-    caregiver note rather than an answered question, the note is the anchor.
-    """
-    if not clarify:
-        return ""
-    cat = clarify.get("category", "")
-    value = clarify.get("value", "")
-    lines = [f'THE CONTRADICTION TO CLARIFY — {cat}: "{value}"']
-    if clarify.get("question"):
-        lines.append(f'  CONFIRMED, answered "yes": "{clarify["question"]}"')
-    elif clarify.get("note"):
-        lines.append(f'  THE CAREGIVER SAID: "{clarify["note"]}"')
-    if clarify.get("verify_question"):
-        lines.append(f'  THEN DENIED, answered "no": "{clarify["verify_question"]}"')
-    lines.append(
-        "The denied question says LESS than what was confirmed. Put the missing "
-        "context back and ask the fuller question again, plainly."
-    )
-    return "\n".join(lines) + "\n\n"
-
-
 def _asked_block(asked: list[str]) -> str:
     if not asked:
         return ""
@@ -524,7 +488,6 @@ def deliberate_messages(
     focus: str,
     directive: str,
     split_pair: tuple[str, str] | None = None,
-    clarify: dict | None = None,
     edges: facets.Edges | None = None,
     asked: list[str] | None = None,
     seed_context: str = "",
@@ -540,12 +503,11 @@ def deliberate_messages(
     """Free-form reasoning to choose the next yes/no question (no JSON).
 
     Phase 1 of the two-phase ask. ``focus`` is the slot the controller chose
-    to advance; ``directive`` is one of probe/split/drill/pin/clarify;
-    ``split_pair`` carries the two tied values for a split and ``clarify`` the
-    two conflicting answers for a clarification. ``exploratory`` drops the
-    profile and pushes a fresh value. ``banned`` is an (category, value) the
-    futility guard has cut off this turn; ``caregiver_hint`` names a who-leader
-    who is a known caregiver (test the care-task direction first).
+    to advance; ``directive`` is one of probe/split/drill/pin; ``split_pair``
+    carries the two tied values for a split. ``exploratory`` drops the profile
+    and pushes a fresh value. ``banned`` is an (category, value) the futility
+    guard has cut off this turn; ``caregiver_hint`` names a who-leader who is
+    a known caregiver (test the care-task direction first).
     """
     instruction = f"Topic for this round: {topic_label}\n\n"
     instruction += _context_block(
@@ -572,7 +534,6 @@ def deliberate_messages(
     if split_pair is not None:
         instruction += f'Tied contenders to separate: "{split_pair[0]}" vs "{split_pair[1]}"\n'
     instruction += "\n"
-    instruction += _clarify_block(clarify if directive == "clarify" else None)
     instruction += _asked_block(asked or [])
     instruction += f"Dialogue so far:\n{_format_history(history)}\n\n"
     if corrections:

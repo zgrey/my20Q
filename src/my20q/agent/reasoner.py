@@ -135,10 +135,9 @@ class ReasonerAction:
     #: A deliberate double-check of a single locked pair (verify-on-lock) —
     #: gate-exempt by construction, recorded so a pair is never re-verified.
     verify: bool = False
-    #: A CLARIFY turn (W2-T): the round is resolving a contradiction — a
-    #: double-check that came back "no" on a pair the person had confirmed.
-    #: Partly gate-exempt (see ``ask``) and recorded, so the record shows both
-    #: that a contradiction opened and how it closed.
+    #: A CLARIFY turn: one pointed confirm in a clarification walk. Templated
+    #: by the engine (`Round._clarify_action`) with no LLM call, and recorded,
+    #: so the record shows both that a clarification opened and how it closed.
     clarify: bool = False
     #: Refinement tags: {category: parent value} — the asserted value is a
     #: MORE SPECIFIC version of that existing contender ("tingling" refines
@@ -339,7 +338,6 @@ class Reasoner:
         focus: str,
         directive: str,
         split_pair: tuple[str, str] | None = None,
-        clarify: dict | None = None,
         history: list[dict],
         edges: facets.Edges | None = None,
         asked: list | None = None,
@@ -366,11 +364,8 @@ class Reasoner:
         the best clean question is accepted; otherwise raises for the engine's
         recovery path.
 
-        ``clarify`` marks a W2-T clarification turn: the round is re-opening a
-        pair the person confirmed and then contradicted under a double-check.
-        It relaxes exactly two gates — the repeat gate forgets the ORIGINAL
-        confirming question (never the double-check), and the zero-information
-        gate stands down — because re-asking an established pair is the point.
+        Clarification turns never reach here: they are templated by the engine
+        (`Round._clarify_action`) and make no LLM call at all.
         """
         # `asked` entries are either bare texts or (text, slot-categories)
         # pairs; the categories feed the repeat gate's slot-aware exemption
@@ -378,14 +373,6 @@ class Reasoner:
         asked_pairs: list[tuple[str, frozenset[str] | None]] = [
             (a, None) if isinstance(a, str) else (a[0], a[1]) for a in (asked or [])
         ]
-        # A CLARIFY turn is allowed back to the question the person actually
-        # CONFIRMED — restoring the anchor that a bare double-check stripped is
-        # the entire mechanism, so the repeat gate must not block it. The
-        # double-check's own wording deliberately STAYS in the gate: the model
-        # may return to the full question, never re-emit the bare one that just
-        # failed to land.
-        if clarify and clarify.get("question"):
-            asked_pairs = [p for p in asked_pairs if p[0] != clarify["question"]]
         asked_texts = [t for t, _ in asked_pairs]
         asked_cats = [c for _, c in asked_pairs]
         established = established or set()
@@ -404,7 +391,6 @@ class Reasoner:
                     focus=focus,
                     directive=directive,
                     split_pair=split_pair,
-                    clarify=clarify,
                     edges=edges,
                     asked=asked_texts,
                     seed_context=seed_context,
@@ -472,7 +458,6 @@ class Reasoner:
                 continue
             action = self._ask_action(cleaned, slots, data, focus)
             action.refines = _anchored_refines(data.get("refines"), slots, board)
-            action.clarify = directive == "clarify"
             best = action
             if not slots:
                 corrections.append(
@@ -483,11 +468,9 @@ class Reasoner:
             # Gate 4 — zero information: every asserted pair is already an
             # established leader (confirmation farming — one trial pumped
             # who=Zach to +7.5 on re-confirmations while the real unknown
-            # starved). Splits are exempt (tied leaders NEED separating) and so
-            # are clarifications, which exist precisely to re-ask an
-            # established pair the person has just contradicted.
+            # starved). Splits are exempt: tied leaders NEED separating.
             if (
-                directive not in ("split", "clarify")
+                directive != "split"
                 and all((c, v) in established for c, v in slots.items())
             ):
                 corrections.append(

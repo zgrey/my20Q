@@ -125,15 +125,19 @@ def dump(path: str) -> None:
                 pq = r["pending_question"]
                 extra = f"  focus={pq['focus']}" if pq.get("focus") else ""
                 print(f"    UNANSWERED at end: {pq.get('text', '')!r}{extra}")
-            # W2-T: every contradiction the round opened, and how it closed. An
-            # "unresolved" line is a fact about the DIALOGUE — N clarifying
-            # questions did not separate — never a claim about the person.
+            # Every clarification the round opened, why, and how it closed. An
+            # "unresolved" line is a fact about the DIALOGUE — the walk did not
+            # settle anything — never a claim about the person.
             for c in r.get("clarifications") or []:
+                trigger = c.get("reason", "?")
                 print(
-                    f"    CONTRADICTION {c.get('category', '?')}="
+                    f"    CLARIFY [{trigger}] {c.get('category', '?')}="
                     f"{c.get('value', '')!r} -> {c.get('outcome', '?')}"
-                    f" after {len(c.get('attempts') or [])} clarifying q"
+                    f" after {len(c.get('attempts') or [])} q"
                 )
+                if c.get("trigger_question") or c.get("verify_question"):
+                    q = c.get("trigger_question") or c.get("verify_question")
+                    print(f"      triggered by: {q!r}")
                 for a in c.get("attempts") or []:
                     print(f"      · {a.get('text', '')!r} -> {a.get('answer')}")
             board = r.get("board") or {}

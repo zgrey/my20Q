@@ -1,3 +1,4 @@
+import { Fragment } from "preact";
 import type { ComponentChild } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 
@@ -214,11 +215,24 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
   }
   const isSynthesis = entry.kind === "synthesis";
   return (
-    <div class={`turn question${isSynthesis ? " was-synthesis" : ""}`}>
+    <div
+      class={`turn question${isSynthesis ? " was-synthesis" : ""}${
+        entry.clarify ? " clarifying" : ""
+      }`}
+    >
       <div class="q">{isSynthesis ? `Proposed: ${entry.text}` : entry.text}</div>
       {entry.answer && (
         <span class={`chip ${entry.answer}`}>{ANSWER_LABEL[entry.answer]}</span>
       )}
+    </div>
+  );
+}
+
+/** The demarcation that opens a clarification — where the mode changed. */
+function ClarifyMark() {
+  return (
+    <div class="clarify-mark" role="separator">
+      <span class="clarify-mark-label">clarifying the draft</span>
     </div>
   );
 }
@@ -253,14 +267,24 @@ export function ConversationTile({
     body = (
       <>
         {round.history.map((h, i) => (
-          <HistoryRow entry={h} key={i} />
+          <Fragment key={i}>
+            {h.kind === "query" && h.clarify && !round.history[i - 1]?.clarify && (
+              <ClarifyMark />
+            )}
+            <HistoryRow entry={h} />
+          </Fragment>
         ))}
         {!terminal && !busy && ev.kind === "query" && (
-          <div class="turn question pending">
-            {ev.preface && <div class="preface">{ev.preface}</div>}
-            <div class="q">{ev.text}</div>
-            <div class="awaiting">awaiting answer</div>
-          </div>
+          <>
+            {ev.clarifying && !lastEntry?.clarify && <ClarifyMark />}
+            <div
+              class={`turn question pending${ev.clarifying ? " clarifying" : ""}`}
+            >
+              {ev.preface && <div class="preface">{ev.preface}</div>}
+              <div class="q">{ev.text}</div>
+              <div class="awaiting">awaiting answer</div>
+            </div>
+          </>
         )}
         {!terminal && !busy && ev.kind === "synthesis" && (
           <div class="synthesis proposed">
@@ -329,9 +353,23 @@ export function ConversationTile({
     );
   }
 
+  const clarifying = !!round && round.outcome === null && round.event.clarifying;
   return (
-    <section class="tile conversation">
-      <h2>Conversation</h2>
+    <section class={`tile conversation${clarifying ? " is-clarifying" : ""}`}>
+      <h2>
+        Conversation
+        {clarifying && (
+          <span class="clarify-flag" aria-live="polite">
+            Clarifying
+          </span>
+        )}
+      </h2>
+      {clarifying && (
+        <p class="clarify-note">
+          A detail stopped adding up. Confirming the draft one piece at a time —
+          these questions are short on purpose.
+        </p>
+      )}
       <div class="stream" ref={streamRef}>
         {body}
       </div>

@@ -87,6 +87,11 @@ class EventOut(BaseModel):
     diagnostic: dict | None = None
     # The question this one replaced via the opposition button ("" otherwise).
     flipped_from: str = ""
+    # The round is CLARIFYING: confirming the draft one detail at a time after
+    # a contradiction. The cockpit demarcates the conversation and shows a
+    # "clarifying" banner, so the pointed questions read as a deliberate pass
+    # over the draft rather than the engine having lost the thread.
+    clarifying: bool = False
 
 
 class BannerPartOut(BaseModel):

@@ -648,6 +648,57 @@ body,
 }
 
 /* ---- diagnostic: reasoning failed — a failure card, never a canned question ---- */
+/* --- clarifying mode: the conversation demarcation + the tile flag ------- */
+
+/* The rule that marks where the mode changed. The context the pointed
+   questions no longer carry is carried HERE instead, so "This is about pain,
+   correct?" reads as one step of a deliberate pass over the draft. */
+.clarify-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 2px;
+  color: var(--kinda);
+}
+.clarify-mark::before,
+.clarify-mark::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--kinda);
+  opacity: 0.45;
+}
+.clarify-mark-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  white-space: nowrap;
+}
+.turn.question.clarifying {
+  border-left: 3px solid var(--kinda);
+  padding-left: 9px;
+}
+.clarify-flag {
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--kinda);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  vertical-align: middle;
+}
+.clarify-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.tile.conversation.is-clarifying {
+  box-shadow: inset 0 0 0 1px var(--kinda), var(--shadow);
+}
+
 .turn.diagnostic {
   border-left: 3px solid var(--no);
   padding: 6px 10px;

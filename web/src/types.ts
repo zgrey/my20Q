@@ -60,6 +60,11 @@ export interface RoundEvent {
   diagnostic: Diagnostic | null;
   // The question this one replaced via the opposition button ("" otherwise).
   flipped_from: string;
+  // The round is CLARIFYING: confirming the draft one detail at a time after a
+  // contradiction. Drives the conversation demarcation and the tile flag, so
+  // the pointed questions read as a deliberate pass over the draft rather than
+  // the engine having lost the thread.
+  clarifying: boolean;
 }
 
 export interface HistoryEntry {
@@ -192,10 +197,15 @@ export interface RoundRecord {
   // by owner decision — nothing here is surfaced during a session, and
   // "unresolved" describes the DIALOGUE, never the person.
   clarifications?: {
+    // Which trigger opened it: a double-check answered "no", or a detail whose
+    // score rose and then fell.
+    reason: "contradicted" | "non-monotonic";
     category: string;
     value: string;
-    verify_question: string;
+    trigger_question: string;
     attempts: { text: string; answer: Answer | null }[];
-    outcome: "confirmed" | "disconfirmed" | "unresolved" | "open";
+    // "localized" = a detail came back no, naming the wrong piece;
+    // "confirmed" = every detail held; "unresolved" = the walk settled nothing.
+    outcome: "confirmed" | "localized" | "unresolved" | "open";
   }[];
 }

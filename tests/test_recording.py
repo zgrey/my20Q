@@ -231,9 +231,9 @@ def test_clarifications_are_recorded_without_perturbing_metrics() -> None:
          "answer": "yes", "slots": {"what": "tingling"}, "clarify": True},
     ]
     clarifications = [
-        {"category": "what", "value": "tingling",
-         "verify_question": "Is it tingling?",
-         "attempts": [{"text": "Tingling in your toes, still?", "answer": "yes"}],
+        {"reason": "contradicted", "category": "what", "value": "tingling",
+         "trigger_question": "Is it tingling?",
+         "attempts": [{"text": "This is about tingling, correct?", "answer": "yes"}],
          "outcome": "confirmed"},
     ]
     common = dict(

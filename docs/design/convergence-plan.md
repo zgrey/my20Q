@@ -1722,14 +1722,19 @@ the pair or open a split"*) — answered: neither erases, the split is anchored
 rather than free. W2-Q's parked half — see its entry; the read-back is
 **declined**, and the in-round contradiction is caught by this instead.
 
-**Not claimed.** No bench number. `--noise` manufactures flipped answers, but
-`_verify_due` only fires on a pair made confident by a **caregiver note**, which
-the bench never produces — a live ε=0.25 run recorded `verifies: 0`. The bench
-now carries `contradictions` / `contradictions_unresolved` columns, so a future
-fixture *with* notes could measure it; today the evidence is the unit tests
-(11 new) plus the live trace above. Watch on the next trial: whether the
-contradiction rate is high enough to matter at all, given verifies currently
-fire once in ~38 questions.
+**Not claimed at the time.** No bench number: `--noise` manufactures flipped
+answers, but `_verify_due` then only fired on a pair made confident by a
+**caregiver note**, which the bench never produces — a live ε=0.25 run recorded
+`verifies: 0`. The open question was whether contradictions were frequent enough
+to matter at all, given checks fired once in ~38 questions.
+
+**Answered the same day by W2-U**, and the answer was that the rate was the
+defect: measured properly it was **1 in 56**, with 77% of rounds never checking
+anything. Checks now fire on every new detail (1 in 4.7 live), and a
+non-monotonic score is a second trigger — so the mechanism this entry built now
+has something to do. The anchored-restore question specified here was superseded
+by W2-U's templated detail walk; the *scoring* half — a contradicted check
+counts for nothing — is unchanged and load-bearing.
 
 **Touches:** `reasoner` (`clarify` flag + two gate relaxations), `prompts`
 (`_DIRECTIVE_NOTE["clarify"]`, `_clarify_block`), `dialogue`
@@ -1737,6 +1742,146 @@ fire once in ~38 questions.
 replay), `recorder` + `api` (record field), `dump_recording`, `bench`,
 `web/types.ts`, 11 tests. **Replay-safe:** every bit of clarify state is
 DERIVED from history, so undo stays pop-and-recompute — asserted by test.
+
+### W2-U · Check every new detail · the conflict trigger · the detail walk — Status: IMPLEMENTED (09-10)
+
+Owner-directed, same day as W2-T and building directly on it. Three parts.
+
+---
+
+**(a) Verification fires on every NEW DETAIL, not at lock.**
+
+`_verify_due` required the slot to be family-CONFIDENT. That condition and the
+`≤ 1 yes` condition fight each other: a detail with one yes sits at 1.0 and is
+not confident; the usual way it *becomes* confident is by earning the second
+yes, which then disqualifies it. Measured across all 92 recorded rounds / 1956
+questions:
+
+| | |
+|---|---|
+| **1 check per 56 questions** | not the 1-in-38 the docs had been quoting, which was one good day |
+| **71 of 92 rounds (77%)** | never checked anything at all |
+| **14 of the 21 that did** | hit the budget of 2 immediately — it bound whenever it engaged |
+| **30 of 35** | fired on a value a caregiver NOTE had lifted over the bar, not one an answer confirmed |
+| **185 of 294 (63%)** | of all confirmed details rest on exactly **one** answer |
+
+The confidence condition is deleted. Any slot whose **frontier** — the value the
+banner is actually weaving — rests on ≤ 1 yes is checked once, so the caregiver
+holds one invariant: **the draft never says anything you have not confirmed
+twice.** A frontier below one full answer is skipped: that is a stand-in, and
+checking it spends a question confirming a shrug.
+
+The per-round budget is gone. Both reasons it existed had expired: a
+contradicted check used to DESTROY the belief (W2-L) — W2-T removed that — and
+a check is a *single* LLM call with no deliberate phase against a normal
+question's two. What replaces it is narrower: at most **two checks in a row**
+(a note landing two details deserves two; five reads as an interrogation), and
+never a check of a pair the question immediately before already asserted, which
+is asking the same thing twice in a row whatever the engine calls it.
+
+Measured live afterwards: **1 check per 4.7 questions**, median **0.4 s**
+against **6.7 s** for an ordinary question.
+
+---
+
+**(b) A non-monotonic score is the second trigger.**
+
+> Owner's rule: *"Solid details should exhibit monotonic scores. If a score
+> grows then starts to drop, this implies conflict or a bad question and should
+> trigger the clarification mode."*
+
+`_score_conflict` replays the segment and flags any value that rose to at least
+one full answer and then fell. A value that only ever fell was never believed —
+that is an ordinary wrong guess. Drops caused by a caregiver **edit** are
+excluded: striking a value is the caregiver being right, not the board
+disagreeing with itself.
+
+Calibrated before shipping, across every recorded round: **one per 26
+questions**, with **65% of rounds never triggering** — a live signal, not a
+constant one.
+
+The first live run proved the case better than the spec did. Three questions in:
+
+```
+q1 "Are you feeling any unusual sensations in your body right now?" -> yes  {when: now}
+q2 "Are you feeling any pain right now?"                            -> no
+   …the "no" was about PAIN, and it deducted from `when: now`.
+q3 CLARIFY "This is about now, correct?"                            -> yes   restored
+```
+
+The asymmetric-no rule targets the lowest-scoring asserted pair, so a **no** to
+a composite question lands on whichever component happened to be weakest — here
+destroying a belief the person had never contradicted. **The conflict trigger
+catches collateral damage from composite questions**, a failure mode that had
+not been named before. No double-check was involved at all.
+
+---
+
+**(c) Clarifying mode walks the draft, one pointed detail at a time.**
+
+> Owner's spec: *if a proposed synthesis is "I am experiencing pain in my right
+> foot" then details requiring change should be mined and questions become
+> "This is about pain, correct?" / "This is about your foot, correct?" / "This
+> is about your RIGHT foot, correct?"*
+
+Details are mined from the **weave** (what the banner is actually saying) and
+each is expanded along its refinement chain, so "right foot" yields *foot* then
+*right foot* — the general detail confirmed before the one that distinguishes
+it. The distinguishing words are upper-cased against the parent, so two adjacent
+questions about the same limb read as two different questions.
+
+Walking every detail rather than only the suspect one is deliberate: a
+contradiction surfaces on one value, but a composite draft does not say WHICH
+part is wrong. The walk **localizes** it — the same logic `pin` already uses
+after a rejected proposal. It **ends on the first "no"** (the wrong piece is
+named); if every detail holds, the draft was right and the trigger was a bad
+question.
+
+Questions are **templated, not generated** — zero LLM calls, so an entire walk
+is cheaper than one ordinary question, and it cannot fabricate or fail a gate.
+The `clarify` directive, `_clarify_block` and the two gate relaxations added for
+W2-T were deleted as dead code the same day.
+
+**The tension this raises, and why the design survives it.** These pointed
+questions are exactly the shape that failed as W2-T's Q2 — a value stripped of
+its context. What makes them safe is that the context moved: it is carried by
+the **mode**, not the question text. Hence the demarcation the owner specified —
+a rule across the conversation, a "Clarifying" flag on the tile, an accent on
+each clarifying turn. The patient HEARS rather than reads, so the frame reaches
+them through the spoken preface instead: *"Let me check this one piece at a
+time —"*, then *"Still checking —"*.
+
+**Confusion stays unnamed.** The cockpit surface added here says the ENGINE is
+clarifying; it never says the person is confused. That distinction is the whole
+of the earlier record-only decision and is unchanged: an exhausted walk records
+`unresolved`, a fact about the dialogue. The caregiver's **Confused ↔ Clear**
+slider remains the only place a judgement about the person is made, by a human.
+
+---
+
+**Live end-to-end** (gemma4, one round, seeded "her right foot has been
+hurting"): 14 questions — 3 checks, 3 clarifying, banner woven. The walk:
+
+```
+q03 [CHECK]   "Do you mean right now?"                  -> no   (contested, scored nothing)
+q04 [CLARIFY] "This is about right now, correct?"
+q05 [CLARIFY] "This is about pain, correct?"
+q06 [CLARIFY] "This is about feet, correct?"
+```
+
+**Touches:** `dialogue` (`_verify_due` rewrite, `_score_conflict`,
+`_clarify_details`/`_clarify_question`/`_clarify_action`, `_clarify_state`
+rewrite, `RoundEvent.clarifying`), `reasoner` + `prompts` (dead W2-T path
+removed), `api` (`EventOut.clarifying`), `web` (demarcation, flag, styles),
+`dump_recording`, `bench`, tests. **Replay-safe:** all clarify state stays
+DERIVED from history.
+
+**Consequence worth knowing.** Checking every new detail consumes questions, and
+several existing tests failed for an honest reason — a fixed drive of N answers
+no longer reaches the same board. One test mock also had no DOUBLE-CHECK branch
+at all; that was harmless while checks were rare and threw the round into
+restart recovery once they were routine. Any new mock driving a round needs that
+branch.
 
 ### W3-I · Mass-scaled confidence checks — Status: PROPOSED
 
@@ -1822,6 +1967,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | **W2-R** | **Draft does not follow the leader** | **IMPLEMENTED (09-09)** — drill-inferred edges, parented to the FRONTIER. Measured on the bench: round health up (farming yeses to zero, diagnostics halved), **convergence and readiness unmoved at 0/9**. Kept, not claimed as a win |
 | W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |
 | W2-S | Prompt-side re-ask reduction | **TRIED AND REJECTED (09-09)** — measured 3 ways; constraining the model more doubled diagnostics and early-ending rounds. Latency lever is not prompt-side. See §1e |
-| **W2-T** | **Clarifying mode** | **IMPLEMENTED (09-10)** — a contradicted double-check scores NOTHING and opens an anchored clarification at focus priority 0; never terminal; contradictions recorded, not surfaced. Owner-proposed; closes W2-L and W2-Q |
+| **W2-T** | **Clarifying mode** | **IMPLEMENTED (09-10)** — a contradicted double-check scores NOTHING and opens a clarification; never terminal. Owner-proposed; closes W2-L and W2-Q. Its anchored-restore question was superseded the same day by W2-U's detail walk |
+| **W2-U** | **Check every new detail · conflict trigger · detail walk** | **IMPLEMENTED (09-10)** — checks fire on the draft's new details (1-in-56 → 1-in-4.7 live, 0.4 s each); a rise-then-fall score is a second clarify trigger (1 per 26 q, 65% of rounds never fire); clarifying walks the draft in templated questions at ZERO LLM calls, demarcated in the cockpit. Owner-directed |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | **REJECTED (owner, 09-10)** — fatigue is not a cost this engine models; the caregiver and patient end the session |

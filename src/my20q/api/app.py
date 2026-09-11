@@ -81,6 +81,7 @@ def _event_out(ev: RoundEvent, catalog: list[Pictogram]) -> schemas.EventOut:
         facets=[schemas.FacetOut(**f) for f in ev.facets],
         diagnostic=ev.diagnostic,
         flipped_from=ev.flipped_from,
+        clarifying=ev.clarifying,
     )
 
 
