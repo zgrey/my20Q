@@ -1491,6 +1491,15 @@ def test_clarify_question_emphasises_what_distinguishes_a_refinement() -> None:
     assert Round._clarify_question("how", "call them") == (
         "You want to call them, correct?"
     )
+    # …but `how` also holds GERUNDS, which break the infinitive frame the other
+    # way. "You want to lifting things, correct?" was spoken to a patient in a
+    # live round. The frame follows the value's form, not its slot.
+    assert Round._clarify_question("how", "lifting things") == (
+        "This is about lifting things, correct?"
+    )
+    assert Round._clarify_question("how", "bring it") == (
+        "You want to bring it, correct?"  # -ing, but not a gerund
+    )
 
 
 def test_clarify_details_walk_the_chain_coarse_to_fine(

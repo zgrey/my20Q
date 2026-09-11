@@ -129,8 +129,11 @@ CLARIFY_FRAME = "This is about {value}, correct?"
 CLARIFY_FRAME_WHY = "This is because of {value}, correct?"
 #: `how` holds VERB phrases — "call them", "bring it", "tell them something" —
 #: and the default frame reads as broken English around them ("This is about
-#: call them, correct?", seen in the first live run). One frame covers every
-#: action value including the standing direction buckets.
+#: call them, correct?", seen in the first live run). But `how` ALSO holds
+#: gerunds, and this frame breaks on those the other way: "You want to lifting
+#: things, correct?" was spoken to a patient in the second live run, and the
+#: caregiver kept reaching for the opposition button to escape it. The frame is
+#: therefore chosen by the value's grammatical FORM, not by its slot.
 CLARIFY_FRAME_HOW = "You want to {value}, correct?"
 
 #: Spoken once, at the top of a clarification — the patient HEARS the questions
@@ -1824,10 +1827,14 @@ class Round:
                 w if w.strip(".,!?'\"").casefold() in pset else w.upper()
                 for w in value.split()
             )
-        frame = {
-            "why": CLARIFY_FRAME_WHY,
-            "how": CLARIFY_FRAME_HOW,
-        }.get(category, CLARIFY_FRAME)
+        if category == "why":
+            frame = CLARIFY_FRAME_WHY
+        elif category == "how" and not facets.gerund_led(value):
+            # "call them" / "bring it" need the infinitive frame; "lifting
+            # things" is already a noun phrase and takes the plain one.
+            frame = CLARIFY_FRAME_HOW
+        else:
+            frame = CLARIFY_FRAME
         return frame.format(value=shown)
 
     def _clarify_state(self) -> dict | None:

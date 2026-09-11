@@ -816,7 +816,7 @@ def _anchored_slots(
         clean = sanitize_llm_text(value)[:MAX_VALUE_CHARS].strip()
         if not clean or not facets.mentions(question, clean):
             continue
-        cat = facets.remap_slot(cat, clean)
+        cat = facets.remap_slot(cat, clean, question)
         if cat in out:
             continue  # a re-filed action never overwrites an explicit how-tag
         out[cat] = facets.canonical_value(board, cat, clean)

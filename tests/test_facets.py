@@ -175,6 +175,47 @@ def test_action_values_refile_from_what_to_how() -> None:
     assert facets.remap_slot("why", "cleaning") == "why"  # only what is re-filed
 
 
+def test_an_aggravation_question_credits_why_not_how() -> None:
+    # A live round spent 25 of 57 questions on what made the pain worse, filed
+    # every answer under `how` ("an action wanted"), and then double-checked
+    # them as wants — "do you want to lift things?" — which correctly returned
+    # no every time. They were answering `why` all along.
+    worse = "Does lifting things make the pain worse?"
+    assert facets.asks_about_aggravation(worse)
+    assert facets.remap_slot("how", "lifting things", worse) == "why"
+    # …and the same value, asked as a request, is still a wanted action.
+    want = "Do you want help lifting things?"
+    assert not facets.asks_about_aggravation(want)
+    assert facets.remap_slot("how", "lifting things", want) == "how"
+
+
+def test_aggravation_frames_seen_live_are_all_caught() -> None:
+    for q in (
+        "Does repeating movements make the pain worse?",
+        "Does the pain get worse if you have to move your arm back and forth?",
+        "Is the pain worse when you have to support weight with your arm?",
+        "Is the pain you are feeling more bothersome when you lift things?",
+    ):
+        assert facets.asks_about_aggravation(q), q
+    for q in (
+        "Is it your wrist?",
+        "Do you want to call them?",
+        "Is the pain sharp?",
+    ):
+        assert not facets.asks_about_aggravation(q), q
+
+
+def test_gerund_led_picks_the_right_sentence_frame() -> None:
+    assert facets.gerund_led("lifting things")
+    assert facets.gerund_led("repeating movements")
+    assert facets.gerund_led("dropping things")
+    # "bring" ends in -ing and is not a gerund — the trap this guards.
+    assert not facets.gerund_led("bring it")
+    assert not facets.gerund_led("call them")
+    assert not facets.gerund_led("tell them something")
+    assert not facets.gerund_led("")
+
+
 # ------------------------------------------------------- the direction layer
 
 

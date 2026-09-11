@@ -634,6 +634,104 @@ number, which is how instruments get bent toward the answer you wanted.
 
 ---
 
+## 1h. Evidence — the 09-10 synthetic wrist round: the board is request-shaped
+
+First run on the clarifying-mode stack, **synthetic persona, no patient data**
+(`serve_cerberus.sh synthetic`). Target: *"I think I broke my wrist."* One
+round, **57 questions**, and the engine never once asked whether it was her
+wrist — the caregiver had to type it into the synthesis editor at q53.
+
+| | |
+|---|---|
+| **3 of 57** | questions tried to narrow the LOCATION — q2 arm, q3 forearm, q39 shoulder |
+| **25 of 57** | asked about cause or aggravation (14 + 11) |
+| **4 of 57** | asked WHO — spouse, caregiver, doctor — on a round where nobody is the answer |
+| **16 of 57** | were clarifications, including the flip loop below |
+| answers | 24 yes / 24 no / 9 kinda |
+
+Fourteen further questions *mentioned* "arm", but as the setting for a cause
+question, never to narrow it: *"Is the pain you are feeling in your arm related
+to inflammation in your joints?"*
+
+### The root cause — a request-shaped board on a report-shaped need
+
+Owner's framing, and it is the right one: *"high level topics imply a form of
+questioning that isn't utilized. When talking about 'my body', if pain emerges
+as a detail then why would I ever want pain?"*
+
+The 5W1H board is **request-shaped**. `how` is defined as *an action wanted*;
+the template draft is literally `"I need/want {what} … for/from {who}"`. That
+fits *"I need Rob to move the picture."* It does not fit *"I think I broke my
+wrist"*, which is a **report**: there is no who, the why is an injury, and there
+is no action the person wants. The engine still had those slots to fill, so it
+filled them with the nearest available material — and the material to hand was
+aggravation:
+
+```
+q17 "Does repeating movements make the pain worse?"  -> yes   how: repeating movements
+q18 "Does lifting things make the pain worse?"       -> yes   how: lifting things
+q21 "Do you want to lift things?"                    -> no    (correctly!)
+q22 "You want to lifting things, correct?"           -> no
+```
+
+The double-checks were right to come back no — she does not want to lift
+things. But each one was a *contradiction*, which opened clarifying mode, which
+walked the draft, which re-asked… The clarifying machinery worked exactly as
+designed on a board that was wrong underneath it.
+
+**The satisfying part:** those 25 questions were answering **`why`** all along
+and filing it under `how`. `why` sat empty the entire round — and an empty
+modifier slot is exactly what the focus policy probes at priority 4.
+
+### Three defects, in order of damage
+
+**D1 — an unfillable slot absorbs the round (NOT YET FIXED, see W2-V).** Both
+core slots went confident early (`pain`, `arm`), so the policy dropped to
+"probe an empty modifier" and picked `why`. Every guess drew no or **kinda**,
+and `_run_working` treats a kinda as *this run is producing*, which extends past
+`MAX_CATEGORY_RUN` without bound. Nine kindas kept `why`/`how` alive for ~25
+questions while `where` — already "confident" at `arm` — was never revisited.
+
+**D2 — `how` credited from aggravation questions (FIXED 09-10).**
+`remap_slot` now re-files an action credited to `how` by an aggravation
+question into `why`, where it belongs. Ten of the eleven aggravation questions
+in this round are caught by the deterministic frame test; the eleventh was
+already a cause question. One rule fixes three symptoms: the `how` pollution,
+the bogus double-checks, and `why` starving.
+
+**D3 — the clarification frame broke on gerunds (FIXED 09-10).** *"You want to
+lifting things, correct?"* was spoken aloud, repeatedly. The frame is now chosen
+by the value's grammatical **form**, not its slot: gerunds take *"This is about
+lifting things"*, bare verbs take *"You want to call them"*. `bring` is the trap
+— it ends in `-ing` and is not a gerund.
+
+### The flip loop (FIXED 09-10, see W2-T tail)
+
+Caught verbatim in the log, and the clearest single reproduction of the bug:
+
+```
+q56 "You don't want to lift things, correct?"  -> Yes   the caregiver's flip
+q57 "You want to lifting things, correct?"     -> No    the template, again
+```
+
+Note which one is better English. **The model's flip repaired the frame that
+the template had broken** — which is what identified D3 as the defect rather
+than the flip.
+
+### What worked
+
+The arm→wrist swap in the synthesis editor landed cleanly and the walk picked
+the new detail up on the very next turn:
+
+```
+q53  arm -> wrist
+q54  "This is about wrist, correct?"                          -> yes
+q58  "Is the pain in your wrist because you have been using it too much?"
+```
+
+Verification also behaved: **6 checks in 58 questions**, roughly the 1-in-5 the
+W2-U measurement predicted, and none of them felt like the old 1-in-56 famine.
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -1941,6 +2039,89 @@ at all; that was harmless while checks were rare and threw the round into
 restart recovery once they were routine. Any new mock driving a round needs that
 branch.
 
+### W2-V · An unfillable slot must not absorb the round — Status: PROPOSED (09-10, §1h D1)
+
+**Problem.** The largest single waste in the wrist round: ~25 of 57 questions
+went to `why`/`how` while `where` sat at `arm` and the target was `wrist`. Two
+rules compound:
+
+1. focus priority 4 — *every core slot confident → probe an EMPTY modifier* —
+   picks `why`, which for a broken wrist has no answer worth having;
+2. `_run_working` treats **kinda** as "this run is producing", so a run of
+   kindas extends past `MAX_CATEGORY_RUN` **without bound**. Nine kindas held
+   the slot for twenty-five questions.
+
+Rule 2 is the load-bearing one, and its own docstring gives the intent away:
+*"Lets a working drill-ladder extend past MAX_CATEGORY_RUN; the first miss
+(no / not-sure) ends the extension."* A ladder that climbs on kindas is not
+working — it is a slot that cannot resolve.
+
+**Proposal (needs owner iteration — this is the focus policy).**
+(a) Cap the working extension: a run may extend, but not indefinitely —
+`MAX_CATEGORY_RUN + n` total, or require a **yes** (not a kinda) to extend.
+(b) Declare a modifier slot EXHAUSTED after k consecutive non-yes probes and
+drop it from the priority-4 pool for the rest of the segment, the way
+`_futile_pair` already retires a dead avenue.
+(c) Re-open a confident-but-coarse core slot for drilling when no modifier is
+making progress — `where: arm` with nothing beneath it is not finished.
+
+**Note:** D2's fix (aggravation → `why`) may reduce this on its own, since `why`
+was empty *because* its answers were being filed under `how`. **Measure before
+building** — this is exactly the case where the next trial tells us whether
+there is anything left to fix.
+
+### W2-W · Role-separated review agents — Status: PROPOSED (owner, 09-10)
+
+**Owner's proposal.** Define multiple agents with clear roles: a **question
+proposer**, a **grammatical expert**, a **physician**, and a **logical mock
+patient** that pushes back — *"is this logical given emergent details?"*, *"I
+just told you this is about my arm so obviously it is not about someone else's
+arm."* The logistician is also the intended guard for the §1h root cause: under
+"my body", once `pain` has emerged, the round should never ask what the patient
+*wants* pain for.
+
+**Why this is the right diagnosis.** Every defect in §1h is a question that a
+competent reader would have caught before it was asked:
+
+| Live question | Which role catches it |
+|---|---|
+| *"You want to lifting things, correct?"* | grammarian |
+| *"Do you want to lift things?"* (after "lifting makes it worse") | logistician |
+| *"Are you talking about this pain with your spouse?"* ×4 | logistician |
+| 25 cause questions, 3 location questions, for a suspected fracture | physician |
+
+**The cost, stated honestly.** Latency is already the binding constraint —
+9.6 s/question, 86% of it the deliberate phase, and W2-S measured that adding
+prompt constraint makes *this* model fail harder, not better. A four-role
+review pass is 4× the calls on every question. That is the thing to design
+around, not to discover afterwards.
+
+**Cheaper shapes worth costing first, in ascending order:**
+
+1. **The grammarian is not a model.** D3 was fixed with one form test and a
+   19-word denylist. Deterministic text rules already carry `_META_PHRASES`,
+   `action_like` and `is_repeat`; grammar belongs with them, at zero latency.
+2. **The logistician is mostly a board query.** *"I just told you it's my arm"*
+   is `where` already confirmed; *"why would I want pain?"* is a symptom `what`
+   under a body topic. Both are readable off the board with no model call — and
+   a code-level guard cannot itself hallucinate.
+3. **The physician is a topic prior, not a reviewer.** "Suspected fracture →
+   ask location, onset, and whether it can bear weight, before cause" is a
+   per-topic question ORDER. `topics.yaml` already carries `core_facets`,
+   `facet_priority` and `reasoning_hint`; §1h says those are right for
+   physical_health and were simply overridden by the priority-4 rule.
+4. **Only the adversarial patient plausibly needs a model**, and only as a
+   gate on the drafted question — one extra fast call, not four.
+
+**Open question for iteration:** whether roles 1–3 as deterministic checks get
+most of the benefit at none of the latency, leaving a single adversarial
+reviewer as the only new model call. §1h suggests they might: three of the four
+rows in the table above are decidable from the board and the question text
+alone.
+
+**Depends on:** a decision about W2-V first — if the round stops wasting 25
+questions on an unfillable slot, the review pass has much less to catch.
+
 ### W3-I · Mass-scaled confidence checks — Status: PROPOSED
 
 **Problem (audit F1/F2; A5).** Absolute thresholds (ready 2.0 / margin 1.0 /
@@ -2027,5 +2208,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W2-S | Prompt-side re-ask reduction | **TRIED AND REJECTED (09-09)** — measured 3 ways; constraining the model more doubled diagnostics and early-ending rounds. Latency lever is not prompt-side. See §1e |
 | **W2-T** | **Clarifying mode** | **IMPLEMENTED (09-10)** — a contradicted double-check scores NOTHING and opens a clarification; never terminal. Owner-proposed; closes W2-L and W2-Q. Its anchored-restore question was superseded the same day by W2-U's detail walk |
 | **W2-U** | **Check every new detail · conflict trigger · gated detail walk · the dig** | **IMPLEMENTED (09-10)** — checks fire on the draft's new details (1-in-56 → 1-in-4.7 live, 0.4 s each); a rise-then-fall score is a second clarify trigger (1 per 26 q, 65% of rounds never fire); the mode is GATED on a scored detail existing; clarifying confirms the draft in templated questions at ZERO LLM calls, then DIGS — anchor held, axis turned — when every detail holds. Demarcated in the cockpit. Owner-directed |
+| **W2-V** | **An unfillable slot absorbs the round** | PROPOSED (09-10, §1h D1) — ~25 of 57 questions lost to `why` because a run of KINDAS extends the rotation guard without bound. Needs owner iteration (focus policy); D2's fix may shrink it first — measure |
+| **W2-W** | **Role-separated review agents** (proposer · grammarian · physician · logistician) | PROPOSED (owner, 09-10) — right diagnosis of §1h; the open question is how much of it is deterministic. 3 of the 4 catches are decidable from the board and question text with no model call |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | **REJECTED (owner, 09-10)** — fatigue is not a cost this engine models; the caregiver and patient end the session |
