@@ -7,7 +7,7 @@
 #
 #   ./scripts/serve_cerberus.sh            start: API in tmux + Tailscale serve
 #   ./scripts/serve_cerberus.sh synthetic  same, but the DEMO persona — no real
-#                                          patient data, recording off
+#                                          patient data; dev capture ON
 #   ./scripts/serve_cerberus.sh logs       attach to the API tmux (Ctrl-b then d to detach)
 #   ./scripts/serve_cerberus.sh status     what's running + the cockpit URL
 #   ./scripts/serve_cerberus.sh stop       tear it all down
@@ -42,21 +42,25 @@ export MY20Q_KOKORO_VOICE="${MY20Q_KOKORO_VOICE:-}"
 export MY20Q_OLLAMA_TIMEOUT="${MY20Q_OLLAMA_TIMEOUT:-120}"
 
 # Reasoning behavior knobs (see config.ReasoningTuning). Empty = code default.
-# Tune the questioning/synthesis loop here without touching code:
-#   MIN_YES         yeses before the FIRST synthesis attempt        (default 5)
-#   NEW_YES         NEW yeses before each later attempt             (default 3)
-#   REPHRASE_LIMIT  rephrases per attempt after the first utterance (default 3)
-#   SYNTH_ATTEMPTS  failed attempts before dump-and-reseed          (default 2)
-#   EXPLORE_DECAY   explore prob = base^(yeses+1), base in [0,1]    (default 0.67)
-#                   (high exploration early, decaying as yeses approach synthesis)
-#   SOFT_RESET_NOS  consecutive "no"s that trigger a soft reset     (default 10)
-# A round NEVER ends on its own now — only a "yes" to a proposed utterance ends it.
-export MY20Q_MIN_YES="${MY20Q_MIN_YES:-}"
-export MY20Q_NEW_YES="${MY20Q_NEW_YES:-}"
-export MY20Q_REPHRASE_LIMIT="${MY20Q_REPHRASE_LIMIT:-1}"
-export MY20Q_SYNTH_ATTEMPTS="${MY20Q_SYNTH_ATTEMPTS:-}"
+# These are the ones that actually do something:
+#   EXPLORE_DECAY   explore prob = base^(slot_mass/ready + 1), base in [0,1]
+#                   (default 0.67; per-SLOT since 09-11 — high where the focus
+#                    slot knows nothing, low where it is already confident)
+#   SOFT_RESET_NOS  consecutive "no"s that trigger a restart        (default 10)
+#   STALL_WINDOW    answers with no new confirmation -> restart     (default 8)
+#   FACET_READY     points at which a slot counts as established    (default 2.0)
+#   SPLIT_MARGIN    tie width, and the confidence lead              (default 1.0)
+#   RETIRE_X        retire at >= X * FACET_READY, runner <= half    (default 3.0)
+#
+# MY20Q_MIN_YES / NEW_YES / REPHRASE_LIMIT / SYNTH_ATTEMPTS were REMOVED on
+# 09-11. They had had no engine effect since the living proposal banner replaced
+# engine-initiated synthesis in 06-11, but were still parsed, clamped, exported
+# here and documented above as live tuning — so setting them looked like it did
+# something and never did. A round never ends on its own: only the caregiver's
+# ✓ on the banner concludes one.
 export MY20Q_EXPLORE_DECAY="${MY20Q_EXPLORE_DECAY:-}"
 export MY20Q_SOFT_RESET_NOS="${MY20Q_SOFT_RESET_NOS:-}"
+export MY20Q_STALL_WINDOW="${MY20Q_STALL_WINDOW:-}"
 
 # Patient profile. Honor an explicit MY20Q_PROFILE if exported; otherwise fall
 # back to the standard real-patient location when that file is present. A real
@@ -98,12 +102,17 @@ start() {
     echo "Already running in tmux '$SESSION'.  logs: $0 logs   stop: $0 stop"
   else
     tmux new-session -d -s "$SESSION" -c "$REPO" \
-      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_TTS_ENGINE='${MY20Q_TTS_ENGINE:-}' MY20Q_KOKORO_MODEL='${MY20Q_KOKORO_MODEL:-}' MY20Q_KOKORO_VOICES='${MY20Q_KOKORO_VOICES:-}' MY20Q_KOKORO_VOICE='${MY20Q_KOKORO_VOICE:-}' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_MIN_YES='${MY20Q_MIN_YES:-}' MY20Q_NEW_YES='${MY20Q_NEW_YES:-}' MY20Q_REPHRASE_LIMIT='${MY20Q_REPHRASE_LIMIT:-}' MY20Q_SYNTH_ATTEMPTS='${MY20Q_SYNTH_ATTEMPTS:-}' MY20Q_EXPLORE_DECAY='${MY20Q_EXPLORE_DECAY:-}' MY20Q_SOFT_RESET_NOS='${MY20Q_SOFT_RESET_NOS:-}' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_DEV_CAPTURE='${MY20Q_DEV_CAPTURE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
+      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_TTS_ENGINE='${MY20Q_TTS_ENGINE:-}' MY20Q_KOKORO_MODEL='${MY20Q_KOKORO_MODEL:-}' MY20Q_KOKORO_VOICES='${MY20Q_KOKORO_VOICES:-}' MY20Q_KOKORO_VOICE='${MY20Q_KOKORO_VOICE:-}' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_EXPLORE_DECAY='${MY20Q_EXPLORE_DECAY:-}' MY20Q_SOFT_RESET_NOS='${MY20Q_SOFT_RESET_NOS:-}' MY20Q_STALL_WINDOW='${MY20Q_STALL_WINDOW:-}' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_DEV_CAPTURE='${MY20Q_DEV_CAPTURE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
     echo "API started in tmux '$SESSION' (127.0.0.1:$PORT)"
     if [ -n "${MY20Q_PROFILE:-}" ]; then
-      echo "Profile:  $MY20Q_PROFILE  (real-patient => local LLM + recording on)"
+      echo "Profile:  $MY20Q_PROFILE"
     else
-      echo "Profile:  none (synthetic/dev — no recording)"
+      echo "Profile:  none (synthetic/dev)"
+    fi
+    if [ "${MY20Q_DEV_CAPTURE:-}" = "1" ]; then
+      echo "Capture:  dev_recordings/  (synthetic only — refused if a real profile loads)"
+    else
+      echo "Capture:  patient dataset if a real profile is loaded, otherwise none"
     fi
   fi
 

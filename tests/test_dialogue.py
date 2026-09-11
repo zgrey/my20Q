@@ -779,22 +779,29 @@ async def test_persistent_failure_surfaces_diagnostic_and_retry_works(
 # ---------------------------------------- anti-farming, kinda-loop, pinning
 
 
-async def test_farming_yeses_do_not_advance_the_synthesis_gate(
+async def test_a_farming_yes_is_stamped_as_uninformative(
     topics: list[Topic],
 ) -> None:
-    # Re-confirming an established pair earns points but NOT gate progress —
-    # one trial satisfied the resynthesis gate with zero-information yeses and
-    # looped 16 near-identical utterances.
+    """Re-confirming an established pair earns points but carries no information.
+
+    The flag used to gate synthesis; the banner removed those gates, so it is
+    now INSTRUMENTATION — the autopsy dump and the bench read it to measure
+    confirmation farming, and nothing in the engine branches on it.
+    """
     rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
                 rng=_FixedRandom(0.99))
     await rnd.open()
-    rnd._history = [
-        {"kind": "query", "text": f"q{i}", "answer": "yes",
-         "slots": {"what": "a drink"}, "informative": i == 0}
-        for i in range(4)
-    ]
-    # 4 yeses on the board, but only the first carried information.
-    assert rnd._yes_since_last_synth(rnd._segment()) == 1
+    await rnd.answer(Answer.YES)  # first yes on this pair: informative
+    assert rnd.history[0]["informative"] is True
+
+    # Force a second yes on the SAME, now-established pair.
+    rnd._history.append(
+        {"kind": "query", "text": "again?", "answer": "yes",
+         "slots": {"what": rnd.history[0]["slots"]["what"]}}
+    )
+    board = rnd._replay_board()
+    pair = rnd.history[0]["slots"]["what"]
+    assert board["what"][pair] >= rnd.tuning.facet_ready_points
 
 
 async def test_banner_template_shows_ambiguous_alternates(
@@ -828,24 +835,31 @@ async def test_banner_template_shows_ambiguous_alternates(
     assert rnd.banner()["text"] == "I need/want something to tell Rob …"
 
 
-async def test_pin_focus_targets_weakest_slot_after_rejection(
+async def test_no_synthesis_entry_is_ever_unconfirmed(
     topics: list[Topic],
 ) -> None:
-    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
-    rnd._seed_values = {"what": ["a drink"], "how": ["bring it"]}
-    rnd._history = [
-        {"kind": "query", "text": "drink?", "answer": "yes",
-         "slots": {"what": "a drink"}},
-        {"kind": "query", "text": "more drink?", "answer": "yes",
-         "slots": {"what": "a drink"}},
-        {"kind": "query", "text": "bring?", "answer": "kinda",
-         "slots": {"how": "bring it"}},
-        {"kind": "synthesis", "text": "Bring me a drink.", "answer": "kinda",
-         "slots": {"what": "a drink", "how": "bring it"}},
-    ]
-    focus, directive, _ = rnd._pick_focus(rnd._replay_board(), rnd._history)
-    # what is confident (2.0); how (0.5) is the utterance's weak detail.
-    assert (focus, directive) == ("how", "pin")
+    """The invariant that made the `pin` directive dead code.
+
+    `pin` targeted the weakest slot of a REJECTED utterance. Since W1-C deleted
+    engine-initiated synthesis there is exactly one place a synthesis entry is
+    written — `accept()` — and it hardcodes answer=YES, so "rejected" could
+    never occur. No synthesis action ever becomes `_pending` either: the two
+    `synthesize()` callers (`_refresh_draft`, `restate()`) touch only the draft
+    cache.
+
+    If this test ever fails, proposals are back and `pin` should come back with
+    them.
+    """
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    for _ in range(3):
+        assert rnd._pending is None or rnd._pending.kind == "query"
+        await rnd.answer(Answer.YES)
+    rnd.accept()
+    synths = [h for h in rnd.history if h.get("kind") == "synthesis"]
+    assert synths, "accept() writes the only synthesis entry there is"
+    assert all(h["answer"] == Answer.YES.value for h in synths)
 
 
 # ------------------------------------------ refinement links (W3-H)
@@ -1972,16 +1986,30 @@ def test_history_formatting_dumps_noise_after_restart() -> None:
 
 
 def test_reasoning_tuning_from_env(monkeypatch) -> None:
-    monkeypatch.setenv("MY20Q_MIN_YES", "7")
-    monkeypatch.setenv("MY20Q_REPHRASE_LIMIT", "5")
     monkeypatch.setenv("MY20Q_EXPLORE_DECAY", "1.8")  # above the range -> clamped
     monkeypatch.setenv("MY20Q_SPLIT_MARGIN", "0.5")
+    monkeypatch.setenv("MY20Q_STALL_WINDOW", "12")
     t = ReasoningTuning.from_env()
-    assert t.min_yes_for_synthesis == 7
-    assert t.rephrase_limit == 5
     assert t.explore_decay == 1.0  # clamped into [0, 1]
     assert t.facet_split_margin == 0.5
-    assert t.new_yes_for_resynthesis == 3  # untouched -> default
+    assert t.stall_window == 12
+    assert t.facet_ready_points == 2.0  # untouched -> default
+
+
+def test_the_retired_synthesis_knobs_are_gone(monkeypatch) -> None:
+    """They were parsed, clamped and documented to operators while doing nothing.
+
+    The living proposal banner replaced engine-initiated synthesis in 06-11 and
+    these count-gates have had no effect since; they were kept "until the banner
+    survives a live trial", which it has.
+    """
+    for var in ("MY20Q_MIN_YES", "MY20Q_NEW_YES", "MY20Q_REPHRASE_LIMIT",
+                "MY20Q_SYNTH_ATTEMPTS"):
+        monkeypatch.setenv(var, "99")
+    t = ReasoningTuning.from_env()
+    for gone in ("min_yes_for_synthesis", "new_yes_for_resynthesis",
+                 "rephrase_limit", "synth_attempts_before_restart"):
+        assert not hasattr(t, gone), f"{gone} is back — does it DO anything now?"
 
 
 def test_explore_probability_decays_with_yeses(topics: list[Topic]) -> None:
@@ -2029,7 +2057,7 @@ async def test_a_slot_that_keeps_minting_values_keeps_exploring(
     rnd = Round(
         _topic(topics, "physical_health"),
         llm=MockBackend(responder=responder),
-        tuning=ReasoningTuning(min_yes_for_synthesis=99, explore_decay=2 / 3),
+        tuning=ReasoningTuning(explore_decay=2 / 3),
         rng=_FixedRandom(0.4),  # pinned just under the initial 0.667 rate
     )
     await rnd.open()  # the focus slot knows nothing -> p=0.667 > 0.4 -> explore

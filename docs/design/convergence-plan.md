@@ -830,6 +830,107 @@ its entry flags is gone** — the transcript survived, the per-entry
 synthetic personas by design, so the watcher is the only capture; it saved
 markdown only. Save the JSONL export too.
 
+## 1j. LEDGER — what is actually in the build, as of 2026-09-11
+
+Read this before the next trial. Several items below were proposed, partly
+built, then narrowed or reverted within a day, and the queue entries alone do
+not make the end state legible.
+
+### IN — on `main`
+
+| | |
+|---|---|
+| Clarifying mode (W2-T) | a contradicted double-check scores NOTHING; an anchored clarification carries the evidence |
+| Detail checks (W2-U a) | `_verify_due` fires on every new draft detail, not at lock. 1-in-56 → ~1-in-5 |
+| Conflict trigger (W2-U b) | a score that rises then falls opens a clarification, no double-check needed |
+| Gated walk + dig (W2-U c–e) | the mode needs a SCORED detail to open; confirm walk is templated (0 LLM calls); all-confirmed → dig |
+| Aggravation remap (D2) | "does X make it worse?" credits `why`, not `how` |
+| Gerund frame (D3) | the confirm frame follows the value's grammatical form |
+| Flip inside clarifying | mode, phase and detail survive a flip; the walk advances |
+| Non-freezing input (CB-1) | typing is never blocked; dispatch still serialised |
+| Restate guard (CB-2) | ⟳ raises rather than silently no-op'ing |
+| Dev capture | synthetic trials write `dev_recordings/`; mirror-guarded |
+
+### IN — on `w2-board-refinements` (not yet merged)
+
+| | |
+|---|---|
+| W2-Y vacuous placeholders | wider non-identifying set, ladder roots excluded |
+| W2-X (a) per-slot explore | `explore_decay ** (slot_mass / ready + 1)` |
+| Explore/exploit split | `probe` is the ONLY directive that may carry the explore flag |
+| **Simplification pass** | see 1k below |
+
+### REVERTED — built, then removed the same day
+
+- **W2-X (b) weakest-first drill ranking.** Drill is exploitation; ranking it
+  weakest-first asks it to refine what it knows least. Owner-corrected. W2-Y
+  alone fixes the §1i starvation — verified by replaying that board both ways.
+
+### PROPOSED — NOT built, do not expect it in a trial
+
+- **W2-V** unfillable-slot starvation (kinda extends rotation without bound)
+- **W2-W** role-separated review agents (proposer / grammarian / physician /
+  logistician). **Nothing of this exists in code.**
+- **W3-I** mass-scaled confidence
+
+### DROPPED
+
+- **W2-E** tag rescue (re-measured to 1-in-25; not worth changing a working engine)
+- **W4-J** fatigue-aware stopping (owner: fatigue is not a cost this engine models)
+- **W2-S** prompt-side re-ask reduction (measured; made things worse)
+
+## 1k. Simplification pass — mechanisms made redundant
+
+Prompted by the owner's observation that the engine had bloated without enough
+review. Each removal below is **provably dead**, not merely unused-looking.
+
+**`pin` (FOC-P1) — REMOVED.** It targeted the weakest slot of a *rejected
+utterance*. Since W1-C deleted engine-initiated synthesis there is exactly one
+place a synthesis entry is written — `accept()` — and it **hardcodes
+`answer: YES`**. No synthesis action ever becomes `_pending` either: the only
+two `synthesize()` callers touch the draft cache. So "rejected utterance" could
+not occur, and `pin` has been unreachable since June.
+`test_no_synthesis_entry_is_ever_unconfirmed` now locks the invariant.
+
+**`_yes_since_last_synth` — REMOVED.** Its last caller was the round-level
+explore decay, replaced by `_slot_confirmation_depth` in W2-X (a).
+
+**Four config knobs — REMOVED.** `min_yes_for_synthesis`,
+`new_yes_for_resynthesis`, `rephrase_limit`, `synth_attempts_before_restart`
+were retired in 06-11 and kept "until the banner survives a live trial". It has.
+Until now they were parsed, clamped, threaded through the tmux command and
+**documented to the operator in `serve_cerberus.sh` as live tuning** — so
+setting `MY20Q_MIN_YES` looked like it did something and never did.
+
+**`informative` — RECLASSIFIED, not removed.** It once gated synthesis. Nothing
+branches on it now; it is read only by `dump_recording.py` and the bench as a
+confirmation-farming metric. Kept as instrumentation, and the test says so.
+
+### Candidate, NOT done — fold CHK into the confirm walk
+
+`CHK` (double-check) and `CLR-C` (confirm walk) are the same act with different
+machinery: re-ask a value already believed. `CHK` spends an LLM call and its own
+prompt surface; `CLR-C` is templated and free. From the 09-11 instrumented
+traces, side by side:
+
+```
+CHK  "Is it my daughter you want to talk to?"   CLR  "This is about my daughter, correct?"
+CHK  "Do you want to visit them?"               CLR  "You want to visit them, correct?"
+CHK  "Do you mean pain?"                        CLR  "This is about pain, correct?"
+CHK  "Is it leg you want to talk about?"        CHK  "Is it caregiver you want to talk to?"
+```
+
+The last two are the awkward phrasing W2-L was opened about, and the pairs above
+them are the *same value* asked twice by two mechanisms in adjacent turns.
+Templating `CHK` would delete `reasoner.verify`, `VERIFY_SYSTEM`,
+`verify_messages`, `_SLOT_PHRASE`, `_SLOT_EXAMPLE` and `VERIFY_MAX_TOKENS`, make
+checks free instead of 0.4 s, and make the slot-gloss TTS leak **structurally
+impossible** rather than guarded by a denylist.
+
+**Not done because it is a design change and the trial should not carry it
+unannounced.** Owner's call — and worth watching in the next trial whether the
+model-written check ever phrases something the template could not.
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -2487,6 +2588,7 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W1-B | Focus v3: retire/widen/rotate-on-stall | **IMPLEMENTED** (06-11, amended: ratio retirement, banded priority) |
 | W1-C | The living proposal banner (Speak / ✓ / ✗-edits) | **IMPLEMENTED** (06-11; validated in trial 2 — banner moved up top + ready-glow strengthened per owner notes) |
 | W1-D | Focus directives in the context field (shrunk by C) | PROPOSED · demoted (✗-flow absorbed it in trial 2) |
+| — | **pin directive (was FOC-P1)** | **REMOVED (09-11)** — unreachable since W1-C: the only synthesis entry is written by ccept() and hardcodes answer=YES, so "rejected utterance" could never occur |
 | W1-E | Per-topic priorities · body-aware seeds · replacement ✗-edits | **IMPLEMENTED** (06-11; body core → what+where) |
 | W1-F | The synthesis editor (selectable segments · candidates · ⟳ Restate) | **IMPLEMENTED** (06-11/12, owner-designed; ✗-note UI retired, free-text path hardened) |
 | W2-E | Candidates + tag rescue + pronoun fold | PROPOSED (§1d C2: **fifth sighting** — toes, right thigh, "hurting" all wasted on established tags). Ordered after W2-K |

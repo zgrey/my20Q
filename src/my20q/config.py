@@ -22,15 +22,16 @@ class ReasoningTuning:
     these off the active ``Round.tuning``.
     """
 
-    #: RETIRED (2026-06-11, the living proposal banner): the engine no longer
-    #: proposes/rephrases on its own — the caregiver accepts the banner draft —
-    #: so the synthesis count-gates below have no engine effect. Kept (with
-    #: their env vars) so existing serve scripts don't break; removed once the
-    #: banner survives a live trial.
-    min_yes_for_synthesis: int = 5
-    new_yes_for_resynthesis: int = 3
-    rephrase_limit: int = 1
-    synth_attempts_before_restart: int = 2
+    # DELETED 2026-09-11: min_yes_for_synthesis / new_yes_for_resynthesis /
+    # rephrase_limit / synth_attempts_before_restart. They were retired in
+    # 06-11 when the living proposal banner replaced engine-initiated synthesis,
+    # and kept with their env vars "until the banner survives a live trial".
+    # It has — four accepted rounds on 09-09 plus the 09-10 and 09-11 trials —
+    # so the condition for removing them is met. Until now MY20Q_MIN_YES,
+    # MY20Q_NEW_YES, MY20Q_REPHRASE_LIMIT and MY20Q_SYNTH_ATTEMPTS were parsed,
+    # clamped, threaded through the serve script and documented to the operator
+    # as live tuning, while changing nothing at all.
+
     #: Exploration DECAYS as yeses accrue toward synthesis. The next question is
     #: exploratory (profile dropped, free to probe a brand-new on-topic value) with
     #: probability ``explore_decay ** (yeses + 1)`` — high early, low as the round
@@ -74,10 +75,6 @@ class ReasoningTuning:
             return min(hi, max(lo, float(raw))) if raw else default
 
         return cls(
-            min_yes_for_synthesis=_int("MY20Q_MIN_YES", 5, minimum=1),
-            new_yes_for_resynthesis=_int("MY20Q_NEW_YES", 3, minimum=1),
-            rephrase_limit=_int("MY20Q_REPHRASE_LIMIT", 1, minimum=0),
-            synth_attempts_before_restart=_int("MY20Q_SYNTH_ATTEMPTS", 2, minimum=1),
             explore_decay=_float("MY20Q_EXPLORE_DECAY", 2 / 3, lo=0.0, hi=1.0),
             soft_reset_no_streak=_int("MY20Q_SOFT_RESET_NOS", 10, minimum=1),
             stall_window=_int("MY20Q_STALL_WINDOW", 8, minimum=0),

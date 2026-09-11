@@ -1364,23 +1364,24 @@ class Round:
         Runs only when the round is NOT clarifying and no detail is owed a
         double-check; `_advance` handles both of those ahead of this.
 
-        Priorities (code decides strategy; the model only does language):
-        1. PIN the weakest slot of a just-rejected utterance — a kinda/no on a
-           proposal means one of its details is off; target it instead of
-           re-confirming the parts that already scored (this automates the
-           "FOCUS on WHAT" note the caregiver had to type in two trials).
-        2. PROBE a core slot with no positively-led contender — coverage first,
-           so synthesis is never missing its essential pieces.
-        3. SPLIT a slot whose top two contenders are tied — matching scores
-           carry no decision, so separate them.
-        4. Every core slot confident → PROBE an empty modifier slot (fresh
-           coverage beats re-drilling).
-        5. DRILL a LIVE slot — any slot with a positive leader, core or not,
-           that has not RETIRED. Core slots outrank modifiers; unestablished
-           leaders outrank established ones (coverage first); then the
-           topic's ``facet_priority`` order (data, not logic — e.g. my_people
-           ranks "where" last: usually implied in caregiving), then weakest
-           leader.
+        Priorities (code decides strategy; the model only does language), with
+        each classified EXPLORE (find a value the board lacks) or EXPLOIT
+        (refine one it has):
+
+        1. PROBE a core slot with no positively-led contender — coverage first,
+           so synthesis is never missing its essential pieces. **EXPLORE**, and
+           the only directive that may carry the explore flag.
+        2. SPLIT a slot whose top two contenders are tied — matching scores
+           carry no decision, so separate them. **EXPLOIT**: both candidates
+           are already known; this is disambiguation.
+        3. Every core slot confident → PROBE an empty modifier slot (fresh
+           coverage beats re-drilling). **EXPLORE**.
+        4. DRILL a LIVE slot — any slot with a positive leader, core or not,
+           that has not RETIRED. **EXPLOIT**: the leader is confirmed but
+           vague, so this needs confidence to operate on. Core slots outrank
+           modifiers; unestablished leaders outrank established ones (coverage
+           first); then the topic's ``facet_priority`` order (data, not logic —
+           e.g. my_people ranks "where" last: usually implied in caregiving).
 
         RETIREMENT (the 06-11 metronome fix — ~14 tail drills on who at
         +25.5): a slot whose leader DOMINATES (>= retire_ready_x * ready
@@ -1417,29 +1418,15 @@ class Round:
                     return c
             return None
 
-        # 1. After a rejected utterance: pin its weakest used slot until it is
-        #    confident (then fall through to the normal policy).
-        last_syn = next(
-            (h for h in reversed(seg) if h.get("kind") == "synthesis"), None
-        )
-        if last_syn is not None and last_syn.get("answer") in (
-            Answer.NO.value,
-            Answer.KINDA.value,
-        ):
-            used = last_syn.get("slots") or {}
-            ranked_used = sorted(
-                used.items(),
-                key=lambda cv: board.get(cv[0], {}).get(cv[1], 0.0),
-            )
-            for cat, _val in ranked_used:
-                if cat not in facets.CATEGORIES or cat in muted:
-                    continue
-                if self._family_confident(board, cat):
-                    continue
-                if fresh(cat):
-                    return cat, "pin", None
+        # (The `pin` directive used to sit here, targeting the weakest slot of a
+        # REJECTED utterance. It has been unreachable since W1-C deleted
+        # engine-initiated synthesis: the only synthesis entry ever written is
+        # the one `accept()` appends, and it hardcodes answer=YES, so the
+        # "answered no/kinda" condition could never hold. Removed 09-11 —
+        # `test_no_synthesis_entry_is_ever_unconfirmed` locks the invariant that
+        # made it dead, so reviving proposals will fail that test first.)
 
-        # 2. Unestablished core slots — no family confirmed above zero yet.
+        # 1. Unestablished core slots — no family confirmed above zero yet.
         open_core = []
         for cat in core:
             fams = facets.families(board, cat, self._edges)
@@ -1449,13 +1436,13 @@ class Round:
         if cat is not None:
             return cat, "probe", None
 
-        # 3. Tied top contenders anywhere (core first) — split them.
+        # 2. Tied top contenders anywhere (core first) — split them.
         for cat in core + others:
             pair = facets.tied_top(board, cat, margin=T.facet_split_margin)
             if pair is not None and fresh(cat):
                 return cat, "split", (pair[0][0], pair[1][0])
 
-        # 4. Every core slot is confident → enrich an empty modifier slot.
+        # 3. Every core slot is confident → enrich an empty modifier slot.
         if all(self._family_confident(board, c) for c in core):
             open_other = []
             for c in others:
@@ -1466,7 +1453,7 @@ class Round:
             if alt is not None:
                 return alt, "probe", None
 
-        # 5. Drill a live slot (core or not; retired slots are out —
+        # 4. Drill a live slot (core or not; retired slots are out —
         #    re-drilling a settled answer is the metronome). Rank: core block
         #    first; within a block, UNESTABLISHED families (below ready) before
         #    established ones (coverage is information; refinement can wait);
@@ -2236,26 +2223,6 @@ class Round:
         if len(seg) == len(self._history):  # no restart marker exists yet
             return False
         return not any(h.get("kind") == "query" and h.get("answer") for h in seg)
-
-    @staticmethod
-    def _yes_since_last_synth(seg: list[dict]) -> int:
-        """Count INFORMATIVE query yeses after the segment's last synthesis.
-
-        A yes that merely re-confirmed already-established leaders carries no
-        new information and does not count toward the synthesis gates (entries
-        without the flag — older recordings — count as informative).
-        """
-        n = 0
-        for h in reversed(seg):
-            if h.get("kind") == "synthesis":
-                break
-            if (
-                h.get("kind") == "query"
-                and h.get("answer") == Answer.YES.value
-                and h.get("informative", True)
-            ):
-                n += 1
-        return n
 
     def _consec_no_streak(self) -> int:
         """Consecutive 'no'-answered queries at the tail of the history.

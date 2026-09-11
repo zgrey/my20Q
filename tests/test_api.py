@@ -393,7 +393,7 @@ def _reasoning_client(**cfg_overrides) -> TestClient:
     backend = _controller_backend(utterance="I would like a glass of water.")
     cfg = replace(
         Config.from_env(),
-        reasoning=ReasoningTuning(min_yes_for_synthesis=1),
+        reasoning=ReasoningTuning(),
         **cfg_overrides,
     )
     return TestClient(create_app(cfg, backend=backend))
