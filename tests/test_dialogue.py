@@ -1481,6 +1481,11 @@ def test_clarify_question_emphasises_what_distinguishes_a_refinement() -> None:
     assert Round._clarify_question("why", "thirsty") == (
         "This is because of thirsty, correct?"
     )
+    # `how` holds verb phrases, and the default frame reads as broken English
+    # around them ("This is about call them, correct?" — a real live output).
+    assert Round._clarify_question("how", "call them") == (
+        "You want to call them, correct?"
+    )
 
 
 def test_clarify_details_walk_the_chain_coarse_to_fine(
@@ -1587,9 +1592,113 @@ def test_score_conflict_fires_on_a_rise_then_fall(topics: list[Topic]) -> None:
     assert conflict is not None
     assert (conflict["category"], conflict["value"]) == ("what", "pain")
     assert conflict["peak"] == 1.0
-    # …and it opens clarifying mode with no double-check involved at all.
+
+
+def test_a_conflict_with_nothing_scored_does_not_open_the_mode(
+    topics: list[Topic],
+) -> None:
+    """The gate: no scored detail means nothing to clarify, so do not enter.
+
+    `pain` rose to 1.0 and fell back to 0.0, taking it off the draft. There is
+    a conflict, but no object to clarify — asking about it would interrogate a
+    value the board has already discarded.
+    """
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["pain"]}
+    rnd._history = [
+        {"kind": "query", "text": "Pain?", "answer": "yes", "slots": {"what": "pain"}},
+        {"kind": "query", "text": "Still pain?", "answer": "no",
+         "slots": {"what": "pain"}},
+    ]
+    assert rnd._score_conflict() is not None  # the conflict IS detected
+    assert rnd._clarify_details(rnd._replay_board()) == []  # …but nothing scored
+    assert rnd._clarify_state() is None  # …so the mode stays shut
+
+
+def test_a_conflict_opens_the_mode_once_a_detail_is_scored(
+    topics: list[Topic],
+) -> None:
+    # Same conflict, but `a drink` is still standing — that scored detail is
+    # the object to clarify, so the mode opens and walks it.
+    rnd = Round(_topic(topics, "physical_health"), llm=MockBackend())
+    rnd._seed_values = {"what": ["pain"], "how": ["bring it"]}
+    rnd._history = [
+        {"kind": "query", "text": "Pain?", "answer": "yes", "slots": {"what": "pain"}},
+        {"kind": "query", "text": "Bring it?", "answer": "yes",
+         "slots": {"how": "bring it"}},
+        {"kind": "query", "text": "Still pain?", "answer": "no",
+         "slots": {"what": "pain"}},
+    ]
     state = rnd._clarify_state()
-    assert state is not None and state["reason"] == "non-monotonic"
+    assert state is not None
+    assert state["reason"] == "non-monotonic"
+    assert state["phase"] == "confirm"
+    # The conflicted value is off the draft, so it is NOT what gets walked —
+    # the scored detail is.
+    assert ("what", "pain") not in state["details"]
+    assert state["next"] == ("how", "bring it")
+
+
+# ---- phase 2: every detail held, so the FRAMING is what is wrong
+
+
+def test_dig_axes_keep_the_anchor_and_change_the_angle(
+    topics: list[Topic],
+) -> None:
+    rnd = Round(_topic(topics, "my_people"), llm=MockBackend())
+    rnd._seed_values = {"who": ["Rob"], "how": ["remind"]}
+    rnd._history = [
+        {"kind": "query", "text": "Rob?", "answer": "yes", "slots": {"who": "Rob"}},
+    ]
+    axes = rnd._clarify_dig_axes(rnd._replay_board(), "who")
+    # Owner's rule: a confirmed `who` is dug at from every OTHER angle.
+    assert "who" not in axes
+    assert set(axes) == {"what", "when", "where", "why", "how"}
+
+
+async def test_all_details_confirmed_turns_into_a_dig(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    state = rnd._clarify_state()
+    assert state is not None and state["phase"] == "confirm"
+    # Say yes to every scored detail the walk puts up.
+    for _ in range(6):
+        state = rnd._clarify_state()
+        if state is None or state["phase"] != "confirm":
+            break
+        await rnd.answer(Answer.YES)
+    state = rnd._clarify_state()
+    assert state is not None
+    # Nothing was wrong with the details, so the round digs at the anchor from
+    # a different axis instead of declaring itself finished.
+    assert state["phase"] == "dig"
+    assert state["anchor"] == ("what", "a drink")
+    assert state["axis"] != "what"
+    assert rnd._pending is not None and rnd._pending.clarify
+    assert rnd._pending.clarify_phase == "dig"
+    # The controller ASKED for the new axis. This mock tags `what` whatever it
+    # is asked, so W2-P re-attributes the focus to what the question actually
+    # asserts — and `focus_requested` is what keeps the axis recoverable, which
+    # is also what stops the walk retrying the same axis forever.
+    p = rnd._pending
+    assert (p.focus_requested or p.focus) == state["axis"]
+
+
+async def test_a_dig_that_lands_closes_the_clarification(
+    topics: list[Topic],
+) -> None:
+    rnd = await _contradicted(topics)
+    for _ in range(6):
+        state = rnd._clarify_state()
+        if state is None or state["phase"] != "confirm":
+            break
+        await rnd.answer(Answer.YES)
+    assert (rnd._clarify_state() or {}).get("phase") == "dig"
+    # A dig closes on YES — the opposite of a confirm, because a yes here is
+    # the missing frame rather than a detail holding.
+    await rnd.answer(Answer.YES)
+    assert rnd._clarify_state() is None
 
 
 def test_score_that_only_ever_falls_is_not_a_conflict(topics: list[Topic]) -> None:

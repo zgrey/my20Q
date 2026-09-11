@@ -127,6 +127,11 @@ MAX_CLARIFY_QUERIES = 8
 #: ordinary question.
 CLARIFY_FRAME = "This is about {value}, correct?"
 CLARIFY_FRAME_WHY = "This is because of {value}, correct?"
+#: `how` holds VERB phrases — "call them", "bring it", "tell them something" —
+#: and the default frame reads as broken English around them ("This is about
+#: call them, correct?", seen in the first live run). One frame covers every
+#: action value including the standing direction buckets.
+CLARIFY_FRAME_HOW = "You want to {value}, correct?"
 
 #: Spoken once, at the top of a clarification — the patient HEARS the questions
 #: rather than reading the banner, so the frame the demarcation gives the
@@ -384,6 +389,11 @@ class Round:
                 entry["contested"] = True
         if pending.kind == "query" and pending.clarify:
             entry["clarify"] = True
+            # "confirm" put a scored detail to the person; "dig" kept a
+            # confirmed detail and changed the axis. The two close a
+            # clarification on opposite answers, so the phase has to be on the
+            # entry — a no ends a confirm, a yes ends a dig.
+            entry["clarify_phase"] = pending.clarify_phase or "confirm"
         if pending.kind == "query" and pending.refines:
             entry["refines"] = dict(pending.refines)
         # What the controller was drilling into (W2-R). Recorded on every drill,
@@ -622,9 +632,20 @@ class Round:
                 # CLARIFYING MODE outranks everything, including the
                 # double-check that may have opened it: the board is
                 # confidently wrong, so there is no other progress worth
-                # making. The question is templated — no LLM call at all.
-                action = self._clarify_action(clarify)
-                focus = action.focus
+                # making. Confirming a detail is templated — no LLM call at
+                # all; digging at a confirmed anchor is a real question and
+                # goes through the model, but only on the rarer branch where
+                # every detail has already held.
+                if clarify["phase"] == "confirm":
+                    action = self._clarify_action(clarify)
+                    focus = action.focus
+                else:
+                    action, board, focus = await self._propose_question(
+                        seg, dig=clarify
+                    )
+                    action.clarify = True
+                    action.clarify_phase = "dig"
+                    action.preface = CLARIFY_PREFACE
             elif (pair := self._verify_due(board)) is not None:
                 # Confirm a new detail the draft has picked up, before the
                 # round builds anything else on top of it.
@@ -1166,13 +1187,23 @@ class Round:
         return out
 
     async def _propose_question(
-        self, seg: list[dict]
+        self, seg: list[dict], *, dig: dict | None = None
     ) -> tuple[ReasonerAction, facets.Board, str]:
-        """Ask the next question at the controller-chosen focus slot."""
+        """Ask the next question at the controller-chosen focus slot.
+
+        ``dig`` overrides the focus policy for a clarification's phase-2 turn:
+        the anchor is a detail the person has just confirmed, and the focus is
+        the axis being tried instead. Everything else — the repeat gate's
+        memory, the established set, bans, direction classification — is shared
+        with an ordinary ask, which is the whole reason it routes through here.
+        """
         assert self._reasoner is not None
         T = self.tuning
         board = self._replay_board()
-        focus, directive, split_pair = self._pick_focus(board, seg)
+        if dig is not None:
+            focus, directive, split_pair = dig["axis"], "dig", None
+        else:
+            focus, directive, split_pair = self._pick_focus(board, seg)
         # Exploration DECAYS as yeses accrue toward synthesis — probe a fresh
         # value (profile dropped) with probability explore_decay**(yeses+1).
         # The yes-count resets after each synthesis attempt and each restart,
@@ -1206,6 +1237,7 @@ class Round:
             focus=focus,
             directive=directive,
             split_pair=split_pair,
+            anchor=dig["anchor"] if dig is not None else None,
             history=self._history,
             edges=self._edges,
             asked=asked,
@@ -1683,6 +1715,7 @@ class Round:
             slots={cat: value},
             focus=cat,
             clarify=True,
+            clarify_phase="confirm",
         )
 
     def _score_conflict(self) -> dict | None:
@@ -1778,7 +1811,10 @@ class Round:
                 w if w.strip(".,!?'\"").casefold() in pset else w.upper()
                 for w in value.split()
             )
-        frame = CLARIFY_FRAME_WHY if category == "why" else CLARIFY_FRAME
+        frame = {
+            "why": CLARIFY_FRAME_WHY,
+            "how": CLARIFY_FRAME_HOW,
+        }.get(category, CLARIFY_FRAME)
         return frame.format(value=shown)
 
     def _clarify_state(self) -> dict | None:
@@ -1793,17 +1829,29 @@ class Round:
         1. a double-check answered "no" (that entry is marked `contested`);
         2. a detail whose score rose and then fell — see `_score_conflict`.
 
-        **The walk.** Clarifying mode confirms the draft one detail at a time,
-        the conflicted detail first, then the rest coarse→fine. It ENDS on the
-        first "no", which localizes the error onto exactly one detail; if every
-        detail comes back yes the draft was right and the trigger was a bad
-        question. "kinda"/"not sure" settle nothing and the walk continues.
+        **Gated on there being something to clarify** (owner, 2026-09-10). The
+        objects of a clarification are the SCORED details — the values the draft
+        is actually built from. With none of those on the board there is nothing
+        to talk about and the mode must not open at all; a trigger whose value
+        has already fallen out of the draft would otherwise leave the round
+        interrogating a phantom, which is what the first live run did.
 
-        Running out of details settles nothing either, and that is not a
-        failure and never ends anything: the state comes back `unresolved`, the
-        focus policy releases, and the round goes back to normal questioning
-        (owner: not a terminal condition — the interviewee quits when they
-        please, not the engine).
+        **Phase 1 — CONFIRM.** Each scored detail in turn, the conflicted one
+        first, coarse→fine. A "no" LOCALIZES the error onto one detail and ends
+        the clarification; normal questioning resumes with that detail knocked
+        down. "kinda"/"not sure" settle nothing and the walk continues.
+
+        **Phase 2 — DIG.** Every detail came back yes, so the details are not
+        the problem: *the framing is* (owner). The anchor is right and the round
+        is relating it wrongly, so a dig KEEPS the anchor and changes the AXIS —
+        a confirmed `who` is dug at from what / when / where / why / how. A "yes"
+        finds the missing frame and ends the clarification with new information;
+        anything else moves to the next axis.
+
+        Running out of axes settles nothing, and that is not a failure and never
+        ends anything: the state comes back `unresolved`, the focus policy
+        releases, and the round goes back to normal questioning (owner: not a
+        terminal condition — the interviewee quits when they please).
 
         Scoped to the live segment: a restart replaces the board wholesale, so a
         conflict about the pre-restart board no longer describes anything.
@@ -1826,40 +1874,85 @@ class Round:
         if not cat or not value:
             return None
 
+        board = self._replay_board()
+        details = self._clarify_details(board)
+        if not details:
+            return None  # nothing scored on the draft — nothing to clarify
+        # The conflicted detail leads — but only while it is still ON the draft.
+        # Once its score is gone it is not one of the objects to clarify any
+        # more, and the details that remain are.
+        if (cat, value) in details:
+            details.remove((cat, value))
+            details.insert(0, (cat, value))
+
         asked: list[dict] = []
         for h in seg[opened + 1 :] if reason == "contradicted" else seg:
             if h.get("kind") != "query" or not h.get("clarify"):
                 continue
             asked.append(h)
-            if h.get("answer") == Answer.NO.value:
-                return None  # localized — the walk is done
+            answer = h.get("answer")
+            phase = h.get("clarify_phase", "confirm")
+            if phase == "confirm" and answer == Answer.NO.value:
+                return None  # localized — that detail is the wrong one
+            if phase == "dig" and answer == Answer.YES.value:
+                return None  # the missing frame is found
 
-        board = self._replay_board()
-        details = self._clarify_details(board)
-        # The conflicted detail leads, then the rest of the draft coarse→fine.
-        if (cat, value) in details:
-            details.remove((cat, value))
-        details.insert(0, (cat, value))
-        done = {h.get("text", "") for h in asked}
-        parents = self._edges
-        nxt: tuple[str, str] | None = None
-        for d_cat, d_val in details:
-            parent = parents.get(d_cat, {}).get(d_val, "")
-            if self._clarify_question(d_cat, d_val, parent) not in done:
-                nxt = (d_cat, d_val)
-                break
-        spent = len(asked)
-        return {
+        state = {
             "reason": reason,
             "category": cat,
             "value": value,
             "details": details,
-            "asked": spent,
-            "next": nxt,
-            "parent": parents.get(nxt[0], {}).get(nxt[1], "") if nxt else "",
-            "unresolved": nxt is None or spent >= MAX_CLARIFY_QUERIES,
+            "asked": len(asked),
+            "phase": "",
+            "next": None,
+            "parent": "",
+            "anchor": details[0],
+            "axis": "",
+            "unresolved": True,
             "conflict": conflict if reason == "non-monotonic" else None,
         }
+        if len(asked) >= MAX_CLARIFY_QUERIES:
+            return state
+
+        # Phase 1: any scored detail not yet put to the person.
+        done = {h.get("text", "") for h in asked}
+        for d_cat, d_val in details:
+            parent = self._edges.get(d_cat, {}).get(d_val, "")
+            if self._clarify_question(d_cat, d_val, parent) not in done:
+                state.update(
+                    phase="confirm", next=(d_cat, d_val), parent=parent,
+                    unresolved=False,
+                )
+                return state
+
+        # Phase 2: every detail held, so dig at the anchor from another axis.
+        tried = {
+            h.get("focus_requested") or h.get("focus", "")
+            for h in asked
+            if h.get("clarify_phase") == "dig"
+        }
+        for axis in self._clarify_dig_axes(board, details[0][0]):
+            if axis not in tried:
+                state.update(phase="dig", axis=axis, unresolved=False)
+                return state
+        return state
+
+    def _clarify_dig_axes(self, board: facets.Board, anchor_cat: str) -> list[str]:
+        """The axes a dig tries, in order — every facet but the anchor's own.
+
+        Owner's rule (2026-09-10): a yes to the clarification says the DETAIL is
+        right, so what is wrong is how the round is framing it. Keep the anchor,
+        change the axis — a confirmed `who` is dug at from what / when / where /
+        why / how. Unestablished slots come first: a missing frame is likelier
+        to be a dimension nothing has been pinned on than one that already
+        carries a value.
+        """
+        muted = self._edit_mutes()
+        axes = [
+            c for c in self._facet_order() if c != anchor_cat and c not in muted
+        ]
+        axes.sort(key=lambda c: self._family_confident(board, c))
+        return axes
 
     @property
     def clarifications(self) -> list[dict]:

@@ -1817,7 +1817,24 @@ not been named before. No double-check was involved at all.
 
 ---
 
-**(c) Clarifying mode walks the draft, one pointed detail at a time.**
+**(c) Clarifying mode is GATED on there being something to clarify.**
+
+> Owner, 2026-09-10: *"If there is nothing to clarify, we should never enter
+> clarification mode. Clarification should be gated by at least a single scored
+> detail emerging. Those scored details are precisely the objects requiring
+> clarification."*
+
+The first implementation force-inserted the conflicted pair into the walk even
+when its score had gone — and the very first live run did exactly that, asking
+*"This is about now, correct?"* about a value that had already fallen off the
+draft. The objects of a clarification are the **scored** details, so:
+`_clarify_state` now returns `None` when the weave is empty, and the conflicted
+pair leads the walk only while it is still on the draft. A trigger whose value
+has been discarded no longer has the round interrogating a phantom.
+
+Confirmed live: a round answered all-yes never enters the mode at all.
+
+**(d) Clarifying mode walks the draft, one pointed detail at a time.**
 
 > Owner's spec: *if a proposed synthesis is "I am experiencing pain in my right
 > foot" then details requiring change should be mined and questions become
@@ -1837,10 +1854,51 @@ after a rejected proposal. It **ends on the first "no"** (the wrong piece is
 named); if every detail holds, the draft was right and the trigger was a bad
 question.
 
-Questions are **templated, not generated** — zero LLM calls, so an entire walk
-is cheaper than one ordinary question, and it cannot fabricate or fail a gate.
-The `clarify` directive, `_clarify_block` and the two gate relaxations added for
-W2-T were deleted as dead code the same day.
+Confirm questions are **templated, not generated** — zero LLM calls, so a whole
+confirm walk is cheaper than one ordinary question, and it cannot fabricate or
+fail a gate. The `clarify` directive, `_clarify_block` and the two gate
+relaxations added for W2-T were deleted as dead code the same day. `how` gets
+its own frame: it holds verb phrases, and the default reads as broken English
+around them (*"This is about call them, correct?"*, a real live output).
+
+**(e) When every detail holds, the framing is wrong — so DIG.**
+
+> Owner, 2026-09-10: *"Yes to clarifications about the appropriate detail
+> indicate something about framing is wrong. So try different framings. For
+> example, if the detail is who then a dig would try what, when, where, why,
+> how."*
+
+Phase 1 ending in all-yes is not "nothing was wrong" — it says the **details**
+are right and the round is relating them wrongly. Phase 2 therefore **keeps the
+anchor and changes the axis**: a confirmed `who` is dug at from what / when /
+where / why / how, unestablished slots first, since a missing frame is likelier
+to be a dimension nothing has been pinned on.
+
+The two phases close a clarification on **opposite answers**, which is why the
+phase travels on the history entry: a **no** ends a confirm (it localizes the
+wrong detail), a **yes** ends a dig (it *is* the missing frame). Anything else
+moves to the next axis; running out settles nothing and ends nothing.
+
+A dig is the one clarification step that does call the model — *"is this about
+where Rob is?"* is a question, not a template — and it routes through
+`_propose_question` with a `dig` directive so it shares the repeat gate's
+memory, the established set, bans and direction classification with an ordinary
+ask. Note that W2-P re-attribution applies: the mock in the tests tags one
+category whatever it is asked, so `focus_requested` is what keeps the axis
+recoverable — and what stops the walk retrying the same axis forever.
+
+Live, the whole chain in one round:
+
+```
+q03 [CHECK]           "Is it my daughter you want to talk to?"            -> no
+q04 [CLARIFY/confirm] "This is about my daughter, correct?"               -> yes
+q05 [CLARIFY/confirm] "This is about call them, correct?"                 -> yes
+q06 [CLARIFY/dig]     "Are you thinking about showing your daughter a picture?"
+                      anchor=(who, my daughter)  axis=what                -> yes
+```
+
+The anchor is kept verbatim, the angle turns from *who* to *what*, and the yes
+closes the clarification with new information rather than with a shrug.
 
 **The tension this raises, and why the design survives it.** These pointed
 questions are exactly the shape that failed as W2-T's Q2 — a value stripped of
@@ -1968,6 +2026,6 @@ propose within ≤ 5 queries of weave-stability instead of farming modifiers.
 | W3-H | Refinement links (coarse→fine) | **IMPLEMENTED** (06-11); was **never engaging in production** (`board.edges` empty in all 8 rounds of §1d) — **unblocked by W2-K on 09-08**, verified by replay. Confirm on the next live trial |
 | W2-S | Prompt-side re-ask reduction | **TRIED AND REJECTED (09-09)** — measured 3 ways; constraining the model more doubled diagnostics and early-ending rounds. Latency lever is not prompt-side. See §1e |
 | **W2-T** | **Clarifying mode** | **IMPLEMENTED (09-10)** — a contradicted double-check scores NOTHING and opens a clarification; never terminal. Owner-proposed; closes W2-L and W2-Q. Its anchored-restore question was superseded the same day by W2-U's detail walk |
-| **W2-U** | **Check every new detail · conflict trigger · detail walk** | **IMPLEMENTED (09-10)** — checks fire on the draft's new details (1-in-56 → 1-in-4.7 live, 0.4 s each); a rise-then-fall score is a second clarify trigger (1 per 26 q, 65% of rounds never fire); clarifying walks the draft in templated questions at ZERO LLM calls, demarcated in the cockpit. Owner-directed |
+| **W2-U** | **Check every new detail · conflict trigger · gated detail walk · the dig** | **IMPLEMENTED (09-10)** — checks fire on the draft's new details (1-in-56 → 1-in-4.7 live, 0.4 s each); a rise-then-fall score is a second clarify trigger (1 per 26 q, 65% of rounds never fire); the mode is GATED on a scored detail existing; clarifying confirms the draft in templated questions at ZERO LLM calls, then DIGS — anchor held, axis turned — when every detail holds. Demarcated in the cockpit. Owner-directed |
 | W3-I | Mass-scaled confidence | PROPOSED |
 | W4-J | Fatigue-aware stopping | **REJECTED (owner, 09-10)** — fatigue is not a cost this engine models; the caregiver and patient end the session |

@@ -428,6 +428,14 @@ _DIRECTIVE_NOTE = {
         "narrower form). Known refinements show as parent›value on the board "
         "— go DEEPER than the finest confirmed one."
     ),
+    "dig": (
+        "DIRECTIVE — DIG around a CONFIRMED detail. The person has just "
+        "confirmed the anchor below is right, so the detail is NOT the problem "
+        "— the way this round is framing it is. Ask ONE plain yes/no question "
+        "that keeps the anchor and tests a DIFFERENT ANGLE on it: the focus "
+        "slot. Say the anchor out loud in the question. Do NOT re-ask whether "
+        "the anchor is right, and do NOT drop it and ask about something else."
+    ),
     "pin": (
         "DIRECTIVE — PIN DOWN the focus slot: the last proposed message was "
         "CLOSE but not confirmed, and this slot is its weakest detail. Ask a "
@@ -488,6 +496,7 @@ def deliberate_messages(
     focus: str,
     directive: str,
     split_pair: tuple[str, str] | None = None,
+    anchor: tuple[str, str] | None = None,
     edges: facets.Edges | None = None,
     asked: list[str] | None = None,
     seed_context: str = "",
@@ -503,8 +512,9 @@ def deliberate_messages(
     """Free-form reasoning to choose the next yes/no question (no JSON).
 
     Phase 1 of the two-phase ask. ``focus`` is the slot the controller chose
-    to advance; ``directive`` is one of probe/split/drill/pin; ``split_pair``
-    carries the two tied values for a split. ``exploratory`` drops the profile
+    to advance; ``directive`` is one of probe/split/drill/pin/dig;
+    ``split_pair`` carries the two tied values for a split and ``anchor`` the
+    confirmed detail a dig must hold on to. ``exploratory`` drops the profile
     and pushes a fresh value. ``banned`` is an (category, value) the futility
     guard has cut off this turn; ``caregiver_hint`` names a who-leader who is
     a known caregiver (test the care-task direction first).
@@ -533,6 +543,12 @@ def deliberate_messages(
     )
     if split_pair is not None:
         instruction += f'Tied contenders to separate: "{split_pair[0]}" vs "{split_pair[1]}"\n'
+    if anchor is not None and directive == "dig":
+        instruction += (
+            f'CONFIRMED ANCHOR — {anchor[0]}: "{anchor[1]}"\n'
+            f'Keep "{anchor[1]}" in the question; change the ANGLE to '
+            f"{focus}.\n"
+        )
     instruction += "\n"
     instruction += _asked_block(asked or [])
     instruction += f"Dialogue so far:\n{_format_history(history)}\n\n"
