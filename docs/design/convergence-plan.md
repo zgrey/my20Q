@@ -2025,6 +2025,31 @@ q05 [CLARIFY] "This is about pain, correct?"
 q06 [CLARIFY] "This is about feet, correct?"
 ```
 
+**Bench regression check before merge (09-10), main vs branch, seed 7, n=1 each:**
+
+| scenario | | q | restarts | diags | ready at | yes/no | focus |
+|---|---|---|---|---|---|---|---|
+| foot-pain | main | 12 | 1 | 0 | never | 3/9 | what 8 · where 4 |
+| | **branch** | 12 | 1 | 0 | **q4** | **8/4** | what 3 · where 3 · when 2 · who 4 |
+| call-daughter | main | 5 | 3 | **4** | never | 1/4 | who 4 · how 1 |
+| | **branch** | 12 | **1** | **0** | **q7** | **9/3** | who 3 · **how 5** · where 2 · when 1 · why 1 |
+| rob-kitchen | main | 7 | 2 | **4** | never | 0/7 | who 5 · how 1 · what 1 |
+| | branch | 12 | 6 | 1 | never | 1/11 | who 10 · how 2 |
+
+**The stop condition did not fire.** `how` is a CORE facet in `my_people` and
+the worry was that re-filing it to `why` would starve it: instead call-daughter
+focused `how` **five times against main's one** and went from a round that died
+at q5 with four diagnostics to one that reached readiness at q7.
+
+`rob-kitchen` is bad on **both** sides — and worse on main by the measures that
+matter (four diagnostics to one, zero yeses to one, dead at q7 rather than
+running to the cap). It is the dishes round's lineage and the hardest scenario
+on the board; its collapse is pre-existing, not caused by this work.
+
+**Not claimed:** n=1 per scenario on a single seed, on an instrument this repo
+has already recorded as *a good veto and a poor endorser*. This clears the merge
+gate by failing to veto. It does not validate the fixes — the live trial does.
+
 **Touches:** `dialogue` (`_verify_due` rewrite, `_score_conflict`,
 `_clarify_details`/`_clarify_question`/`_clarify_action`, `_clarify_state`
 rewrite, `RoundEvent.clarifying`), `reasoner` + `prompts` (dead W2-T path
