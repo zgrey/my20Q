@@ -3,8 +3,24 @@
 from __future__ import annotations
 
 import itertools
+from pathlib import Path
 
 from my20q.agent import facets
+
+#: The 09-10 synthetic wrist round, verbatim — see the file header for why it
+#: carries no patient data, and convergence-plan.md §1h for the autopsy.
+_WRIST_ROUND = Path(__file__).parent / "data" / "wrist_round_2026_09_10.txt"
+
+
+def _wrist_questions() -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for line in _WRIST_ROUND.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "|" not in line:
+            continue
+        question, answer = line.rsplit("|", 1)
+        out.append((question.strip(), answer.strip()))
+    return out
 
 
 def _seeded() -> facets.Board:
@@ -203,6 +219,65 @@ def test_aggravation_frames_seen_live_are_all_caught() -> None:
         "Is the pain sharp?",
     ):
         assert not facets.asks_about_aggravation(q), q
+
+
+# ------------------------- the 09-10 wrist round, as a regression fixture
+#
+# A TEXT-level fixture, not a replay: recording is disabled for synthetic
+# personas, so no round record exists for that session — only the transcript.
+# What it locks down is the deterministic rules against the real model output
+# they were written from, and nothing more.
+
+
+def test_the_wrist_round_fixture_is_intact() -> None:
+    qs = _wrist_questions()
+    assert len(qs) == 57
+    assert qs[0][0] == "Are you feeling any pain right now?"
+    assert {a for _q, a in qs} == {"Yes", "No", "Kinda"}
+
+
+def test_every_aggravation_question_in_the_wrist_round_is_caught() -> None:
+    """The 25-questions-on-cause failure, locked against regression.
+
+    Eleven of the round's questions asked what made the pain WORSE. Every one
+    credited `how` — "an action wanted" — so the engine then double-checked
+    them as wants ("do you want to lift things?") and got a correct no every
+    time, which dragged the round into clarifying mode over and over.
+    """
+    qs = _wrist_questions()
+    caught = [q for q, _a in qs if facets.asks_about_aggravation(q)]
+    assert len(caught) == 11, caught
+    # …and each one re-files the action it credited into `why`, where the
+    # answer actually belongs — `why` sat empty the whole round.
+    for q in caught:
+        assert facets.remap_slot("how", "lifting things", q) == "why"
+
+
+def test_no_question_in_the_wrist_round_is_a_false_aggravation_match() -> None:
+    # The guard must not swallow ordinary narrowing questions — those are the
+    # ones the round needed MORE of, not fewer.
+    qs = dict(_wrist_questions())
+    for q in (
+        "Is the pain you are feeling right now in your arm?",
+        "Is the pain you are feeling in your forearm?",
+        "Is the pain you are feeling located in your shoulder?",
+    ):
+        assert q in qs, q  # the fixture really contains it
+        assert not facets.asks_about_aggravation(q), q
+
+
+def test_no_how_value_from_the_wrist_round_produces_broken_english() -> None:
+    """"You want to lifting things, correct?" was spoken aloud, four times."""
+    from my20q.agent.dialogue import Round
+
+    for value in ("lifting things", "repeating movements", "dropping things"):
+        q = Round._clarify_question("how", value)
+        assert "want to lifting" not in q
+        assert q == f"This is about {value}, correct?"
+    # The infinitive frame still applies to values that are actually verbs.
+    assert Round._clarify_question("how", "call them") == (
+        "You want to call them, correct?"
+    )
 
 
 def test_gerund_led_picks_the_right_sentence_frame() -> None:
