@@ -152,6 +152,7 @@ def _recording_status(state) -> schemas.RecordingStatusOut:
         threshold_bytes=threshold,
         status=status,
         rounds=recorder.rounds_recorded(),
+        dev=getattr(state, "dev_capture", False),
     )
 
 
@@ -218,10 +219,31 @@ def create_app(config: Config | None = None, *, backend: object = _UNSET) -> Fas
     app.state.llm = llm
     app.state.sessions = {}
     app.state.rounds = {}
-    # Recording is enabled only for a real patient (the privacy invariant).
+    # The PATIENT DATASET is enabled only for a real patient — the privacy
+    # invariant, unchanged: recording => real patient => local LLM.
+    #
+    # DEV CAPTURE is a separate artifact with the mirror-image guard: it writes
+    # only for a SYNTHETIC persona, into its own directory, and only when asked
+    # for explicitly. The two are mutually exclusive by construction, so there
+    # is no path by which real patient content reaches the dev directory — and
+    # a synthetic development trial can still leave a round record to audit,
+    # which is otherwise impossible because the patient dataset is (correctly)
+    # off for synthetic runs.
+    real = is_real_patient(profile)
+    dev_capture = config.dev_capture and not real
+    if config.dev_capture and real:
+        log.warning(
+            "MY20Q_DEV_CAPTURE ignored — a REAL patient profile is loaded, so the "
+            "patient dataset is the only recording channel (privacy invariant)"
+        )
     app.state.recorder = (
-        Recorder(config.recording_dir, profile.id) if is_real_patient(profile) else None
+        Recorder(config.recording_dir, profile.id)
+        if real
+        else Recorder(config.dev_capture_dir, profile.id if profile else "synthetic")
+        if dev_capture
+        else None
     )
+    app.state.dev_capture = dev_capture
     app.state.recording_paused = False
     app.state.model_label = getattr(llm, "model", None) or "fallback"
     # Local-only TTS (piper). May be unavailable until installed — the
@@ -232,10 +254,11 @@ def create_app(config: Config | None = None, *, backend: object = _UNSET) -> Fas
     _mount_assets(app)
     _mount_frontend(app)
     log.info(
-        "cockpit API ready — mode=%s engine=%s real_patient=%s",
+        "cockpit API ready — mode=%s engine=%s real_patient=%s capture=%s",
         config.mode,
         "reasoning" if llm is not None else "fallback",
-        is_real_patient(profile),
+        real,
+        "patient-dataset" if real else ("dev" if dev_capture else "off"),
     )
     return app
 

@@ -294,6 +294,61 @@ def test_recording_disabled_without_real_profile() -> None:
     assert rec["status"] == "disabled"
 
 
+def test_dev_capture_records_a_synthetic_round(tmp_path) -> None:
+    """Dev capture gives a SYNTHETIC trial a round record to audit.
+
+    The patient dataset is correctly off for a synthetic run, which left a
+    development trial with nothing to read back afterwards.
+    """
+    cfg = replace(
+        Config.from_env(),
+        llm_enabled=False,
+        profile_path=None,
+        dev_capture=True,
+        dev_capture_dir=tmp_path / "dev",
+    )
+    client = TestClient(create_app(cfg, backend=None))
+
+    rec = client.get("/api/recording").json()
+    assert rec["enabled"] is True
+    assert rec["dev"] is True  # …and it says so, so the light can differ
+
+    sid = client.post("/api/sessions").json()["session_id"]
+    client.post(f"/api/sessions/{sid}/rounds", json={"topic_id": "emergency"})
+    assert client.get("/api/recording").json()["rounds"] == 1
+    assert list((tmp_path / "dev").rglob("*.jsonl"))
+
+
+def test_dev_capture_refuses_when_a_real_profile_is_loaded(tmp_path) -> None:
+    """The mirror guard: dev capture implies SYNTHETIC, without exception.
+
+    Otherwise the flag would be a second, weaker-guarded path by which real
+    patient content could reach a directory outside the patient dataset — the
+    exact thing the privacy invariant exists to prevent. A real profile keeps
+    the patient dataset as its ONLY channel, whatever the flag says.
+    """
+    profile = tmp_path / "real.yaml"
+    profile.write_text("id: test_patient\ndisplay_name: Test\n", encoding="utf-8")
+    cfg = replace(
+        Config.from_env(),
+        llm_enabled=False,
+        profile_path=profile,
+        recording_dir=tmp_path / "data",
+        dev_capture=True,                      # …asked for, and refused
+        dev_capture_dir=tmp_path / "dev",
+    )
+    client = TestClient(create_app(cfg, backend=None))
+
+    rec = client.get("/api/recording").json()
+    assert rec["enabled"] is True
+    assert rec["dev"] is False  # the PATIENT dataset, not the dev capture
+
+    sid = client.post("/api/sessions").json()["session_id"]
+    client.post(f"/api/sessions/{sid}/rounds", json={"topic_id": "emergency"})
+    assert list((tmp_path / "data" / "test_patient").glob("*.jsonl"))
+    assert not (tmp_path / "dev").exists()  # nothing reached the dev directory
+
+
 def test_real_profile_records_an_emergency_round(tmp_path) -> None:
     profile = tmp_path / "real.yaml"
     profile.write_text("id: test_patient\ndisplay_name: Test Patient\n", encoding="utf-8")

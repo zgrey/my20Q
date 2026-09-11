@@ -211,6 +211,10 @@ __marimo__/
 # local-only. Synthetic dev personas live in src/my20q/profiles/data/.
 /patient_profiles/
 /patient_data/
+# Synthetic dev captures (MY20Q_DEV_CAPTURE=1). No patient data by
+# construction — it refuses to write when a real profile is loaded — but it is
+# still local trial output, not source.
+/dev_recordings/
 
 # Fetched AAC pictograms — regenerable via scripts/fetch_icons.py.
 /assets/arasaac/

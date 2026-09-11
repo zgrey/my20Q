@@ -98,7 +98,7 @@ start() {
     echo "Already running in tmux '$SESSION'.  logs: $0 logs   stop: $0 stop"
   else
     tmux new-session -d -s "$SESSION" -c "$REPO" \
-      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_TTS_ENGINE='${MY20Q_TTS_ENGINE:-}' MY20Q_KOKORO_MODEL='${MY20Q_KOKORO_MODEL:-}' MY20Q_KOKORO_VOICES='${MY20Q_KOKORO_VOICES:-}' MY20Q_KOKORO_VOICE='${MY20Q_KOKORO_VOICE:-}' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_MIN_YES='${MY20Q_MIN_YES:-}' MY20Q_NEW_YES='${MY20Q_NEW_YES:-}' MY20Q_REPHRASE_LIMIT='${MY20Q_REPHRASE_LIMIT:-}' MY20Q_SYNTH_ATTEMPTS='${MY20Q_SYNTH_ATTEMPTS:-}' MY20Q_EXPLORE_DECAY='${MY20Q_EXPLORE_DECAY:-}' MY20Q_SOFT_RESET_NOS='${MY20Q_SOFT_RESET_NOS:-}' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
+      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_TTS_ENGINE='${MY20Q_TTS_ENGINE:-}' MY20Q_KOKORO_MODEL='${MY20Q_KOKORO_MODEL:-}' MY20Q_KOKORO_VOICES='${MY20Q_KOKORO_VOICES:-}' MY20Q_KOKORO_VOICE='${MY20Q_KOKORO_VOICE:-}' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_MIN_YES='${MY20Q_MIN_YES:-}' MY20Q_NEW_YES='${MY20Q_NEW_YES:-}' MY20Q_REPHRASE_LIMIT='${MY20Q_REPHRASE_LIMIT:-}' MY20Q_SYNTH_ATTEMPTS='${MY20Q_SYNTH_ATTEMPTS:-}' MY20Q_EXPLORE_DECAY='${MY20Q_EXPLORE_DECAY:-}' MY20Q_SOFT_RESET_NOS='${MY20Q_SOFT_RESET_NOS:-}' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_DEV_CAPTURE='${MY20Q_DEV_CAPTURE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
     echo "API started in tmux '$SESSION' (127.0.0.1:$PORT)"
     if [ -n "${MY20Q_PROFILE:-}" ]; then
       echo "Profile:  $MY20Q_PROFILE  (real-patient => local LLM + recording on)"
@@ -129,10 +129,16 @@ case "${1:-start}" in
   start) start ;;
   synthetic)
     # Mechanism-only run: the packaged DEMO persona (`synthetic: true`), which
-    # is the privacy pivot — recording stays off and no real patient context
-    # ever reaches the model. Use this to exercise the engine without her data.
+    # is the privacy pivot — no real patient context ever reaches the model.
+    #
+    # DEV CAPTURE is on so the round records survive for autopsy. That is a
+    # different artifact from the patient dataset, with the mirror-image guard:
+    # it writes only for a synthetic persona, into dev_recordings/, and the API
+    # refuses to enable it if a real profile is loaded. The patient dataset
+    # stays exactly as it was — real patient only, local LLM only.
     export MY20Q_PROFILE="$REPO/src/my20q/profiles/data/synthetic_demo.yaml"
-    echo "SYNTHETIC persona — recording OFF, no real patient data."
+    export MY20Q_DEV_CAPTURE=1
+    echo "SYNTHETIC persona — no real patient data; DEV CAPTURE on (dev_recordings/)."
     start
     ;;
   logs)  tmux attach -t "$SESSION" ;;
