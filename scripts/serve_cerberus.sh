@@ -5,10 +5,12 @@
 # venv python and tmux. The API lives in a detached tmux session, so it survives
 # your SSH disconnect and you can re-attach any time to watch the logs.
 #
-#   ./scripts/serve_cerberus.sh          start: API in tmux + Tailscale serve
-#   ./scripts/serve_cerberus.sh logs     attach to the API tmux (Ctrl-b then d to detach)
-#   ./scripts/serve_cerberus.sh status   what's running + the cockpit URL
-#   ./scripts/serve_cerberus.sh stop     tear it all down
+#   ./scripts/serve_cerberus.sh            start: API in tmux + Tailscale serve
+#   ./scripts/serve_cerberus.sh synthetic  same, but the DEMO persona — no real
+#                                          patient data, recording off
+#   ./scripts/serve_cerberus.sh logs       attach to the API tmux (Ctrl-b then d to detach)
+#   ./scripts/serve_cerberus.sh status     what's running + the cockpit URL
+#   ./scripts/serve_cerberus.sh stop       tear it all down
 #
 # Run it from the repo root. If not executable: `bash scripts/serve_cerberus.sh`.
 set -uo pipefail
@@ -60,7 +62,12 @@ export MY20Q_SOFT_RESET_NOS="${MY20Q_SOFT_RESET_NOS:-}"
 # back to the standard real-patient location when that file is present. A real
 # profile engages the privacy invariant (local-only LLM + recording on), so we
 # only default it in when the file actually exists — never invent a path.
-if [ -z "${MY20Q_PROFILE:-}" ] && [ -f "$REPO/patient_profiles/patient.yaml" ]; then
+#
+# `${MY20Q_PROFILE+set}`, NOT `${MY20Q_PROFILE:-}`: the second treats an
+# exported EMPTY value as unset, so `MY20Q_PROFILE= ./serve_cerberus.sh start`
+# — the obvious way to ask for a no-patient run — silently loaded the real
+# profile instead. Setting it to anything, empty included, now opts out.
+if [ -z "${MY20Q_PROFILE+set}" ] && [ -f "$REPO/patient_profiles/patient.yaml" ]; then
   export MY20Q_PROFILE="$REPO/patient_profiles/patient.yaml"
 fi
 
@@ -120,6 +127,14 @@ start() {
 
 case "${1:-start}" in
   start) start ;;
+  synthetic)
+    # Mechanism-only run: the packaged DEMO persona (`synthetic: true`), which
+    # is the privacy pivot — recording stays off and no real patient context
+    # ever reaches the model. Use this to exercise the engine without her data.
+    export MY20Q_PROFILE="$REPO/src/my20q/profiles/data/synthetic_demo.yaml"
+    echo "SYNTHETIC persona — recording OFF, no real patient data."
+    start
+    ;;
   logs)  tmux attach -t "$SESSION" ;;
   stop)
     tmux kill-session -t "$SESSION" 2>/dev/null && echo "tmux '$SESSION' stopped" \
@@ -134,5 +149,5 @@ case "${1:-start}" in
     echo "--- tailscale serve ---"; tailscale serve status 2>/dev/null || true
     echo "  cockpit:  $(magic_url)"
     ;;
-  *) echo "usage: $0 [start|logs|status|stop]"; exit 1 ;;
+  *) echo "usage: $0 [start|synthetic|logs|status|stop]"; exit 1 ;;
 esac
