@@ -12,6 +12,11 @@
 #   ./scripts/serve_cerberus.sh status     what's running + the cockpit URL
 #   ./scripts/serve_cerberus.sh stop       tear it all down
 #
+# The cockpit's ⏻ Quit button also stops the API (it records the live round
+# first, then exits). That ends the tmux session with it — `status` will say
+# "not running" — but it leaves `tailscale serve` pointing at a dead port, so
+# run `stop` afterwards, or just `start` again.
+#
 # Run it from the repo root. If not executable: `bash scripts/serve_cerberus.sh`.
 set -uo pipefail
 

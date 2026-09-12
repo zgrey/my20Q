@@ -93,25 +93,92 @@ body,
 
 /* ---------------------------------------------------------------- layout */
 
+/* The cockpit is a fixed-height app pinned to the VISIBLE viewport.
+   On iPad Safari `100vh` is the LARGE viewport — the height the page would
+   have with the toolbars hidden — so the bottom of the layout (the caregiver
+   context field) sat below the window, and `body { overflow: hidden }` left
+   no way to scroll it back. Three declarations, weakest first:
+     1. 100vh    — ancient browsers.
+     2. 100dvh   — the dynamic viewport; correct as the toolbars come and go.
+     3. --app-h  — the measured visualViewport height, which is the only one
+                   that also accounts for the on-screen keyboard.
+   `--app-top` compensates for iOS scrolling the LAYOUT viewport to reveal a
+   focused field, which would otherwise slide this whole shell off the top.
+   See useVisualViewport() in layout.ts. */
 .cockpit {
+  position: fixed;
+  top: var(--app-top, 0px);
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
+  height: var(--app-h, 100dvh);
 }
 
+/* The splitter tracks ARE the gutters (14px, the old `gap`), so the layout is
+   pixel-identical until one is dragged. --col-* / --row-bottom are set inline
+   by useTileLayout() once the caregiver resizes something. */
 .grid {
   flex: 1;
   display: grid;
-  grid-template-columns: 1.55fr 1fr;
-  grid-template-rows: 1fr auto;
+  grid-template-columns: var(--col-left, 1.55fr) 14px var(--col-right, 1fr);
+  grid-template-rows: 1fr 14px var(--row-bottom, auto);
   /* Pictogram tile shelved (see app.tsx); reasoning takes the full right
      column. The .pictogram rules below are retained for easy re-enable. */
   grid-template-areas:
-    "conversation reasoning"
-    "input        reasoning";
-  gap: 14px;
+    "conversation vsplit reasoning"
+    "hsplit       vsplit reasoning"
+    "input        vsplit reasoning";
+  gap: 0;
   padding: 14px;
   min-height: 0;
+}
+
+/* --- drag-to-resize splitters (Evie's gesture: drag; double-click resets) */
+
+.vsplit,
+.hsplit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Without this iOS pans the page instead of reporting the drag. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.vsplit {
+  grid-area: vsplit;
+  cursor: col-resize;
+}
+.hsplit {
+  grid-area: hsplit;
+  cursor: row-resize;
+}
+/* Visible at rest, not just on hover — a tablet has no hover, and a handle
+   nobody can see is a feature nobody finds. */
+.vsplit .grip,
+.hsplit .grip {
+  background: var(--border);
+  border-radius: 999px;
+  opacity: 0.7;
+  transition:
+    opacity 0.15s ease,
+    background-color 0.15s ease;
+}
+.vsplit .grip {
+  width: 4px;
+  height: 46px;
+}
+.hsplit .grip {
+  width: 46px;
+  height: 4px;
+}
+.vsplit:hover .grip,
+.hsplit:hover .grip {
+  opacity: 1;
+  background: var(--accent);
 }
 
 .conversation {
@@ -281,7 +348,8 @@ body,
 }
 
 .theme-toggle,
-.audio-toggle {
+.audio-toggle,
+.fs-toggle {
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -299,9 +367,43 @@ body,
   border-color: var(--kinda);
 }
 .theme-toggle:hover,
-.audio-toggle:hover {
+.audio-toggle:hover,
+.fs-toggle:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+.fs-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Quit — stops the SERVER, so it arms on the first press and commits on the
+   second. Neutral until armed; the red is the warning, not the resting look. */
+.quit-btn {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+.quit-btn:hover {
+  color: var(--rec);
+  border-color: var(--rec);
+}
+.quit-btn.arming {
+  background: var(--rec);
+  border-color: var(--rec);
+  color: #fff;
 }
 
 @keyframes blink {
@@ -584,6 +686,52 @@ body,
   text-transform: uppercase;
   color: var(--heading);
 }
+
+/* ---- hide / expand for the board and the sliders ---- */
+/* Both headings are buttons now; they must still read as headings, so the
+   button chrome is stripped and the type is inherited from the rule above. */
+.section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  /* Only the family is inherited: the size/weight/case come from the
+     heading rule this button also carries (.belief-head) or from the <h3>
+     inside it, and a `font: inherit` shorthand would wipe both out. */
+  font-family: inherit;
+  color: var(--heading);
+  cursor: pointer;
+  text-align: left;
+}
+.section-toggle:hover,
+.section-toggle:hover h3 {
+  color: var(--accent-hover);
+}
+.section-toggle .chev {
+  font-size: 11px;
+  width: 11px;
+  opacity: 0.9;
+}
+.section-toggle .collapsed-note {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--ink-soft);
+}
+/* Collapsed sections give their space back to the tile rather than leaving a
+   gap where the content was. */
+.belief.collapsed,
+.emotion.collapsed {
+  flex: none;
+  gap: 0;
+}
+.emotion.collapsed .sliders,
+.belief.collapsed .facet-list {
+  display: none;
+}
 .facet-list {
   list-style: none;
   margin: 0;
@@ -839,7 +987,7 @@ body,
 .answer.repeat {
   background: var(--neutral);
 }
-.answer.quit {
+.answer.newround {
   background: var(--neutral-strong);
 }
 .answer kbd {
@@ -1392,7 +1540,10 @@ body,
     overflow-y: auto;
     -webkit-text-size-adjust: 100%;
   }
+  /* The phone layout SCROLLS, so the shell goes back to being part of the
+     page — a fixed, viewport-sized box would trap it again. */
   .cockpit {
+    position: static;
     height: auto;
     min-height: 100vh;
     min-height: 100dvh; /* dynamic — survives the Safari toolbar */
@@ -1434,8 +1585,10 @@ body,
     width: 40px;
     height: 40px;
   }
-  /* Trim topbar width: Save becomes icon-only, drop the byte readout. */
-  .save-btn .btn-label {
+  /* Trim topbar width: Save and Quit become icon-only, drop the byte readout.
+     Quit keeps its label while ARMED — "press again" is the whole warning. */
+  .save-btn .btn-label,
+  .quit-btn:not(.arming) .btn-label {
     display: none;
   }
   .rec .saved {
@@ -1450,6 +1603,11 @@ body,
     gap: 10px;
     padding: 10px;
     padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  /* Nothing to split in a single column. */
+  .vsplit,
+  .hsplit {
+    display: none;
   }
   .conversation {
     order: 1;
@@ -1599,10 +1757,19 @@ body,
   align-items: center;
   gap: 12px;
 }
+/* The evolving statement is the thing the whole round is for, so it is set
+   like a headline rather than like body copy (owner, 09-12). It scales with
+   the window and stops growing on a desktop monitor. */
 .banner-text {
   flex: 1;
-  font-size: 17px;
-  line-height: 1.45;
+  /* The floor is what an iPad in PORTRAIT gets (2.2vw of 834 is under it),
+     and portrait is the cramped case — so the floor, not the vw term, is the
+     number that decides whether this reads as a headline on the device. */
+  font-size: clamp(22px, 2.2vw, 31px);
+  font-weight: 600;
+  line-height: 1.32;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
 }
 .banner-text mark.seg {
   background: transparent;
@@ -1617,6 +1784,75 @@ body,
 .banner-text mark.seg.working {
   border-bottom: 2px dotted var(--ink-soft);
   animation: bannerGlow 2.2s ease-in-out infinite;
+}
+
+/* ---- the thinking state: WHAT is being reconsidered, not just "wait" ---- */
+/* While a question is in flight every unsettled segment shows, in turn, the
+   board's real contenders for its slot (see ProposalBanner.swap). The styling
+   has to say "this word is not the draft's word" without the caregiver having
+   to read carefully — hence the tinted, italic, dashed treatment. */
+.banner-text mark.seg.cycling {
+  font-style: italic;
+  font-weight: 500;
+  color: var(--ink-soft);
+  border-bottom: 2px dashed var(--accent);
+  animation: segSwap 0.56s ease-in-out;
+}
+@keyframes segSwap {
+  0% {
+    opacity: 0.15;
+    filter: blur(2px);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+/* `is-thinking`, NOT `thinking`: a bare `.thinking` class already exists for
+   the conversation tile's waiting card (display:flex, its own border and
+   padding) and it would capture the banner element wholesale — which it did,
+   laying the draft, the buttons and this row out on one line. Same `is-`
+   convention as `.tile.conversation.is-clarifying`. */
+.banner.is-thinking {
+  border-color: var(--accent-soft);
+}
+.banner-thinking {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.thinking-bar {
+  flex: 1;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent-hover) 45%,
+    var(--accent-hover) 55%,
+    transparent 100%
+  );
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  animation: thinkingSweep 1.5s ease-in-out infinite;
+}
+@keyframes thinkingSweep {
+  0% {
+    background-position: -50% 0;
+  }
+  100% {
+    background-position: 150% 0;
+  }
+}
+.thinking-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  flex: 0 0 auto;
 }
 .banner-actions {
   display: flex;
@@ -1788,4 +2024,70 @@ body,
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 7px 12px;
+}
+
+/* ------------------------------------------------ "safe to exit" (Evie's) */
+/* Shown INSTEAD of the cockpit once Quit has stopped the server — every
+   control behind it would be talking to a process that is gone. */
+.exit-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--ink);
+}
+.exit-card {
+  max-width: 30rem;
+  text-align: center;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 32px 28px;
+}
+.exit-mark {
+  font-size: 34px;
+  line-height: 1;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.exit-card h1 {
+  margin: 0 0 12px;
+  font-size: 22px;
+  color: var(--heading);
+}
+.exit-note {
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.exit-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+/* --------------------------------------------------- reduced motion (all) */
+/* The thinking animation is the one that matters here: it moves WORDS, which
+   is far more intrusive than a pulsing border. Everything added for the 09-12
+   UI pass stops; the segment-swap timer is also skipped in JS, so a reduced-
+   motion caregiver sees a still draft rather than a silently flickering one. */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-bar,
+  .banner-text mark.seg.cycling,
+  .banner-text mark.seg.working,
+  .banner.draft.ready,
+  .banner.draft.ready .banner-btn.accept,
+  .banner-glow {
+    animation: none;
+  }
+  .vsplit .grip,
+  .hsplit .grip,
+  .section-toggle {
+    transition: none;
+  }
 }

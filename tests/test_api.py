@@ -349,6 +349,54 @@ def test_dev_capture_refuses_when_a_real_profile_is_loaded(tmp_path) -> None:
     assert not (tmp_path / "dev").exists()  # nothing reached the dev directory
 
 
+def test_shutdown_saves_the_live_round_then_stops_the_server(tmp_path) -> None:
+    """Quit ends the session for real — and does not throw the round away.
+
+    The cockpit's Quit button used to start a new round. It now stops the
+    server, and a round still in progress when that happens is finalized and
+    written out exactly as a topic switch writes it — because the record a
+    development trial exists to capture is usually the one interrupted by
+    somebody deciding they are done.
+    """
+    cfg = replace(
+        Config.from_env(),
+        llm_enabled=False,
+        profile_path=None,
+        dev_capture=True,
+        dev_capture_dir=tmp_path / "dev",
+    )
+    app = create_app(cfg, backend=None)
+
+    class _Server:  # stands in for the uvicorn.Server the launcher registers
+        should_exit = False
+
+    server = _Server()
+    app.state.server = server
+    client = TestClient(app)
+
+    sid = client.post("/api/sessions").json()["session_id"]
+    state = client.post(
+        f"/api/sessions/{sid}/rounds", json={"topic_id": "physical_health"}
+    ).json()
+    assert state["outcome"] is None  # still live when Quit lands
+    assert client.get("/api/recording").json()["rounds"] == 0
+
+    assert client.post("/api/shutdown").json() == {"ok": True, "stopping": True}
+    assert server.should_exit is True
+    assert client.get("/api/recording").json()["rounds"] == 1
+    assert list((tmp_path / "dev").rglob("*.jsonl"))
+
+
+def test_shutdown_reports_when_it_cannot_stop_the_server() -> None:
+    """No Server registered (TestClient, `uvicorn --reload`) — say so.
+
+    `stopping: false` is what lets the cockpit tell the caregiver the server
+    is still running instead of showing "safe to exit" over a live process.
+    """
+    client = _no_llm_client()
+    assert client.post("/api/shutdown").json() == {"ok": True, "stopping": False}
+
+
 def test_real_profile_records_an_emergency_round(tmp_path) -> None:
     profile = tmp_path / "real.yaml"
     profile.write_text("id: test_patient\ndisplay_name: Test Patient\n", encoding="utf-8")

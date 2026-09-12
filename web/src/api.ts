@@ -82,6 +82,10 @@ export const api = {
   recordingRecords: (sid: string) =>
     request<RoundRecord[]>(`/recordings/${encodeURIComponent(sid)}`),
   ttsStatus: () => request<TTSStatus>("/tts/status"),
+  // Quit: finalize + record the live round, then stop the server. `stopping`
+  // is false when the API is running under a launcher that did not register a
+  // Server (uvicorn --reload, tests) — the round is saved either way.
+  shutdown: () => post<{ ok: boolean; stopping: boolean }>("/shutdown"),
   models: () => request<ModelsStatus>("/models"),
   selectModel: (model: string) => post<ModelsStatus>("/model", { model }),
 };

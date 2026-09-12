@@ -4,11 +4,13 @@ import { api, friendlyError } from "./api";
 import {
   ConclusionModal,
   ConversationTile,
+  ExitCard,
   InputTile,
   ProposalBanner,
   ReasoningTile,
   TopicBar,
 } from "./components";
+import { useTileLayout, useVisualViewport } from "./layout";
 import { ReviewDashboard } from "./review";
 import { confirmBeep, installAudioUnlock, speak, stopSpeaking } from "./tts";
 import type { Answer, RecordingStatus, RoundState, Topic } from "./types";
@@ -59,7 +61,18 @@ export function App() {
   const [models, setModels] = useState<string[]>([]);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [canSelectModel, setCanSelectModel] = useState(false);
+  // Quit was pressed: the server is going away, so the cockpit is replaced by
+  // the "safe to exit" screen. null = still running.
+  const [exited, setExited] = useState<{
+    stopping: boolean;
+    error: string | null;
+  } | null>(null);
   const lastSpokenRef = useRef<string>("");
+  // The cockpit is used on an iPad: size the shell to the VISUAL viewport (the
+  // keyboard and the Safari toolbars both move it) and let the two splitters
+  // resize the tiles.
+  useVisualViewport();
+  const layout = useTileLayout();
 
   // Bootstrap: load topics, create a session, open the first round.
   useEffect(() => {
@@ -98,7 +111,7 @@ export function App() {
   // to "open" on the first message (more reliable across browsers than
   // EventSource.onopen alone, which doesn't fire until headers arrive).
   useEffect(() => {
-    if (!sessionId || !round) return;
+    if (!sessionId || !round || exited) return;
     setSseStatus("connecting");
     const es = new EventSource(api.eventsUrl(sessionId, round.round_id));
     es.onopen = () => setSseStatus("open");
@@ -116,7 +129,7 @@ export function App() {
       es.close();
       setSseStatus("closed");
     };
-  }, [sessionId, round?.round_id]);
+  }, [sessionId, round?.round_id, exited]);
 
   // Is local (piper) speech available? Drives the audio toggle's tooltip.
   useEffect(() => {
@@ -323,6 +336,17 @@ export function App() {
       run(() => api.startRound(sessionId, topicId));
     }
   };
+  // Quit for real: the server finalizes and records the live round, then stops
+  // itself. Everything after this call is best-effort — the process may die
+  // before the response is flushed — so a failed fetch still shows the exit
+  // screen, just without the claim that the round was saved.
+  const quit = () => {
+    stopSpeaking();
+    api
+      .shutdown()
+      .then((r) => setExited({ stopping: r.stopping, error: null }))
+      .catch((e) => setExited({ stopping: true, error: friendlyError(e) }));
+  };
   const changeTopic = (id: string) => {
     setTopicId(id);
     if (sessionId && !busy) run(() => api.startRound(sessionId, id));
@@ -446,6 +470,11 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // The server is gone — nothing behind this screen would work.
+  if (exited) {
+    return <ExitCard stopping={exited.stopping} error={exited.error} />;
+  }
+
   return (
     <div class="cockpit">
       <TopicBar
@@ -469,6 +498,7 @@ export function App() {
         currentModel={currentModel}
         canSelectModel={canSelectModel}
         onSelectModel={selectModel}
+        onQuit={quit}
       />
       {error && <div class="errorbar">{error}</div>}
       {queuedNote && (
@@ -500,8 +530,32 @@ export function App() {
             onRestate={restateDraft}
             onReplace={replaceDraft}
           />
-        <main class="grid">
+        <main class="grid" style={layout.style}>
           <ConversationTile round={round} busy={busy} phase={phase} onRetry={retry} />
+          {/* The two splitters ARE the gutters — drag to resize, double-click
+              to restore the stylesheet default (Evie's gesture). They are
+              their own grid tracks, so the layout is unchanged until moved,
+              and they are hidden in the phone stack. */}
+          <div
+            class="vsplit"
+            role="separator"
+            aria-orientation="vertical"
+            title="Drag to resize · double-click to reset"
+            onPointerDown={layout.vsplit.onPointerDown}
+            onDblClick={layout.vsplit.onDblClick}
+          >
+            <span class="grip" />
+          </div>
+          <div
+            class="hsplit"
+            role="separator"
+            aria-orientation="horizontal"
+            title="Drag to resize · double-click to reset"
+            onPointerDown={layout.hsplit.onPointerDown}
+            onDblClick={layout.hsplit.onDblClick}
+          >
+            <span class="grip" />
+          </div>
           {/* Pictogram tile shelved — the curated retrieval mostly fell back
               to "?" in real sessions. Component + backend retrieval are kept;
               re-mount once the image slot is driven by a generator (task). */}

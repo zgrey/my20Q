@@ -830,7 +830,7 @@ its entry flags is gone** — the transcript survived, the per-entry
 synthetic personas by design, so the watcher is the only capture; it saved
 markdown only. Save the JSONL export too.
 
-## 1j. LEDGER — what is actually in the build, as of 2026-09-11
+## 1j. LEDGER — what is actually in the build, as of 2026-09-12
 
 Read this before the next trial. Several items below were proposed, partly
 built, then narrowed or reverted within a day, and the queue entries alone do
@@ -859,6 +859,18 @@ not make the end state legible.
 | W2-X (a) per-slot explore | `explore_decay ** (slot_mass / ready + 1)` |
 | Explore/exploit split | `probe` is the ONLY directive that may carry the explore flag |
 | **Simplification pass** | see 1k below |
+
+### IN — on `cockpit-shell` (not yet merged; UI only, no `agent/` changes)
+
+| | |
+|---|---|
+| Visual-viewport shell (CB-3) | `100dvh` + measured `--app-h`/`--app-top`; the actual iPad fix |
+| Full screen / return (CB-3) | one button, hidden where unsupported |
+| Quit stops the server (CB-4) | `POST /api/shutdown` records the live round first; "safe to exit" |
+| Tile splitters (CB-5) | drag to resize, double-click to reset; pointer events, fraction-stored |
+| Hide/expand (CB-6) | consensus board + emotional sliders, remembered |
+| Larger draft (CB-7) | `clamp(22px, 2.2vw, 31px)` |
+| Thinking animation (CB-8) | working segments cycle the board's REAL contenders |
 
 ### REVERTED — built, then removed the same day
 
@@ -930,6 +942,75 @@ impossible** rather than guarded by a denylist.
 **Not done because it is a design change and the trial should not carry it
 unannounced.** Owner's call — and worth watching in the next trial whether the
 model-written check ever phrases something the template could not.
+
+## 1l. Cockpit shell pass — 2026-09-12 (CB-3 … CB-8)
+
+Six owner requests, all about the **shell** rather than the reasoning. The
+device they matter on is an iPad in Safari, which is where the cockpit is
+actually used. Nothing here touches `agent/`.
+
+**CB-3 · The caregiver input is obscured and unreachable.** *Reported as: "a
+fullscreen and return to browser button would be ideal."* The button is built —
+but it is a workaround, and the cause is two lines of CSS. `.cockpit` was
+`height: 100vh` under `body { overflow: hidden }`, and on iOS `100vh` is the
+**large** viewport — the height the page would have with the toolbars hidden.
+With a toolbar showing, the bottom of the layout is below the window and a
+non-scrolling body cannot reach it. The keyboard then makes it worse: it shrinks
+the *visual* viewport but not the layout viewport, and iOS scrolls the layout
+viewport to reveal the focused field, sliding the whole fixed-height shell up.
+Fixed in three declarations (`100vh` → `100dvh` → a measured `--app-h`) plus
+`--app-top` to cancel that scroll; `useVisualViewport()` in `web/src/layout.ts`.
+Full screen is now an extra, not the fix — the same button returns to the
+browser, and hides itself where there is no Fullscreen API (iPhone Safari).
+
+**CB-4 · Quit did not quit.** It abandoned the round and opened a new one, and
+the server stayed up after the caregiver was done. Now: `POST /api/shutdown`
+finalizes and **records** any live round (the same two calls `start_round`
+makes on a topic switch), then sets `should_exit` on the `uvicorn.Server` the
+launcher registers as `app.state.server` — Evie's pattern, in
+`TDA-SST/python/evie/gui/api_run.py`. The cockpit then replaces itself with a
+"safe to exit" screen. Recording the round is the point, not a nicety: quitting
+mid-round is how a development trial usually ends, and §1i's record was lost
+exactly that way. The old button is now labelled **New round** (still `Q`); the
+new one is `⏻ Quit` in the topbar, armed on the first press and committed on the
+second. `stopping: false` — no Server registered, e.g. `uvicorn --reload` — is
+reported honestly rather than claiming a shutdown that did not happen.
+
+**CB-5 · Tile resizing.** Two splitters, Evie's gesture: drag to resize,
+double-click to restore the stylesheet default. They are their own 14px grid
+tracks replacing the old `gap`, so the layout is pixel-identical until moved.
+Pointer events with capture, not Evie's window-level mouse listeners, because
+this is dragged on a tablet — and `touch-action: none`, or iOS pans the page
+instead of reporting the drag. The column split is stored as a **fraction**:
+a pixel width taken in landscape is wrong the moment the iPad is rotated.
+
+**CB-6 · Hide/expand for the board and the sliders.** Both are sections of the
+reasoning tile (there is no "merge board" tile in the cockpit — the merge board
+is the published artifact; read as the consensus board). Collapsed, each keeps a
+one-line head that still carries information — "6 slots scored", "set" — and
+gives its space back. Remembered in `localStorage`.
+
+**CB-7 · The evolving statement, larger.** `clamp(22px, 2.2vw, 31px)`, weight
+600. The **floor** is the number that matters: 2.2vw of an iPad in portrait
+(834px) is under it, and portrait is the cramped case.
+
+**CB-8 · A data-relevant thinking animation.** While a question is in flight,
+every *working* segment of the draft cycles through the board's real contenders
+for its slot — so the movement shows **what is being weighed**, not merely that
+something is happening. Locked segments never move; a slot with nothing to weigh
+does not cycle; `prefers-reduced-motion` skips the timer entirely rather than
+flickering silently. Verified live: `what` cycled "do something for me" → "do
+something for them" → "visit" and settled on the answer. A sweeping bar and
+"THINKING — THE WORDING CAN STILL CHANGE" sit under the draft, which is the
+owner's stated purpose: *"the user needs to wait before making edits."*
+
+**One cascade collision worth recording.** The banner's thinking state was first
+classed `thinking` — which a pre-existing `.thinking { display: flex; … }` rule
+(the conversation tile's waiting card) captured wholesale, laying the draft, the
+buttons and the status row out on one line. Renamed `is-thinking`, matching the
+`.tile.conversation.is-clarifying` convention already in the file. It was found
+by *looking at the running page*, not by typecheck or build, both of which
+passed.
 
 ## 2. How the queue is ordered
 

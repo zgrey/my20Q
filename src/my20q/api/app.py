@@ -313,6 +313,39 @@ def _register_routes(app: FastAPI) -> None:
             real_patient=is_real_patient(state.profile),
         )
 
+    @app.post("/api/shutdown")
+    def shutdown() -> dict:
+        """Close the tool down: finalize every live round, then stop uvicorn.
+
+        The cockpit's Quit button calls this, so the server does not sit
+        running after the caregiver is done. Two things happen, in this order:
+
+        1. **Finalize and record.** A still-live round is abandoned and written
+           out exactly as a topic switch writes it (``start_round`` makes the
+           same two calls). Without this, quitting mid-round throws the round
+           away — which is precisely the record a development trial is being
+           run to capture.
+        2. **Ask uvicorn to exit.** ``app.state.server`` is registered by the
+           launcher (``python -m my20q.api``). It is absent under TestClient
+           and under ``uvicorn --reload``; then this is a no-op on the
+           shutdown itself — the rounds are still finalized, and the response
+           reports ``stopping: false`` so the cockpit can say the server is
+           still up rather than claim a shutdown that never happened.
+
+        Setting ``should_exit`` does not kill the loop mid-response — uvicorn
+        checks it between requests — so this reply is delivered, and then the
+        lifespan hook unblocks the SSE generators on the way out.
+        """
+        for handle in state.rounds.values():
+            if not handle.round.is_terminal:
+                handle.round.abandon()
+                _maybe_record(state, handle)
+        server = getattr(app.state, "server", None)
+        if server is not None:
+            server.should_exit = True
+        log.info("shutdown requested from the cockpit (stopping=%s)", server is not None)
+        return {"ok": True, "stopping": server is not None}
+
     @app.get("/api/models", response_model=schemas.ModelsOut)
     async def list_models() -> schemas.ModelsOut:
         """Pulled Ollama models available for human-trial model selection.

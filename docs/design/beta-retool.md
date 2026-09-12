@@ -180,7 +180,28 @@ interface*, not this cockpit.
   whole round. Sourced from an easily-editable topic list (§6.5).
 - **Recording light** — on whenever a real patient profile is loaded. Doubles as a
   **pause control**: the caregiver can pause capture for a sensitive exchange;
-  paused queries do not enter the dataset.
+  paused queries do not enter the dataset. A **synthetic dev capture** shows as
+  amber "DEV REC" so it can never read as a patient session at a glance.
+
+### 6.3a Shell controls — the device, not the dialogue
+
+Added 2026-09-12 (owner, iPad Safari). Detail and the defect each one answers:
+`convergence-plan.md` §1l (CB-3 … CB-8).
+
+- **⤢ Full screen / return to the browser** — one button, both directions;
+  hidden where there is no Fullscreen API (iPhone Safari).
+- **⏻ Quit** — the session-level exit. It records the live round, stops the
+  server, and shows a "safe to exit" screen. Arms on the first press, commits
+  on the second. The input tile's `q` is **New round**, which is what that
+  control has always actually done.
+- **Splitters** — the two gutters are draggable (pointer events: mouse, touch,
+  pencil); double-click restores the default. The column split is stored as a
+  proportion so it survives rotation.
+- **Hide / expand** — the consensus board and the emotion sliders each collapse
+  to an informative one-line heading, remembered across sessions.
+- **Shell sized to the *visual* viewport**, never `100vh` — the iOS large
+  viewport and the on-screen keyboard both used to push the caregiver-context
+  field out of reach of a non-scrolling page.
 
 ### 6.4 Pictograms — retrieved, not generated
 

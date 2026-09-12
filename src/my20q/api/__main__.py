@@ -20,6 +20,10 @@ few seconds, even with open EventSource streams.
 
 A second Ctrl+C bypasses the wait entirely (uvicorn's built-in
 force-exit).
+
+The cockpit's Quit button takes the same graceful path without a terminal:
+``POST /api/shutdown`` finalizes the live round, records it, and sets
+``should_exit`` on the Server registered below.
 """
 
 from __future__ import annotations
@@ -38,14 +42,23 @@ def main() -> None:
 
     from my20q.api.app import create_app
 
-    uvicorn.run(
-        create_app(),
+    app = create_app()
+    config = uvicorn.Config(
+        app,
         host=host,
         port=port,
         # Backstop: even if a generator stalls past the lifespan sentinel
         # for some reason, uvicorn force-closes after this many seconds.
         timeout_graceful_shutdown=graceful,
     )
+    server = uvicorn.Server(config)
+    # Built here rather than via `uvicorn.run()` — which constructs the Server
+    # internally and never hands it back — so the cockpit's Quit button has
+    # something to stop. POST /api/shutdown sets `server.should_exit`, taking
+    # the same graceful path as Ctrl+C. Without this handle that endpoint can
+    # still finalize the round, but cannot end the process.
+    app.state.server = server
+    server.run()
 
 
 if __name__ == "__main__":

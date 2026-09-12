@@ -2,9 +2,11 @@ import { Fragment } from "preact";
 import type { ComponentChild } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 
+import { useFullscreen, useRemembered } from "./layout";
 import type {
   Answer,
   Banner,
+  BannerPart,
   Facet,
   HistoryEntry,
   RecordingStatus,
@@ -49,6 +51,7 @@ interface TopicBarProps {
   currentModel: string | null;
   canSelectModel: boolean;
   onSelectModel: (model: string) => void;
+  onQuit: () => void;
 }
 
 /** Persistent header: view tabs, topic, engine badge, save, rec, theme. */
@@ -74,8 +77,20 @@ export function TopicBar(props: TopicBarProps) {
     currentModel,
     canSelectModel,
     onSelectModel,
+    onQuit,
   } = props;
   const reviewing = view === "review";
+  const fs = useFullscreen();
+  // Quit stops the SERVER. One stray tap must not end the session, so the
+  // button arms first and commits on a second press; moving focus away, or
+  // eight seconds of not deciding, disarms it again. (Eight, not the usual
+  // five: the caregiver is attending to a person, not to this screen.)
+  const [arming, setArming] = useState(false);
+  useEffect(() => {
+    if (!arming) return;
+    const t = setTimeout(() => setArming(false), 8000);
+    return () => clearTimeout(t);
+  }, [arming]);
   const audioTitle = !audioOn
     ? "Audio off — click to enable readouts and input beeps"
     : ttsAvailable
@@ -196,6 +211,35 @@ export function TopicBar(props: TopicBarProps) {
         title={themeLabel}
       >
         {theme === "dark" ? "☀" : "☾"}
+      </button>
+      {/* Full screen — and the way back. Hidden where the browser has no
+          Fullscreen API at all (iPhone Safari), so the control is never a
+          button that does nothing. */}
+      {fs.supported && (
+        <button
+          class={`fs-toggle${fs.active ? " active" : ""}`}
+          onClick={fs.toggle}
+          aria-label={fs.active ? "Return to the browser" : "Full screen"}
+          title={
+            fs.active
+              ? "Return to the browser (or press Esc)"
+              : "Full screen — hides the browser toolbars"
+          }
+        >
+          {fs.active ? "⤡" : "⤢"}
+        </button>
+      )}
+      <button
+        class={`quit-btn${arming ? " arming" : ""}`}
+        onClick={() => (arming ? onQuit() : setArming(true))}
+        onBlur={() => setArming(false)}
+        title={
+          arming
+            ? "Press again to stop the server"
+            : "Quit — save the round and shut the server down"
+        }
+      >
+        ⏻<span class="btn-label"> {arming ? "Press again" : "Quit"}</span>
       </button>
     </header>
   );
@@ -459,20 +503,34 @@ function EmotionSliders({
   const touched = EMOTION_PAIRS.some(
     (p) => Math.abs(values[p.id] ?? 0) > 0.001,
   );
+  // Hide/expand, remembered: six sliders are a lot of vertical space on an
+  // iPad, and they are set once at the top of a round and then left alone.
+  const [open, toggle] = useRemembered("show.emotion", true);
   return (
-    <div class="emotion">
+    <div class={`emotion${open ? "" : " collapsed"}`}>
       <div class="emotion-header">
-        <h3>Emotional reading</h3>
         <button
-          class="reset-emotion"
-          onClick={onReset}
-          disabled={!touched}
-          title="Reset every slider to the neutral centre"
+          class="section-toggle"
+          onClick={toggle}
+          aria-expanded={open}
+          title={open ? "Hide the sliders" : "Show the sliders"}
         >
-          Reset
+          <span class="chev">{open ? "▾" : "▸"}</span>
+          <h3>Emotional reading</h3>
+          {!open && touched && <span class="collapsed-note">set</span>}
         </button>
+        {open && (
+          <button
+            class="reset-emotion"
+            onClick={onReset}
+            disabled={!touched}
+            title="Reset every slider to the neutral centre"
+          >
+            Reset
+          </button>
+        )}
       </div>
-      <div class="sliders">
+      <div class="sliders" hidden={!open}>
         {EMOTION_PAIRS.map((pair) => (
           <label class="slider-row" key={pair.id}>
             <span class="slabel">{pair.left}</span>
@@ -555,6 +613,10 @@ export function ReasoningTile({
         : "Live progress channel disconnected — events may be delayed";
   const facets = event?.facets ?? [];
   const hasBoard = facets.some((f) => f.contenders.length > 0);
+  // Hide/expand, remembered. Collapsed, the head still reports how many slots
+  // hold something — the board is the reason to open it again.
+  const [boardOpen, toggleBoard] = useRemembered("show.board", true);
+  const filled = facets.filter((f) => f.contenders.length > 0).length;
   return (
     <section class="tile reasoning">
       <h2>
@@ -564,11 +626,24 @@ export function ReasoningTile({
       </h2>
       <p class="reason-text">{text}</p>
       {hasBoard && (
-        <div class="belief">
-          <div class="belief-head">
-            Consensus board — points per contender
-          </div>
-          <ul class="facet-list">
+        <div class={`belief${boardOpen ? "" : " collapsed"}`}>
+          <button
+            class="belief-head section-toggle"
+            onClick={toggleBoard}
+            aria-expanded={boardOpen}
+            title={boardOpen ? "Hide the board" : "Show the board"}
+          >
+            <span class="chev">{boardOpen ? "▾" : "▸"}</span>
+            Consensus board
+            {boardOpen ? (
+              <span class="collapsed-note">points per contender</span>
+            ) : (
+              <span class="collapsed-note">
+                {filled} slot{filled === 1 ? "" : "s"} scored
+              </span>
+            )}
+          </button>
+          <ul class="facet-list" hidden={!boardOpen}>
             {facets.map((f) => (
               <li class={`facet-row${f.focus ? " focus" : ""}`} key={f.category}>
                 <span class="facet-cat" title={f.focus ? "Current question targets this slot" : ""}>
@@ -700,8 +775,21 @@ export function InputTile(props: InputProps) {
         <button class="answer undo" disabled={!canUndo} onClick={onUndo}>
           Undo<kbd>U</kbd>
         </button>
-        <button class="answer quit" disabled={busy} onClick={onNewRound}>
-          {terminal ? "New round" : "Quit"}
+        {/* Was labelled "Quit" — it never quit anything: it abandons this
+            round and opens a fresh one on the same topic. Quitting for real
+            (stop the server) is the ⏻ in the topbar, so the two are no longer
+            one word doing two jobs. */}
+        <button
+          class="answer newround"
+          disabled={busy}
+          onClick={onNewRound}
+          title={
+            terminal
+              ? "Start the next round on this topic"
+              : "Abandon this round and start a fresh one on the same topic"
+          }
+        >
+          New round
           <kbd>Q</kbd>
         </button>
       </div>
@@ -728,10 +816,15 @@ export function InputTile(props: InputProps) {
 // --------------------------------------- the living proposal banner (W1-C)
 
 /** Wrap each woven value's first occurrence in a band-classed, SELECTABLE
- *  mark — clicking a segment opens the editor for its slot. */
+ *  mark — clicking a segment opens the editor for its slot.
+ *
+ *  `swap` is the thinking animation: it may return another value to DISPLAY
+ *  in a segment's place (the text itself is untouched, and the click still
+ *  edits the draft's real value). */
 function renderDraft(
   banner: Banner,
   onSelect?: (category: string, value: string) => void,
+  swap?: (part: BannerPart) => string | null,
 ): ComponentChild[] {
   let segs: ComponentChild[] = [banner.text];
   for (const p of banner.parts) {
@@ -746,14 +839,17 @@ function renderDraft(
         next.push(seg);
         continue;
       }
+      const shown = swap?.(p) ?? null;
       next.push(seg.slice(0, i));
       next.push(
         <mark
-          class={`seg ${p.band}${onSelect ? " selectable" : ""}`}
+          class={`seg ${p.band}${onSelect ? " selectable" : ""}${
+            shown ? " cycling" : ""
+          }`}
           title={`${p.category} — ${p.band}${onSelect ? " · click to edit" : ""}`}
           onClick={onSelect ? () => onSelect(p.category, p.value) : undefined}
         >
-          {seg.slice(i, i + p.value.length)}
+          {shown ?? seg.slice(i, i + p.value.length)}
         </mark>,
       );
       next.push(seg.slice(i + p.value.length));
@@ -762,6 +858,11 @@ function renderDraft(
   }
   return segs;
 }
+
+/** Honour the OS "reduce motion" setting — read once, at module load. */
+const REDUCED_MOTION =
+  typeof window !== "undefined" &&
+  !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 interface BannerProps {
   banner: Banner | null;
@@ -798,6 +899,21 @@ export function ProposalBanner(props: BannerProps) {
     value: string;
   } | null>(null);
   const [typed, setTyped] = useState("");
+  // The thinking animation's clock. While a question is in flight the draft is
+  // provisional and the caregiver must see that BEFORE they start editing it
+  // (owner, 09-12). Instead of a spinner, each unsettled segment cycles
+  // through the board's real contenders for its slot — the movement shows
+  // what the round is actually choosing between, and stops on the draft's own
+  // word when the answer lands. Locked segments never move.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!busy || REDUCED_MOTION) {
+      setTick(0);
+      return;
+    }
+    const id = window.setInterval(() => setTick((t) => t + 1), 560);
+    return () => window.clearInterval(id);
+  }, [busy]);
 
   if (!banner || terminal) return null;
   if (banner.state === "pending") {
@@ -819,23 +935,46 @@ export function ProposalBanner(props: BannerProps) {
       setTyped("");
     }
   };
+  const contenders = (category: string) =>
+    (facets.find((f) => f.category === category)?.contenders ?? [])
+      .filter((c) => c.score > -2)
+      .slice(0, 4)
+      .map((c) => c.value);
   const candidates = selected
-    ? (facets.find((f) => f.category === selected.category)?.contenders ?? [])
-        .filter((c) => c.score > -2 && c.value !== selected.value)
-        .slice(0, 4)
-        .map((c) => c.value)
+    ? contenders(selected.category).filter((v) => v !== selected.value)
     : [];
 
+  // One frame of the thinking animation: for an unsettled slot with real
+  // alternatives on the board, show one of them instead of the drafted word.
+  // Returns null — leave the draft alone — for locked slots, for slots with
+  // nothing to weigh, and whenever the round is not thinking.
+  const swap = (p: BannerPart): string | null => {
+    if (!busy || REDUCED_MOTION || p.band !== "working") return null;
+    const values = contenders(p.category);
+    if (!values.includes(p.value)) values.unshift(p.value);
+    if (values.length < 2) return null;
+    const shown = values[tick % values.length];
+    return shown === p.value ? null : shown;
+  };
+
   return (
-    <div class={`banner draft ${banner.ready ? "ready" : ""}`}>
+    <div
+      class={`banner draft ${banner.ready ? "ready" : ""}${
+        busy ? " is-thinking" : ""
+      }`}
+    >
       <div class="banner-row">
         <span class="banner-text">
-          {renderDraft(banner, (category, value) => {
-            setSelected(
-              selected?.value === value ? null : { category, value },
-            );
-            setTyped("");
-          })}
+          {renderDraft(
+            banner,
+            (category, value) => {
+              setSelected(
+                selected?.value === value ? null : { category, value },
+              );
+              setTyped("");
+            },
+            swap,
+          )}
         </span>
         <span class="banner-actions">
           <button
@@ -871,6 +1010,17 @@ export function ProposalBanner(props: BannerProps) {
           </button>
         </span>
       </div>
+      {/* The wait, stated. The ✓ is already disabled while busy; this says
+          why, and the bar under the draft gives the same signal peripherally
+          for a caregiver whose eyes are on the patient, not the screen. */}
+      {busy && (
+        <div class="banner-thinking">
+          <span class="thinking-bar" />
+          <span class="thinking-label">
+            Thinking — the wording can still change
+          </span>
+        </div>
+      )}
       {(banner.banned.length > 0 || banner.muted.length > 0) && (
         <div class="banner-chips">
           {banner.banned.map((b) => (
@@ -946,6 +1096,40 @@ export function ConclusionModal(props: {
         <button class="modal-action" onClick={props.onNewRound}>
           New round
         </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Safe to exit" — the whole screen, after Quit (Evie's pattern).
+ *
+ * It replaces the cockpit rather than covering it: every control behind it
+ * would now be talking to a server that is gone, and a dead button is worse
+ * than no button. `stopping` is false when the API was launched in a way that
+ * gave it no Server to stop (uvicorn --reload, tests) — then it says so,
+ * because telling the caregiver the tool is off when it is still running is
+ * exactly the failure this button exists to prevent.
+ */
+export function ExitCard(props: { stopping: boolean; error: string | null }) {
+  return (
+    <div class="exit-screen">
+      <div class="exit-card">
+        <div class="exit-mark">⏻</div>
+        <h1>{props.error ? "Quit — with one problem" : "Safe to exit"}</h1>
+        {props.error ? (
+          <p class="exit-note">
+            The round was not confirmed as saved: {props.error}
+          </p>
+        ) : (
+          <p class="exit-note">
+            The round has been saved
+            {props.stopping
+              ? " and the server has shut down."
+              : ". The server is still running — it was started in a mode that cannot stop itself (dev reload), so close it in the terminal."}
+          </p>
+        )}
+        <p class="exit-sub">You can close this tab.</p>
       </div>
     </div>
   );

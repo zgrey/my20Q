@@ -33,31 +33,65 @@ npm run typecheck  # tsc --noEmit
 Two tabs in the topbar: **Live** (the cockpit) and **Review** (session
 playback). Topbar also has the topic ▼, engine badge, a **Model** selector
 (pick the local Ollama model for human-interaction trials — applies to the next
-question), ⬇ Save, recording light, 🔊 audio toggle, and theme.
+question), ⬇ Save, recording light, 🔊 audio toggle, theme, **⤢ full screen**
+and **⏻ Quit**.
+
+**⤢ Full screen / return to the browser** — one button, both directions. It is
+hidden where the browser has no Fullscreen API at all (iPhone Safari), rather
+than offering a control that does nothing.
+
+**⏻ Quit** — ends the session *for real*: the server finalizes and records any
+live round, then shuts itself down, and the cockpit is replaced by a "safe to
+exit" screen. It arms on the first press and commits on the second (eight
+seconds, then it disarms). The round-level control in the input tile is
+**New round** (`Q`) — it abandons the current round and opens a fresh one on
+the same topic, which is all the button labelled "Quit" ever did.
 
 While the model is generating, the **Conversation** window shows a prominent
 animated "Thinking…" banner (latency feedback where the caregiver is looking,
 not just in the reasoning tile).
 
 ```
-┌─ brand · Live|Review ── Topic ▼ ── ⬇ · ● REC · 🔊 · ☀ ─┐
+┌─ brand · Live|Review ── Topic ▼ ── ⬇ · ● REC · 🔊 · ☀ · ⤢ · ⏻ ─┐
 │ ┌─ PROPOSAL BANNER — “I need/want … for/from …” 🔊⟳✓ ─┐ │
-│ ├──────────────────────┬─────────────────────┤ │
-│ │ 1 Conversation       │ 2 Live reasoning    │ │
-│ │   transcript + live  │   consensus board + │ │
-│ │   query / verify     │   chains+SSE+sliders│ │
-│ ├──────────────────────┤                     │ │
-│ │ 3 Input y/n/k/s·⇄o·u/q│                    │ │
-│ └──────────────────────┴─────────────────────┘ │
+│ ├──────────────────────┃─────────────────────┤ │
+│ │ 1 Conversation       ┃ 2 Live reasoning    │ │
+│ │   transcript + live  ┃   consensus board + │ │
+│ │   query / verify     ┃   chains+SSE+sliders│ │
+│ ├━━━━━━━━━━━━━━━━━━━━━━┫                     │ │
+│ │ 3 Input y/n/k/s·⇄o·u/q┃                    │ │
+│ └──────────────────────┸─────────────────────┘ │
 └────────────────────────────────────────────────────┘
+     ┃ ━ = drag to resize · double-click to reset
 ```
 
-**Proposal banner** (top, owner-designed): the evolving draft utterance,
-populated from the first converged slot with ambiguous alternates and a
-trailing ellipsis ("I need/want something for/from Rob …"); glowing
-*Pending synthesis…* before that; a breathing accent halo + pulsing ✓ when
-the board says propose-ready. Per-part emphasis: **locked** values
-underlined solid, *working* values dotted + pulsing. Controls: **🔊 Speak**
+**Resizable tiles.** The gutters (`┃` and `━` above) are splitters: drag to
+resize, double-click to restore the default. They work with a mouse, a finger
+or a pencil, and the column split is remembered as a *proportion*, so it
+survives rotating the iPad. Below 700px wide the tiles stack and the splitters
+disappear.
+
+**The shell is sized to the visible viewport**, not to `100vh`: on iOS `100vh`
+is the height the page *would* have with the toolbars hidden, which used to put
+the caregiver-context field below the window with no way to scroll to it. The
+measured `visualViewport` also accounts for the on-screen keyboard, which no
+CSS unit reports.
+
+**Proposal banner** (top, owner-designed): the evolving draft utterance, set
+large — it is what the whole round is for. Populated from the first converged
+slot with ambiguous alternates and a trailing ellipsis ("I need/want something
+for/from Rob …"); glowing *Pending synthesis…* before that; a breathing accent
+halo + pulsing ✓ when the board says propose-ready. Per-part emphasis:
+**locked** values underlined solid, *working* values dotted + pulsing.
+
+*While a question is generating*, each **working** segment cycles through the
+consensus board's actual contenders for its slot (italic, dashed) above a
+sweeping bar reading "thinking — the wording can still change". The animation is
+made of the round's own data: it shows *what is being weighed*, and it is the
+signal that the draft is not yet stable enough to edit. Locked segments never
+move, and `prefers-reduced-motion` stops it entirely.
+
+Controls: **🔊 Speak**
 (reads the draft; slashes spoken as "or"), **⟳ Restate** (say the same
 thing slightly differently — draft text only), **✓** accept — pops the
 explicit confirmation modal (dimmed backdrop, the final utterance front and
@@ -98,6 +132,11 @@ nothing, and never re-asks the engine.
 coarse 5-detent scale (strong/mild each side + neutral) with large pole labels.
 Every change posts the full reading to the backend to colour the next query;
 a **Reset** pill snaps all to neutral.
+
+**Hide / expand.** Both sections of the reasoning tile — the consensus board and
+the emotion sliders — collapse from their headings and are remembered across
+sessions. Collapsed, each heading still carries information ("6 slots scored",
+"set") rather than going blank.
 
 ## Review tab
 
