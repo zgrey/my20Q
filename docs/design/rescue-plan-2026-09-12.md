@@ -28,7 +28,7 @@ so `git log` lies about this):
 | `dev-capture` | merged (PR #6) | delete |
 | `security/httpx2-and-tts-cap` | merged (PR #3) | delete |
 | `docs/post-merge-status` | merged (PR #2) | delete |
-| `augmented-reasoning` | June 2nd, 4 unique commits, pre-dates the cockpit | owner's call — archive or delete |
+| `augmented-reasoning` | June 2nd. Its useful half (decouple reason→format, the serve script, the timeout bump) is already in `main`; the 4 unique commits are the abandoned **hierarchical-zoom** architecture | `git tag archive/augmented-reasoning` then delete — tagging keeps it reachable forever at no cost |
 
 **So: there are not four live branches. There is one** — `cockpit-shell` —
 plus seven merged PR branches nobody deleted, and one June relic. The mess is
@@ -162,6 +162,13 @@ test harness twice in one day. Before any further live round:
    `main`. It is a good veto and a poor endorser (a "no effect" result is no
    evidence; a "worse" result is evidence). Any candidate that benches worse
    than `main` does not go to a trial.
+
+   **How to read the absolute numbers: don't.** `main` itself benches 1/3
+   converged at 24 queries, while the same engine took 3 of 4 rounds live on
+   09-09 at a median of 6 questions. The simulated answerer is harsher than a
+   real caregiver and the gap is structural. Only the **delta** between two
+   revisions carries information, which is why both sides are run at the same
+   seed, model and scenario set.
 2. **W2-AB replay harness** — feed recorded ANSWERS back through a live
    `Round` and report where the controller diverges. Trial 2's dominant failure
    was reproducible offline from trial 1's record in under a second; it cost a
