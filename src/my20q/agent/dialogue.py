@@ -1436,11 +1436,28 @@ class Round:
         if cat is not None:
             return cat, "probe", None
 
-        # 2. Tied top contenders anywhere (core first) — split them.
+        # 2. Tied top contenders anywhere (core first) — split them, but only
+        #    when a split question is ASKABLE. `split` means "ask about ONE of
+        #    them so the answer separates the two", which is a re-ask when both
+        #    have already been put to the person — and the repeat gate then
+        #    refuses it, leaving the turn with no legal move.
+        #
+        #    Latent before W3-K and exposed by it: keeping the `kinda` scores a
+        #    second contender, so the 09-12 board (arm 1.0 yes, hand 0.5 kinda,
+        #    both already asked) becomes a TIE and this priority would have
+        #    hijacked the drill that round actually needed. Verified by
+        #    replaying that board with and without the kinda.
+        asked_values = self._asked_values()
         for cat in core + others:
             pair = facets.tied_top(board, cat, margin=T.facet_split_margin)
-            if pair is not None and fresh(cat):
-                return cat, "split", (pair[0][0], pair[1][0])
+            if pair is None or not fresh(cat):
+                continue
+            seen = asked_values.get(cat, set())
+            if all(
+                any(facets._tokens_match(v, a) for a in seen) for v, _ in pair
+            ):
+                continue  # both already asked — a split here re-asks, drill instead
+            return cat, "split", (pair[0][0], pair[1][0])
 
         # 3. Every core slot is confident → enrich an empty modifier slot.
         if all(self._family_confident(board, c) for c in core):
@@ -2281,6 +2298,24 @@ class Round:
             if h.get("kind") != "query" or h.get("answer") != Answer.NO.value:
                 continue
             if h.get("contested"):
+                continue
+            focus = h.get("focus") or ""
+            value = (h.get("slots") or {}).get(focus)
+            if focus and value:
+                out.setdefault(focus, set()).add(value)
+        return out
+
+    def _asked_values(self) -> dict[str, set[str]]:
+        """Every focus value already put to the person, per slot — any answer.
+
+        Not the same as `_ruled_out`, which is the NO subset. This is "the
+        repeat gate will refuse a question about this", which is what makes a
+        split unaskable. Derived from history, like everything else the board
+        reads, so undo restores it.
+        """
+        out: dict[str, set[str]] = {}
+        for h in self._history:
+            if h.get("kind") != "query":
                 continue
             focus = h.get("focus") or ""
             value = (h.get("slots") or {}).get(focus)

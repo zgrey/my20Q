@@ -388,6 +388,45 @@ def test_focus_retired_slot_reopens_on_a_tie(topics: list[Topic]) -> None:
     assert set(pair) == {"a drink", "a snack"}
 
 
+async def test_split_is_skipped_when_both_tied_values_were_asked(
+    topics: list[Topic],
+) -> None:
+    """A split must be ASKABLE, or it hands the turn no legal move.
+
+    `split` means "ask about ONE of them so the answer separates the two" —
+    which is a re-ask once both have been put to the person, and the repeat
+    gate then refuses it. Latent until W3-K: keeping the `kinda` scores a
+    second contender, so the 09-12 board (arm 1.0 from a yes, hand 0.5 from a
+    kinda, BOTH already asked) becomes a tie, and this priority would have
+    hijacked the drill that round actually needed. Caught by replaying that
+    board with and without the kinda before the next trial, not during it.
+    """
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    rnd._history = [
+        {"kind": "query", "text": "Is the pain located in your hands?",
+         "focus": "where", "answer": "kinda", "slots": {"where": "hand"}},
+        {"kind": "query", "text": "Is the pain in your arm?",
+         "focus": "where", "answer": "yes", "slots": {"where": "arm"}},
+    ]
+    board = facets.empty_board()
+    board["what"] = {"pain": 3.0}
+    board["when"] = {"now": 2.0}
+    board["where"] = {"arm": 1.0, "hand": 0.5, "leg": 0.0}
+    # The tie is real — this is not a claim that tied_top should stop firing.
+    assert facets.tied_top(board, "where", margin=rnd.tuning.facet_split_margin)
+    focus, directive, _ = rnd._pick_focus(board, [])
+    assert (focus, directive) == ("where", "drill"), "must drill below 'arm'"
+
+    # …and a tie with an UNASKED member still splits, which is the whole point
+    # of the priority.
+    rnd._history = rnd._history[:1]  # only "hand" was asked
+    focus, directive, pair = rnd._pick_focus(board, [])
+    assert (focus, directive) == ("where", "split")
+    assert set(pair) == {"arm", "hand"}
+
+
 def test_topic_facet_priority_loaded_and_validated(topics: list[Topic]) -> None:
     people = _topic(topics, "my_people")
     assert people.facet_priority[0] == "who"
