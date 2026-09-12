@@ -656,6 +656,50 @@ async def test_restart_does_not_re_offer_a_ruled_out_value(
     assert "pain" not in rnd._ruled_out().get("what", set())
 
 
+async def test_a_re_attributed_focus_never_rules_a_value_out(
+    topics: list[Topic],
+) -> None:
+    """The trial-2 regression, locked (09-12).
+
+    W2-P re-files `focus` to the slot a question actually asserted when the
+    requested slot was not anchored, keeping the requested one in
+    `focus_requested`. The question is still ABOUT the requested slot, so its
+    "no" is evidence about a value that never reached the entry.
+
+    Live: "Is the discomfort located in your chest?" asked for `where`; "chest"
+    failed anchoring; focus was re-filed to `what`; and this eliminated
+    "discomfort", which had four yes answers behind it. The board emptied
+    mid-round.
+    """
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    rnd._history = [
+        {"kind": "query", "text": "Is the discomfort in your chest?", "answer": "no",
+         "focus": "what", "focus_requested": "where",
+         "slots": {"what": "discomfort"}},
+    ]
+    assert rnd._ruled_out() == {}
+
+
+async def test_a_yes_supported_value_is_never_ruled_out(
+    topics: list[Topic],
+) -> None:
+    """The safety net under the guard above: elimination is only ever for
+    values the round has no positive evidence for. A "no" that looks like it
+    landed on a confirmed value did not mean that."""
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    rnd._history = [
+        {"kind": "query", "text": "Are you feeling discomfort?", "answer": "yes",
+         "focus": "what", "slots": {"what": "discomfort"}},
+        {"kind": "query", "text": "Is the discomfort constant?", "answer": "no",
+         "focus": "what", "slots": {"what": "discomfort"}},
+    ]
+    assert rnd._ruled_out() == {}
+
+
 async def test_contested_check_does_not_rule_a_value_out(
     topics: list[Topic],
 ) -> None:

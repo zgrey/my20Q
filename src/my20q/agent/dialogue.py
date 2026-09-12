@@ -2293,16 +2293,45 @@ class Round:
         recomputable from seeds + history on every turn, and an undo that pops
         the "no" must put the candidate back.
         """
+        # Values a YES asserts are never eliminated, whatever a later "no"
+        # looked like it was about. The safety net for the guard below, and
+        # correct on its own terms: elimination is for values the round has no
+        # positive evidence for.
+        supported: dict[str, set[str]] = {}
+        for h in self._history:
+            if h.get("kind") == "query" and h.get("answer") == Answer.YES.value:
+                for cat, val in (h.get("slots") or {}).items():
+                    supported.setdefault(cat, set()).add(val)
+
         out: dict[str, set[str]] = {}
         for h in self._history:
             if h.get("kind") != "query" or h.get("answer") != Answer.NO.value:
                 continue
             if h.get("contested"):
                 continue
+            # A RE-ATTRIBUTED focus is bookkeeping, not intent. W2-P moves
+            # `focus` to the slot the question actually asserted when the
+            # requested one was not anchored — keeping the requested slot in
+            # `focus_requested` precisely so the divergence stays visible. The
+            # question was still ABOUT the requested slot, so its "no" is
+            # evidence about a value that never made it onto the entry, and
+            # eliminating the re-attributed value instead is wrong.
+            #
+            # Trial 2, 09-12: "Is the discomfort located in your chest?" asked
+            # for `where`; "chest" failed slot anchoring, focus was re-filed to
+            # `what`, and this ruled out "discomfort" — which had four yes
+            # answers behind it. That emptied the board mid-round.
+            if h.get("focus_requested"):
+                continue
             focus = h.get("focus") or ""
             value = (h.get("slots") or {}).get(focus)
-            if focus and value:
-                out.setdefault(focus, set()).add(value)
+            if not focus or not value:
+                continue
+            if any(
+                facets._tokens_match(value, s) for s in supported.get(focus, set())
+            ):
+                continue
+            out.setdefault(focus, set()).add(value)
         return out
 
     def _asked_values(self) -> dict[str, set[str]]:
