@@ -562,23 +562,75 @@ async def test_edit_ban_strikes_a_value_and_keeps_going(
     assert ("what", "a drink") not in rnd._weave(board).items()
 
 
-async def test_restart_keeps_yes_signal_and_dumps_no(topics: list[Topic]) -> None:
+async def test_restart_keeps_yes_and_kinda_and_dumps_no(topics: list[Topic]) -> None:
+    """W3-K (09-12): only NO is noise. A kinda is warm and is now KEPT.
+
+    This test previously asserted the kinda was dumped with the no. That was
+    the behaviour, and the 09-12 trial showed what it costs: "is the pain in
+    your hands?" → kinda, on a broken wrist, erased by the next restart. The
+    restart exists to dump a WRONG working context; "nearly right" is not
+    wrong. The ruled-out value is also gone from the board entirely, not
+    merely unscored — see the next test for why that matters.
+    """
     rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
                 rng=_FixedRandom(0.99))
     await rnd.open()
     rnd._history = [
         {"kind": "query", "text": "Is it a drink?", "answer": "yes",
-         "slots": {"what": "a drink"}},
+         "focus": "what", "slots": {"what": "a drink"}},
         {"kind": "query", "text": "Is it a snack?", "answer": "no",
-         "slots": {"what": "a snack"}},
+         "focus": "what", "slots": {"what": "a snack"}},
         {"kind": "query", "text": "Is it the blanket?", "answer": "kinda",
-         "slots": {"what": "the blanket"}},
+         "focus": "what", "slots": {"what": "the blanket"}},
     ]
     await rnd._restart("test")
     board = rnd._replay_board()
     assert board["what"]["a drink"] == 1.0  # round-specific yes kept
+    assert board["what"]["the blanket"] == 0.5  # kinda kept — it is warm
     assert board["what"].get("a snack", 0.0) == 0.0  # the "no" influence dumped
-    assert board["what"].get("the blanket", 0.0) == 0.0  # "kinda" dumped too
+
+
+async def test_restart_does_not_re_offer_a_ruled_out_value(
+    topics: list[Topic],
+) -> None:
+    """W3-K: the board must stop offering what the repeat gate forbids.
+
+    The 09-12 deadlock, in miniature. A restart dumped the score on a
+    no-answered value but `_history` — which the repeat gate reads — kept the
+    question, so the rebuilt board listed the value as an untried candidate
+    the auditor would then refuse to ask about. The engine argued with itself
+    and every restart re-entered the same trap.
+    """
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    rnd._history = [
+        {"kind": "query", "text": "Is the pain in your legs?", "answer": "no",
+         "focus": "where", "slots": {"what": "pain", "where": "legs"}},
+    ]
+    assert rnd._ruled_out() == {"where": {"legs"}}
+    await rnd._restart("test")
+    board = rnd._replay_board()
+    assert "legs" not in board["where"], "a ruled-out value must not be re-offered"
+    # The "no" deducts from the WEAKEST asserted pair only, so the question's
+    # other value is not eliminated with it — "pain" survives to be asked about.
+    assert "pain" not in rnd._ruled_out().get("what", set())
+
+
+async def test_contested_check_does_not_rule_a_value_out(
+    topics: list[Topic],
+) -> None:
+    """A contradicted double-check scores nothing (W2-T) — so it eliminates
+    nothing either. It would be perverse for an answer the board is forbidden
+    to deduct from to remove the candidate altogether."""
+    rnd = Round(_topic(topics, "physical_health"), llm=_controller_backend(),
+                rng=_FixedRandom(0.99))
+    await rnd.open()
+    rnd._history = [
+        {"kind": "query", "text": "Do you mean pain?", "answer": "no",
+         "focus": "what", "slots": {"what": "pain"}, "contested": True},
+    ]
+    assert rnd._ruled_out() == {}
 
 
 async def test_no_streak_triggers_restart(topics: list[Topic]) -> None:

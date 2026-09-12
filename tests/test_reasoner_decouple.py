@@ -14,7 +14,7 @@ import json
 import pytest
 
 from my20q.agent import facets
-from my20q.agent.reasoner import Reasoner, ReasonerError
+from my20q.agent.reasoner import Reasoner, ReasonerError, _drill_violation
 from my20q.llm import MockBackend
 
 _BOARD = facets.seed_board(
@@ -488,3 +488,49 @@ async def test_a_note_mints_what_the_board_has_never_seen() -> None:
     # Minted on its own terms rather than folded into the vaguer "a drink" —
     # the specific is the reason the caregiver bothered to type it.
     assert got["what"] == ["water cup"]
+
+
+# --------------------------------------------- the drill contract (W2-Z, 1m)
+
+
+def _where_board() -> facets.Board:
+    """The 09-12 board at the stall: 'arm' confirmed, siblings still listed."""
+    board = facets.empty_board()
+    board["where"] = {"arm": 1.0, "hand": 0.0, "leg": 0.0, "foot": 0.0}
+    return board
+
+
+def test_drill_rejects_re_asserting_the_parent() -> None:
+    # A drill of "arm" answered with "arm" is a re-assertion, not a narrowing.
+    # It used to be stamped drill_parent="arm": the value recorded as a
+    # refinement of itself.
+    reason = _drill_violation("arm", _where_board(), "where", None)
+    assert reason is not None
+    assert "arm" in reason and "more specific" in reason.lower()
+
+
+def test_drill_rejects_a_sibling() -> None:
+    # The exact 09-12 failure: a drill of "arm" came back "hand". Caught then
+    # only because that question happened to have been asked already; had the
+    # model said "leg", "leg refines arm" would have entered the belief.
+    reason = _drill_violation("hand", _where_board(), "where", None)
+    assert reason is not None
+    assert "same level" in reason
+
+
+def test_drill_accepts_a_genuine_narrowing() -> None:
+    # The question the round needed and never asked.
+    assert _drill_violation("wrist", _where_board(), "where", None) is None
+
+
+def test_drill_correction_names_the_parent() -> None:
+    # The point of the message: today's rejections say what NOT to do and never
+    # what to do, which is how the model ended up cycling between blocked moves.
+    for value in ("arm", "hand"):
+        reason = _drill_violation(value, _where_board(), "where", None)
+        assert reason is not None and "'arm'" in reason
+
+
+def test_drill_contract_is_vacuous_with_an_empty_slot() -> None:
+    # Nothing to narrow below, so any value is fresh coverage, not a violation.
+    assert _drill_violation("wrist", facets.empty_board(), "where", None) is None

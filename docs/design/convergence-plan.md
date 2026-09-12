@@ -2719,7 +2719,7 @@ own gloss, or refusing values that merely restate the question's own framing
 existing rule is deliberately narrow for that reason, so widening it wants the
 bench and a replay against §1h/§1i before it lands.
 
-### W2-Z · Enforce the drill contract — Status: PROPOSED (09-12, §1m)
+### W2-Z · Enforce the drill contract — Status: IMPLEMENTED (09-12, §1m)
 
 **Problem.** `drill` asks the model to narrow BELOW the frontier value, and
 nothing checks that it did. `dialogue.py` stamps `action.drill_parent =
@@ -2760,7 +2760,62 @@ holds unasked candidates: ask one as a templated question, at 0.47 s against
 7–17 s. See §1m cost table. **Status stays PROPOSED**; this is evidence, not a
 decision.
 
-### W3-K · A restart must not erase what the repeat gate still enforces — Status: PROPOSED (09-12, §1m)
+### W3-L · Split an either/or instead of discarding it — Status: IMPLEMENTED (owner, 09-12)
+
+**Owner's proposal.** *"When either/or questions (or multi-topic questions) are
+proposed we should not discard them. Instead, we should simply split them. This
+should facilitate more rapid questioning as well."*
+
+Correct, and it attacks the measured latency lever directly: the re-ask rate,
+not the model. An either/or is a *good* question asked badly — the model has
+named two candidates it believes are live — and rejecting it spends another
+deliberate+format cycle (7–17 s, §1m) to get one of them back.
+
+**Built** as `auditor.split_either_or`, used in Gate 1: split at the LAST
+" or ", keep the left half, and **re-audit it**. So the rescue can only ever
+produce a question the gate would have accepted anyway, and falls back to
+today's rejection when it cannot. Refuses when the left half is too short to
+stand alone, so *"Is it more or less the same?"* is rejected rather than
+mangled into *"Is it more?"*. `CallStats.split_either_or` counts the rescues so
+the next trial can measure what they saved.
+
+**One deliberate limit.** The dropped alternative is recorded on the action
+(`deferred_alternative`) for the autopsy, and is **not** banked as a board
+value. Values on this board are text-anchored to a question the person actually
+answered; a fragment nobody was asked about is not one, and minting it would be
+the Aaron bug by another route. If the next trial shows the alternative is
+routinely lost, the cheap fix is to let the *seed* see it, not to score it.
+
+### W3-M · The stenographer — a précis of the round for the restart's re-seed — Status: IMPLEMENTED (owner, 09-12)
+
+**Owner's proposal.** *"We need a mock stenographer. An agent that reads all
+round context and concisely summarizes that context as a background context
+input to seed. This should resolve the asymmetry issue."*
+
+**Built, with two departures from the proposal as stated — both deliberate.**
+
+1. **It is not an agent, it is a function.** The round already holds every fact
+   such a summary would contain, exactly. A model paraphrase can only drop or
+   invent one, and it would spend a 7–17 s call *inside the recovery path* —
+   the one path that must not be slow or flaky. §1m measured templated against
+   model-written at 16–37× in the engine's favour. Deterministic also keeps
+   replay exact, which a model call in `_restart` would not.
+2. **It does not resolve the asymmetry, and should not be relied on to.** The
+   summary reaches the model through the *prompt*; the asymmetry is a *state*
+   inconsistency — the board offering a candidate the auditor will refuse. A
+   prompt can make the collision less likely; it cannot remove it. And W2-S
+   measured that prompt-side pressure makes this model fail *harder*. So the
+   asymmetry is fixed structurally, by `_ruled_out` in W3-K, and the
+   stenographer is kept for the thing it genuinely fixes:
+
+**the naive re-seed.** `_restart` calls `seed_board` with the same context the
+round opened with, so it proposes the same candidates it proposed at question
+one — which is why the 09-12 board still offered leg / foot / chest *after*
+"arm" was confirmed. The précis names what is confirmed, what is warm and worth
+narrowing, and what is ruled out, so the rebuilt board can offer wrist / elbow /
+forearm instead. That defect had no queue entry before this.
+
+### W3-K · A restart must not erase what the repeat gate still enforces — Status: IMPLEMENTED (09-12, §1m)
 
 **Problem.** `_restart()` keeps only YES answers and caregiver context, so the
 board loses every `no` and `kinda`. `self._history` is untouched, and the repeat
@@ -2769,18 +2824,25 @@ gate reads it. The board then offers exactly the values the auditor forbids —
 re-enter the same trap. Both dead rounds on 09-12 died inside this loop, and it
 cost real signal: the `kinda` on "hands" was the warmest reading in the round.
 
-**Proposal (three options, owner's call).**
+**Built: options 1 + 3** (owner's pick, 09-12).
 
-1. **Carry a `ruled_out` set across restarts** and remove those values from the
-   rebuilt board's candidate pool. Board and gate then agree. Keeps the
-   restart's purpose (dump the wrong *scores*) while not re-offering dead ends.
-2. **Clear the matching question history** when a value's score is dumped — the
-   mirror fix. Consistent, but re-asks questions the person already answered.
-3. **Keep `kinda` scores across a restart**, dumping only `no`. A kinda is a
-   warm signal, not the wrong-context noise the restart exists to clear.
+1. **`_ruled_out()` is carried across restarts** — derived from history, never
+   cached, so undo puts a candidate back — and those values are removed from
+   the rebuilt board entirely. Board and gate now agree. Anchored to the
+   question's FOCUS value, not to every pair it asserted, because a "no"
+   deducts from the weakest pair only: *"is the pain in your legs?"* rules out
+   **legs**, never **pain**. A `contested` entry rules out nothing, since W2-T
+   defines it as scoring nothing.
+3. **`kinda` now survives a restart.** The restart exists to dump a *wrong*
+   working context, and "nearly right" is not wrong. Dumping it threw away the
+   warmest reading in the 09-12 round — *"is the pain in your hands?"* → kinda,
+   on a broken wrist. Only NO is noise, and only NO is now dumped. The
+   direction-bucket credit stays yes-only: a kinda is warm about the VALUE, not
+   evidence about the direction.
 
-(1) is the smallest and the most obviously correct; (3) is independently
-attractive and could land with it.
+Option 2 (clear the matching question history) was not built: it makes board
+and gate consistent in the wrong direction, by re-asking questions the person
+has already answered.
 
 ### W2-Y · extension proposed — values that SUBSUME the board
 

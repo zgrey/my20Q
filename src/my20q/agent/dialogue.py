@@ -2261,6 +2261,70 @@ class Round:
             session_id=self.session_id,
         )
 
+    def _ruled_out(self) -> dict[str, set[str]]:
+        """Values a NO has eliminated, per slot — derived from history (W3-K).
+
+        Anchored to the question's FOCUS value, not to every pair it asserted:
+        a "no" deducts from the weakest asserted pair only, so "is the pain in
+        your legs?" rules out *legs*, never *pain*.
+
+        Skips a CONTESTED entry by construction — a contradicted double-check
+        is defined as scoring nothing (W2-T), and it would be perverse for it
+        to eliminate a value it is not allowed to deduct from.
+
+        Derived, never cached: the replay invariant requires the board be
+        recomputable from seeds + history on every turn, and an undo that pops
+        the "no" must put the candidate back.
+        """
+        out: dict[str, set[str]] = {}
+        for h in self._history:
+            if h.get("kind") != "query" or h.get("answer") != Answer.NO.value:
+                continue
+            if h.get("contested"):
+                continue
+            focus = h.get("focus") or ""
+            value = (h.get("slots") or {}).get(focus)
+            if focus and value:
+                out.setdefault(focus, set()).add(value)
+        return out
+
+    def _stenographer_note(self) -> str:
+        """A plain-prose précis of the round, for the restart's seed call.
+
+        The owner's proposal, built deterministically: the round already holds
+        every one of these facts exactly, so a model paraphrase could only drop
+        or invent one — and it would spend a 7-17 s call inside the recovery
+        path, which is the path that must not be slow or flaky.
+
+        It does NOT resolve the board/gate asymmetry on its own; `_ruled_out`
+        does that structurally. What it fixes is the naive re-seed: the seed
+        call otherwise sees the same context it saw at the round's open and
+        proposes the same candidates, which is why the 09-12 board still
+        offered leg/foot/chest after "arm" was confirmed.
+        """
+        board = self._replay_board()
+        confirmed: list[str] = []
+        warm: list[str] = []
+        for cat in facets.CATEGORIES:
+            for value, score in facets.live(board, cat):
+                if score >= self.tuning.facet_ready_points:
+                    confirmed.append(f"{value} ({cat})")
+                elif score > 0:
+                    warm.append(f"{value} ({cat})")
+        dead = [
+            f"{value} ({cat})"
+            for cat, values in self._ruled_out().items()
+            for value in sorted(values)
+        ]
+        lines = []
+        if confirmed:
+            lines.append("Already confirmed: " + ", ".join(confirmed) + ".")
+        if warm:
+            lines.append("Partly confirmed, worth narrowing: " + ", ".join(warm) + ".")
+        if dead:
+            lines.append("Already ruled out — do not suggest: " + ", ".join(dead) + ".")
+        return " ".join(lines)
+
     async def _restart(self, reason: str) -> None:
         """Dump the no/kinda influence and rebuild the board — the recovery move.
 
@@ -2278,15 +2342,28 @@ class Round:
         """
         # 1. Keep the high-trust signal: yes answers (content pairs AND their
         #    direction-bucket credits) + caregiver context. Flip nudges are
-        #    no-derived and are dumped with the rest of the no/kinda influence.
+        #    no-derived and are dumped with the rest of the no influence.
+        #
+        #    KINDA IS NOW KEPT TOO (W3-K, 09-12). The restart exists to dump a
+        #    WRONG working context; a kinda is not wrong, it is warm — "nearly
+        #    right, try a variation". Dumping it threw away the most useful
+        #    reading in the 09-12 round: "is the pain in your hands?" → kinda,
+        #    on a broken wrist, erased by the next restart. Only NO is noise
+        #    here, and only NO is dumped. The bucket credit stays yes-only: a
+        #    kinda is warm about the VALUE, not evidence of the direction.
         kept = facets.empty_board()
         for h in self._history:
             kind = h.get("kind")
-            if kind == "query" and h.get("answer") == Answer.YES.value:
+            answer = h.get("answer")
+            if kind == "query" and answer in (Answer.YES.value, Answer.KINDA.value):
                 if h.get("slots"):
-                    kept = facets.update(kept, h["slots"], Answer.YES.value)
+                    kept = facets.update(kept, h["slots"], answer)
                 direction = h.get("direction")
-                if self.topic.direction and direction in facets.DIRECTION_BUCKETS:
+                if (
+                    answer == Answer.YES.value
+                    and self.topic.direction
+                    and direction in facets.DIRECTION_BUCKETS
+                ):
                     kept = facets.update(
                         kept,
                         {"how": facets.DIRECTION_BUCKETS[direction]},
@@ -2308,6 +2385,19 @@ class Round:
         if self._reasoner is not None:
             try:
                 ctx = self._reasoner_ctx()
+                # THE STENOGRAPHER (owner proposal, 09-12). Without it the
+                # restart re-seeds from the same context as the round's open,
+                # so it proposes the same naive candidates — the 09-12 board
+                # still offered leg/foot/chest after "arm" had been confirmed.
+                # Written by CODE, not a model call: the round already holds
+                # these facts exactly, so a paraphrase could only lose or
+                # invent one, and it would cost 7-17 s in the recovery path.
+                # Deterministic also keeps replay exact.
+                note = self._stenographer_note()
+                if note:
+                    ctx["seed_context"] = "\n".join(
+                        p for p in (ctx.get("seed_context") or "", note) if p
+                    )
                 fresh = await self._reasoner.seed_board(
                     seed_universal_wants=self.topic.seed_universal_wants, **ctx
                 )
@@ -2315,6 +2405,17 @@ class Round:
                 fresh = {}  # recovery must not depend on a flaky seed call
 
         board = facets.merge_values(kept, self._inject_direction_buckets(fresh))
+        # Values a NO already eliminated never come back as candidates. The
+        # board used to be rebuilt without them scored but still LISTED, while
+        # the repeat gate — which reads `_history`, untouched by a restart —
+        # kept banning the question about them. The board then offered exactly
+        # what the auditor forbade, and a restart could only re-enter that trap
+        # (§1m: both dead rounds of 09-12 died inside it).
+        for cat, dead in self._ruled_out().items():
+            for value in dead:
+                for existing in list(board.get(cat, {})):
+                    if facets._tokens_match(existing, value):
+                        board[cat].pop(existing, None)
         self._history.append(
             {"kind": "restart", "reason": reason, "board": facets.snapshot(board)}
         )

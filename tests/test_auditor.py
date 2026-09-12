@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from my20q.agent.auditor import audit_query, is_repeat
+from my20q.agent.auditor import audit_query, is_repeat, split_either_or
 
 
 def test_audit_passes_a_plain_yes_no() -> None:
@@ -102,3 +102,34 @@ def test_repeat_gate_slot_exemption_for_new_category_drills() -> None:
 def test_repeat_gate_distinguishes_short_subject_swaps() -> None:
     # Short questions differing in the one content word are NOT repeats.
     assert is_repeat("Is it a person?", ["Is it a picture?"]) is None
+
+
+# ------------------------------------------ splitting an either/or (owner, 09-12)
+
+
+def test_split_either_or_keeps_the_first_option() -> None:
+    # The 09-12 shape: the model names two live candidates in one question.
+    # Rejecting it costs a 7-17s round-trip; splitting it costs nothing.
+    got = split_either_or("Is the pain you are feeling in your arm or your hand?")
+    assert got == ("Is the pain you are feeling in your arm?", "your hand")
+    # ...and what comes out must itself pass every gate, or it is no use.
+    assert audit_query(got[0]).ok
+
+
+def test_split_either_or_splits_at_the_last_or() -> None:
+    got = split_either_or("Is it your left or right arm or your hand?")
+    assert got is not None and got[0].endswith("arm?") and got[1] == "your hand"
+
+
+def test_split_either_or_refuses_to_mangle_an_idiom() -> None:
+    # "Is it more?" is not the question anyone meant. Too short a left half is
+    # the signal, and the caller falls back to rejecting as before.
+    assert split_either_or("Is it more or less the same?") is None
+
+
+def test_split_either_or_ignores_a_question_without_or() -> None:
+    assert split_either_or("Is this about your daughter?") is None
+
+
+def test_split_either_or_needs_something_after_the_or() -> None:
+    assert split_either_or("Is the pain in your arm or?") is None

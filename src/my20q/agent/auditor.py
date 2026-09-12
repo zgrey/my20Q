@@ -117,6 +117,43 @@ def audit_query(text: str) -> AuditResult:
     return AuditResult(True)
 
 
+#: A split half must still read as a question, not a stub ("Is it?").
+_MIN_SPLIT_WORDS = 4
+
+
+def split_either_or(text: str) -> tuple[str, str] | None:
+    """Split "A or B?" into the askable half and the deferred alternative.
+
+    Owner proposal (09-12): an either/or is a GOOD question asked badly — the
+    model has named two candidates it believes are live. Rejecting it throws
+    away a 7-17 s round-trip and asks the model to try again; splitting it
+    costs nothing and yields a question that passes every gate.
+
+    Deliberately conservative, and the caller must re-audit the result:
+
+    - splits at the LAST " or ", which is where the choice sits in the
+      question shapes this engine produces ("… in your arm or your hand?");
+    - refuses when the left half is too short to stand alone as a question,
+      so "Is it more or less the same?" is rejected rather than mangled into
+      "Is it more?".
+
+    Returns ``(question, deferred)`` or None. `deferred` is the raw trailing
+    fragment — instrumentation only. It is NOT scored or banked as a board
+    value: values on this board are text-anchored to a question the person
+    actually answered, and a fragment nobody was asked about is neither.
+    """
+    stripped = text.strip()
+    matches = list(_OR_RE.finditer(stripped))
+    if not matches:
+        return None
+    last = matches[-1]
+    left = stripped[: last.start()].strip().rstrip(",;").strip()
+    right = stripped[last.end() :].strip().rstrip("?").strip(" ,;")
+    if len(left.split()) < _MIN_SPLIT_WORDS or not right:
+        return None
+    return left.rstrip("?") + "?", right
+
+
 def _normalize(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]+", " ", text.casefold()).split())
 

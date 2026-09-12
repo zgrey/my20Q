@@ -33,7 +33,12 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from my20q.agent import facets, prompts
-from my20q.agent.auditor import _normalize, audit_query, is_repeat
+from my20q.agent.auditor import (
+    _normalize,
+    audit_query,
+    is_repeat,
+    split_either_or,
+)
 from my20q.agent.safety import sanitize_llm_text, sanitize_utterance
 from my20q.llm.base import LLMBackend, LLMUnavailable
 
@@ -87,6 +92,10 @@ class CallStats:
     calls: int = 0
     #: Gate attempts made this turn (≤ MAX_AUDIT_RETRIES + 1).
     attempts: int = 0
+    #: Either/or questions RESCUED by splitting instead of rejected (owner,
+    #: 09-12). Counted so the next trial can measure what the split saved —
+    #: each one is a deliberate+format cycle, 7-17 s, not spent.
+    split_either_or: int = 0
     #: Wall clock at construction — the turn's start.
     started: float = field(default_factory=time.perf_counter)
 
@@ -104,7 +113,44 @@ class CallStats:
         out["total_ms"] = round((time.perf_counter() - self.started) * 1000, 1)
         out["llm_calls"] = self.calls
         out["attempts"] = self.attempts
+        if self.split_either_or:
+            out["split_either_or"] = self.split_either_or
         return out
+
+
+def _drill_violation(
+    value: str, board: facets.Board, focus: str, edges: facets.Edges | None
+) -> str | None:
+    """Why `value` fails the drill contract, or None if it is a real narrowing.
+
+    `drill` asks for a value BELOW the focus slot's frontier. Two ways to miss
+    it, both seen in the 09-12 round against a drill of "arm":
+
+    - the frontier itself ("arm") — a re-assertion, not a narrowing;
+    - a value already live in the slot ("hands") — a sibling at the same level.
+
+    Both used to be stamped as refinements of the frontier, so a yes would have
+    written "hands refines arm" into the belief. Returns the CORRECTION text,
+    which names the parent — the model needs a target, not only a prohibition.
+    """
+    top = facets.frontier(board, focus, edges or facets.empty_edges())
+    if top is None:
+        return None  # nothing to narrow below — any value is fresh coverage
+    parent = top[0]
+    if facets._tokens_match(value, parent):
+        return (
+            f"'{value}' is the value you were asked to narrow, said again — "
+            f"name something MORE specific that is part of '{parent}'"
+        )
+    for other, _score in facets.live(board, focus):
+        if facets._tokens_match(other, parent):
+            continue
+        if facets._tokens_match(value, other):
+            return (
+                f"'{value}' is another option at the same level as '{parent}', "
+                f"not a narrower one — name something that is part of '{parent}'"
+            )
+    return None
 
 
 @dataclass
@@ -158,6 +204,11 @@ class ReasonerAction:
     #: frontier at ask time. A yes makes the asserted value a refinement of it
     #: when the model tagged none itself (W2-R).
     drill_parent: str = ""
+    #: When an either/or question was SPLIT rather than rejected, the trailing
+    #: alternative that was dropped. Recorded for the autopsy only — it is
+    #: never scored or added to the board, because a fragment nobody was asked
+    #: about is not a text-anchored value (the Aaron rule).
+    deferred_alternative: str = ""
     #: Autopsy instrumentation (W2-O) — per-phase milliseconds, LLM
     #: round-trips and gate attempts for the turn that produced this action.
     timings: dict = field(default_factory=dict)
@@ -435,9 +486,21 @@ class Reasoner:
 
             # Gate 1 — answerable as a plain yes/no, no leaked reasoning language.
             verdict = audit_query(cleaned)
+            deferred = ""
             if not verdict.ok:
-                corrections.append(verdict.reason)
-                continue
+                # SPLIT rather than discard (owner, 09-12). An either/or names
+                # two candidates the model believes are live; rejecting it
+                # spends another 7-17 s deliberate+format cycle to get one of
+                # them back. The split half must still pass the full audit, so
+                # this can only produce questions the gate would have accepted
+                # anyway — and falls back to the rejection when it cannot.
+                halves = split_either_or(cleaned)
+                if halves is not None and audit_query(halves[0]).ok:
+                    cleaned, deferred = halves
+                    stats.split_either_or += 1
+                else:
+                    corrections.append(verdict.reason)
+                    continue
             # Gate 2 — slot anchoring: keep only pairs whose value the question
             # actually SAYS, folded onto existing contenders when equivalent.
             # (Computed before the repeat gate — its exemption needs the
@@ -470,7 +533,25 @@ class Reasoner:
                     f'you already asked "{dup}" — ask about something genuinely different'
                 )
                 continue
+            # Gate 3b (W2-Z) — the DRILL CONTRACT. `drill` means "narrow BELOW
+            # the frontier"; nothing checked that the value actually is
+            # narrower, and dialogue.py stamps `drill_parent` on whatever comes
+            # back. So a SIBLING or the PARENT ITSELF was recorded as a
+            # refinement of the parent — "leg refines arm" would have gone into
+            # the belief as structure. In the 09-12 round a drill of "arm"
+            # returned "hands" and then "arm"; both were caught only
+            # incidentally, by the repeat gate, because both had been asked.
+            #
+            # The correction NAMES THE PARENT. Today's rejections say what not
+            # to do and never what to do, which is how the model ended up
+            # cycling between two blocked moves (§1m).
+            if directive == "drill" and focus in slots:
+                bad = _drill_violation(slots[focus], board, focus, edges)
+                if bad is not None:
+                    corrections.append(bad)
+                    continue
             action = self._ask_action(cleaned, slots, data, focus)
+            action.deferred_alternative = deferred
             action.refines = _anchored_refines(data.get("refines"), slots, board)
             best = action
             if not slots:
