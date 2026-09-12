@@ -1131,6 +1131,102 @@ wherever the model is failing a contract the code could satisfy itself.
   board took the **control** away with it and left no way back. Owner: *"I
   wanted to hide it with a button to reveal and hide. Not remove it entirely."*
 
+## 1n. Trial autopsy — 2026-09-12 evening, trial 2. Worse, and mostly my fault
+
+**41 questions, abandoned, 3 diagnostics, 9 restarts.** Owner: *"Significantly
+worse."* Correct. Three distinct causes; two are mine, and the third is the
+real finding.
+
+Record: `dev_recordings/synthetic_demo/89df8b45…jsonl`. Numbers below are from
+`scratchpad/autopsy_t2.py` replayed against it, not read off by eye.
+
+### Cause 1 — my `_ruled_out` bug destroyed three confirmed beliefs
+
+The round ran start to finish on the buggy version; the fix landed mid-round
+and the server was never restarted. Replaying both rules over the real history:
+
+```
+OLD (ran in the trial): what: {discomfort, tingling, dull ache, ache, tiredness}
+NEW (the fix)         : what: {tiredness}
+YES-SUPPORTED values the OLD rule destroyed: discomfort, tingling, dull ache
+```
+
+Three beliefs the person had confirmed, erased. That IS the `what`-slot churn
+on the transcript — discomfort → pain → tingling → pins and needles → dull ache
+→ general tiredness → burning sensation, seven sensation words in 38 questions.
+Each time the round confirmed one, a later "no" with a re-attributed focus
+deleted it and the model had to invent another. Fixed in `33bc272`; see the
+entry there for why `focus` cannot be trusted alone on a W2-P entry.
+
+### Cause 2 — W2-Z without W2-V: I built a gate with no escape hatch
+
+Two of the three diagnostics are the drill contract firing with nowhere to go:
+
+```
+q29  'dull ache' is the value you were asked to narrow, said again …
+     restart recovery also failed: … same rejection
+q40  'burning sensation' is the value you were asked to narrow, said again …
+```
+
+The gate is RIGHT — those are re-assertions, exactly what W2-Z exists to catch.
+But rejecting without a fallback converts *a bad question* into *no question*,
+and the round dies. Before W2-Z the same output was accepted (wrongly, as a
+fake refinement) and the round continued.
+
+**This was my recommendation.** I offered W2-Z + W3-K as the scope and marked
+W2-V "more design surface, and it may mask whether W2-Z alone was enough". That
+reasoning was wrong: W2-V is not polish on top of W2-Z, it is the *precondition*
+for it. A new rejection gate needs its handoff in the same change.
+
+### Cause 3 — confidence is not specificity, and the clarify walk inflates it
+
+The real finding, and it is bigger than either patch.
+
+```
+where: arms = 4.0   confirmed at q9, and NEVER NARROWED across 29 more questions
+```
+
+`arms` reached 4.0 by being **re-confirmed four times** — q9 (probe), q12 (CHK),
+q25 and q36 (both templated clarify confirms, *"This is about arms, correct?"*,
+asked twice). Gate 4 blocks confirmation farming, but CHK and the clarify walk
+are exempt by construction. Zero refinement edges ever formed under `where`; the
+round's only `drill_parent` in 41 questions was under `tingling`.
+
+Then `_pick_focus` on the final board returns:
+
+```
+focus='why'  directive='probe'
+```
+
+Priority 3: *every core slot is confident → probe an empty modifier slot*. Both
+core slots (`what`, `where`) pass `_family_confident`, so the controller leaves
+them and goes to fill `why` — which for *"I broke my wrist"* does not exist.
+q22 and q31–q34 are all `why` attempts, all failing Gate 4, feeding the stall
+detector, feeding the restarts. **Nine restarts.**
+
+So the loop is: clarify re-confirms a coarse value → the slot looks confident →
+priority 3 leaves it for an unfillable modifier → stall → restart → repeat.
+
+**The board has a notion of "confident enough" and none of "specific enough".**
+`arms` is a seeded generic with no children and four re-confirmations; nothing
+in the engine can tell that apart from a settled answer. That is why the trial
+never asked *"is it your wrist?"* even with the drill contract in place.
+
+### What worked
+
+`split_either_or` rescued **9** either/or questions — 9 deliberate+format
+cycles (7–17 s each) not spent. The owner's idea, and the only unambiguous win
+in the record.
+
+### The process lesson
+
+Two live trials in one day were spent finding defects a replay would have
+caught. Trial 2's dominant failure is reproducible offline from trial 1's
+record in under a second. **Before the next live round, build the replay
+harness** (W2-AB below) and make a change earn its trial by surviving the
+recorded rounds first. The bench (W2-G) simulates an answerer; this replays
+answers a real person actually gave, which is a different and stronger check.
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -2856,6 +2952,53 @@ its own slot is a placeholder however concrete it sounds. Cheap approximation:
 reject an asserted value whose content tokens are a superset-by-gloss of ≥2 live
 candidates, or simply prefer a seeded candidate on a slot's FIRST probe.
 **Lower priority** — round 3 shows a round survives this by restarting.
+
+### W2-AA · A confident core slot that was never NARROWED must not be left — Status: PROPOSED (09-12, §1n)
+
+**Problem.** The board knows "confident enough" and not "specific enough".
+`where: arms = 4.0` was confident, so `_pick_focus` priority 3 left it and went
+to fill `why` — which does not exist for an injury — and the round burned its
+back half there. `arms` is a *seeded generic*, re-confirmed four times, with no
+refinement child ever formed under it. Nothing distinguishes that from a
+settled answer.
+
+**Proposal.** Priority 3 ("every core slot confident → probe an empty
+modifier") gains a precondition: a core slot counts as done only if its leader
+has been NARROWED — deterministically testable as *(a)* the leader is no longer
+the seeded value, or *(b)* a refinement edge exists beneath it. An unrefined
+leader sends the turn to `drill` instead, which is the move that reaches
+"wrist".
+
+**Risks.** Some slots legitimately settle on the seeded value ("my_people" →
+`who: spouse` is the answer, not a coarse stand-in). So this wants the
+narrow-ability of the slot, not a blanket rule — likely per-topic data
+(`facet_priority` already lives in the topic file) rather than logic. Replay it
+against the 09-09 rounds that converged before it goes anywhere near a trial.
+
+### W2-AB · Replay recorded rounds against the engine — Status: PROPOSED (09-12, §1n)
+
+**Problem, stated as process.** Two live trials in one day were spent finding
+defects that a replay catches offline in under a second. Trial 2's dominant
+failure (`_ruled_out` erasing yes-supported values) is visible by running the
+rule over trial 1's recorded history. The owner's time is the scarcest input
+here and it is being spent as a test harness.
+
+**Proposal.** `scripts/replay_round.py <record.jsonl>`: feed the recorded
+ANSWERS back through a live `Round` in order, and report where the replayed
+run diverges from the recorded one — focus/directive per turn, board at each
+step, which gate rejected what. Distinct from the bench (W2-G), which
+simulates an answerer: this replays answers a real person gave, so it measures
+the controller against ground truth rather than against a model's guess.
+
+The pieces already exist as one-offs — `replay_pick_focus.py`,
+`check_split_askability.py`, `autopsy_t2.py` — each written to answer one
+question and each having answered it correctly. This is those, generalised, and
+run before a change earns a live round.
+
+**Limit worth stating.** A replay cannot test a change that alters which
+QUESTION gets asked, because the recorded answer belongs to the old question.
+It tests the controller (focus, directive, scoring, gates), not the language —
+which is exactly where both of today's regressions lived.
 
 ### W3-I · Mass-scaled confidence checks — Status: PROPOSED
 
