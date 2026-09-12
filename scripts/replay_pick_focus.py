@@ -15,7 +15,8 @@ from my20q.agent.dialogue import Round
 from my20q.topics import load_topics
 
 snap = Path(sys.argv[1])
-records = [json.loads(line) for line in snap.read_text(encoding="utf-8").splitlines() if line.strip()]
+lines = snap.read_text(encoding="utf-8").splitlines()
+records = [json.loads(line) for line in lines if line.strip()]
 rec = records[-1]
 
 board: facets.Board = facets.empty_board()
@@ -35,7 +36,10 @@ seg = [
 ]
 
 print(f"topic       : {topic.id}   core={rnd._core_facets()}")
-print(f"ready_points: {rnd.tuning.facet_ready_points}   split_margin={rnd.tuning.facet_split_margin}")
+print(
+    f"ready_points: {rnd.tuning.facet_ready_points}   "
+    f"split_margin={rnd.tuning.facet_split_margin}"
+)
 print()
 for cat in facets.CATEGORIES:
     fams = facets.families(board, cat, rnd._edges)
