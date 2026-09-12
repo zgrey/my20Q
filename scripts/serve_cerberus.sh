@@ -103,11 +103,42 @@ start() {
   curl -fsS --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1 \
     || echo "WARN: Ollama not reachable on :11434 — reasoning will fall back. (ollama serve)"
 
+  # The cockpit is served from web/dist, which is GIT-IGNORED — so checking out
+  # a branch does not update it. Warn loudly: a trial run against a stale UI
+  # gets read as a UI regression, and the build is one command.
+  if [ ! -f "$REPO/web/dist/index.html" ]; then
+    echo "WARN: web/dist missing — the API will serve its landing page, not the cockpit."
+    echo "      Build it:  npm run build --prefix web"
+  elif [ -n "$(find "$REPO/web/src" -newer "$REPO/web/dist/index.html" -print -quit 2>/dev/null)" ]; then
+    echo "WARN: web/dist is OLDER than web/src — the cockpit you see is not this branch's."
+    echo "      Build it:  npm run build --prefix web"
+  fi
+
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "Already running in tmux '$SESSION'.  logs: $0 logs   stop: $0 stop"
   else
-    tmux new-session -d -s "$SESSION" -c "$REPO" \
-      "MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_TTS_ENGINE='${MY20Q_TTS_ENGINE:-}' MY20Q_KOKORO_MODEL='${MY20Q_KOKORO_MODEL:-}' MY20Q_KOKORO_VOICES='${MY20Q_KOKORO_VOICES:-}' MY20Q_KOKORO_VOICE='${MY20Q_KOKORO_VOICE:-}' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_EXPLORE_DECAY='${MY20Q_EXPLORE_DECAY:-}' MY20Q_SOFT_RESET_NOS='${MY20Q_SOFT_RESET_NOS:-}' MY20Q_STALL_WINDOW='${MY20Q_STALL_WINDOW:-}' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_DEV_CAPTURE='${MY20Q_DEV_CAPTURE:-}' MY20Q_API_PORT='$PORT' '$PY' -m my20q.api"
+    CMD="MY20Q_PIPER_BIN='$MY20Q_PIPER_BIN' MY20Q_PIPER_MODEL='$MY20Q_PIPER_MODEL' MY20Q_TTS_ENGINE='${MY20Q_TTS_ENGINE:-}' MY20Q_KOKORO_MODEL='${MY20Q_KOKORO_MODEL:-}' MY20Q_KOKORO_VOICES='${MY20Q_KOKORO_VOICES:-}' MY20Q_KOKORO_VOICE='${MY20Q_KOKORO_VOICE:-}' MY20Q_OLLAMA_TIMEOUT='$MY20Q_OLLAMA_TIMEOUT' MY20Q_EXPLORE_DECAY='${MY20Q_EXPLORE_DECAY:-}' MY20Q_SOFT_RESET_NOS='${MY20Q_SOFT_RESET_NOS:-}' MY20Q_STALL_WINDOW='${MY20Q_STALL_WINDOW:-}' MY20Q_PROFILE='${MY20Q_PROFILE:-}' MY20Q_DEV_CAPTURE='${MY20Q_DEV_CAPTURE:-}' MY20Q_API_PORT='$PORT'"
+
+    # Persist the server log — DEV CAPTURE RUNS ONLY.
+    #
+    # tmux scrollback is not a record: it dies with the session, and the
+    # cockpit's Quit button now ends the session by design. The 09-10 round
+    # (§1i) was lost to exactly this. PYTHONUNBUFFERED so the file is readable
+    # WHILE the trial runs, not only after it.
+    #
+    # Gated on dev capture — i.e. synthetic — for the same reason the capture
+    # itself is: a real-patient run writes nothing outside patient_data/, and
+    # that stays true whatever gets logged in future.
+    LOG=""
+    if [ "${MY20Q_DEV_CAPTURE:-}" = "1" ]; then
+      mkdir -p "$REPO/dev_recordings/logs"
+      LOG="$REPO/dev_recordings/logs/api-$(date +%Y%m%d-%H%M%S).log"
+      CMD="PYTHONUNBUFFERED=1 $CMD '$PY' -m my20q.api 2>&1 | tee -a '$LOG'"
+    else
+      CMD="$CMD '$PY' -m my20q.api"
+    fi
+
+    tmux new-session -d -s "$SESSION" -c "$REPO" "$CMD"
     echo "API started in tmux '$SESSION' (127.0.0.1:$PORT)"
     if [ -n "${MY20Q_PROFILE:-}" ]; then
       echo "Profile:  $MY20Q_PROFILE"
@@ -116,8 +147,10 @@ start() {
     fi
     if [ "${MY20Q_DEV_CAPTURE:-}" = "1" ]; then
       echo "Capture:  dev_recordings/  (synthetic only — refused if a real profile loads)"
+      echo "Log:      $LOG"
     else
       echo "Capture:  patient dataset if a real profile is loaded, otherwise none"
+      echo "Log:      tmux scrollback only (no file — real-patient posture)"
     fi
   fi
 

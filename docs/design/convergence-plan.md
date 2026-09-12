@@ -830,6 +830,17 @@ its entry flags is gone** — the transcript survived, the per-entry
 synthetic personas by design, so the watcher is the only capture; it saved
 markdown only. Save the JSONL export too.
 
+**CLOSED 2026-09-12, both halves.** Dev capture (`MY20Q_DEV_CAPTURE=1`, on by
+default in `serve_cerberus.sh synthetic`) writes the round record itself, so
+there is nothing to remember to export — and `POST /api/shutdown` finalizes and
+records a *live* round before the process exits, which is the case that lost
+this one. The second half was the **server log**: it lived only in tmux
+scrollback, which dies with the session — and the cockpit's Quit button now
+ends that session by design. A dev-capture run tees it to
+`dev_recordings/logs/api-<timestamp>.log`, unbuffered so it is readable while
+the trial runs. Gated on dev capture, i.e. synthetic: a real-patient run still
+writes nothing outside `patient_data/`.
+
 ## 1j. LEDGER — what is actually in the build, as of 2026-09-12
 
 Read this before the next trial. Several items below were proposed, partly
