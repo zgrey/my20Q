@@ -1023,6 +1023,114 @@ buttons and the status row out on one line. Renamed `is-thinking`, matching the
 by *looking at the running page*, not by typecheck or build, both of which
 passed.
 
+## 1m. Trial autopsy — 2026-09-12, `cockpit-shell`, target "I broke my wrist"
+
+Synthetic persona, gemma4:e4b, dev capture on. **Three rounds, two of them dead
+on a diagnostic, none reaching a draft worth accepting.** Full records in
+`dev_recordings/` (round 3's pre-restart export is `watch/FINAL-preRestart.*`).
+
+### The headline: the POLICY was right and the CONTRACT was unenforced
+
+Round 3 ended on this board, and this is the important artefact of the trial:
+
+```
+what:  pain = 3.0          when:  now = 2.0
+where: arm  = 1.0     ← the only location signal: coarse, and CORRECT
+       leg/hand/foot/chest = 0.0
+```
+
+`_pick_focus` was replayed against that exact board (scratchpad
+`replay_pick.py`, rebuilt from the recorded snapshot rather than inferred from
+the question text). It returns:
+
+```
+focus='where'  directive='drill'  target=('arm', 1.0)
+```
+
+**That is exactly right.** `where` is core and unestablished (1.0 < ready 2.0),
+so key 2 of the drill ranking puts it ahead of `what` at 3.0 — coverage before
+refinement, the behaviour W2-X was reverted to protect. The engine asked the
+model to narrow below "arm". The correct answer is *wrist*.
+
+The model returned, in order:
+
+1. *"Is the pain you are feeling located in your hands?"* — a **sibling** of
+   arm, not a child. Caught by the repeat gate (asked at q2).
+2. after the restart: *"Is the pain you are feeling in your arm?"* — the
+   **parent itself**. Also caught by the repeat gate (asked at q5).
+
+Two rejections, fail-loop, restart, same board, same failure → diagnostic.
+
+### Why that is worse than a wasted turn
+
+`dialogue.py` stamps the refinement edge like this:
+
+```python
+if directive == "drill" and action.kind == "query" and focus == requested:
+    top = facets.frontier(board, focus, self._edges)
+    if top is not None:
+        action.drill_parent = top[0]
+```
+
+There is **no check that the asserted value is narrower than the frontier.**
+Had the model answered "leg" instead of "hands", nothing would have rejected
+it: the engine would have stamped `drill_parent = "arm"` and a yes would have
+written `leg → arm` — *"leg refines arm"* — into the belief as real structure.
+The only thing that caught today's two violations was the repeat gate, and only
+because both values happened to have been asked already. **The drill contract is
+enforced by luck.**
+
+### What the restart cost, measured
+
+Two `fail-loop` restarts fired (after q4 and q5). `_restart()` keeps only YES
+answers by design, so the board lost:
+
+- the **kinda on "hands"** (q2) — `hand` reads 0.0 on the final board, and
+- the **yes on "arm"** (q5), rebuilt from the fresh seed rather than kept.
+
+Meanwhile `self._history` — which the repeat gate reads — keeps both questions.
+So the board says *"hand is untried, go ask it"* while the auditor says *"you
+already asked that"*. The engine argues with itself, and a restart can only
+re-enter the same trap. Round 2 died the same way on "legs".
+
+### Round 2 — a question that could not fail
+
+Q1 asked *"Are you feeling any unusual sensations right now?"* → yes. The seeds
+for `what` were pain / tingling / numbness / dizziness / tiredness; the model
+**coined a hypernym covering all five**. It cannot fail, so it yields ~0 bits,
+and it is not caught by W2-Y because "sensation" is a ladder ROOT, deliberately
+excluded so drilling can start from one. The exclusion is right in general; the
+missing test is not the word but whether the value **subsumes candidates already
+on the board**. The round then banked it at 2.0 via a double-check
+(*"Do you mean unusual sensations?"* → yes) and Job-B climbed to 0.667 while the
+round learned nothing — the metric is fooled by the same placeholder.
+
+Round 3, opening on the seeded "pain" instead, reached a real board in five
+questions. So the coined opener is a **contributor, not the cause**: the
+deadlock reproduces with a good board.
+
+### Cost figures worth carrying
+
+| | |
+|---|---|
+| double-check (templated-ish, 1 call) | **0.47 s** |
+| model-written question, 1 attempt | 6.9–7.6 s |
+| model-written question, 2 attempts | 12.3–17.6 s |
+
+16–37× between them. This is the strongest evidence yet for the §1k candidate
+(fold CHK into the templated confirm walk) and for a templated fallback
+wherever the model is failing a contract the code could satisfy itself.
+
+### Cockpit defects found (both fixed same-day, commit `2d57564`)
+
+- **CB-9.** `_diagnostic_event` built its event with no `facets`, so the
+  reasoning tile emptied exactly when the board was most wanted — diagnosing
+  this stall needed the JSONL export because the screen showed nothing.
+- **CB-10.** The board section was mounted only when a slot had contenders.
+  Invisible until CB-6 gave the section a hide/reveal control; then an empty
+  board took the **control** away with it and left no way back. Owner: *"I
+  wanted to hide it with a button to reveal and hide. Not remove it entirely."*
+
 ## 2. How the queue is ordered
 
 Three sorting keys, in order:
@@ -2610,6 +2718,82 @@ own gloss, or refusing values that merely restate the question's own framing
 **Risks:** over-rejecting real values — "my side" is a legitimate `where`. The
 existing rule is deliberately narrow for that reason, so widening it wants the
 bench and a replay against §1h/§1i before it lands.
+
+### W2-Z · Enforce the drill contract — Status: PROPOSED (09-12, §1m)
+
+**Problem.** `drill` asks the model to narrow BELOW the frontier value, and
+nothing checks that it did. `dialogue.py` stamps `action.drill_parent =
+frontier` on any drill question that lands on the focus slot, so a sibling or
+the parent itself is recorded as a refinement of the parent. In the 09-12 round
+the model answered a drill of `arm` with "hands" (sibling) and then "arm"
+(parent); both were caught only *incidentally*, by the repeat gate, because both
+had already been asked. Had it said "leg", the round would have written
+`leg → arm` into the belief as structure.
+
+**Proposal.** A fifth check, but a cheap deterministic one rather than a model
+round-trip: when `directive == "drill"`, the value asserted in the focus slot
+must be (a) not equal to the frontier, and (b) not equal to any value already
+live on the board in that slot. On failure, retry with a **constructive**
+message naming the parent — *"narrow below 'arm': name a part of the arm, not
+another body part"* — instead of today's bare rejections, which tell the model
+what not to do and never what to do.
+
+**Why this is not W2-S.** W2-S measured that adding *constraint text* to the
+prompt makes this model fail harder. This adds a rejection reason that carries
+the *target*, in the retry only, and removes an unguarded write path. The
+distinction is testable: if diagnostics go up rather than down, revert it.
+
+**Risks.** A legitimate drill can name a value that reads as a sibling to the
+board but is genuinely narrower ("forearm" vs "arm" is fine; "hand" vs "arm" is
+the ambiguous case). Check (b) is the aggressive half and could be landed
+second, on its own evidence.
+
+### W2-V · extended by the 09-12 evidence — drill exhaustion needs a handoff
+
+The 09-10 framing was a *kinda* extending the rotation guard without bound. The
+09-12 round adds the sharper case: when the model fails the drill contract N
+times, the engine surfaces a diagnostic — it never falls back to a different
+directive. Exploitation exhausted should hand off to **exploration** (probe the
+slot with the tried values excluded), which is the owner's own explore/exploit
+framing, rather than to a dead round. Cheaper still where the board already
+holds unasked candidates: ask one as a templated question, at 0.47 s against
+7–17 s. See §1m cost table. **Status stays PROPOSED**; this is evidence, not a
+decision.
+
+### W3-K · A restart must not erase what the repeat gate still enforces — Status: PROPOSED (09-12, §1m)
+
+**Problem.** `_restart()` keeps only YES answers and caregiver context, so the
+board loses every `no` and `kinda`. `self._history` is untouched, and the repeat
+gate reads it. The board then offers exactly the values the auditor forbids —
+"hand is untried, go ask it" / "you already asked that" — and a restart can only
+re-enter the same trap. Both dead rounds on 09-12 died inside this loop, and it
+cost real signal: the `kinda` on "hands" was the warmest reading in the round.
+
+**Proposal (three options, owner's call).**
+
+1. **Carry a `ruled_out` set across restarts** and remove those values from the
+   rebuilt board's candidate pool. Board and gate then agree. Keeps the
+   restart's purpose (dump the wrong *scores*) while not re-offering dead ends.
+2. **Clear the matching question history** when a value's score is dumped — the
+   mirror fix. Consistent, but re-asks questions the person already answered.
+3. **Keep `kinda` scores across a restart**, dumping only `no`. A kinda is a
+   warm signal, not the wrong-context noise the restart exists to clear.
+
+(1) is the smallest and the most obviously correct; (3) is independently
+attractive and could land with it.
+
+### W2-Y · extension proposed — values that SUBSUME the board
+
+The 09-12 round 2 opened with *"any unusual sensations?"* when the `what` seeds
+were pain / tingling / numbness / dizziness / tiredness: a **coined hypernym of
+every candidate**, so the question could not fail and yielded ~0 bits. W2-Y does
+not catch it because "sensation" is a ladder root, deliberately excluded so a
+drill can start from one — and that exclusion is right. The missing test is not
+the word but the *relation*: a value that subsumes several live candidates in
+its own slot is a placeholder however concrete it sounds. Cheap approximation:
+reject an asserted value whose content tokens are a superset-by-gloss of ≥2 live
+candidates, or simply prefer a seeded candidate on a slot's FIRST probe.
+**Lower priority** — round 3 shows a round survives this by restarting.
 
 ### W3-I · Mass-scaled confidence checks — Status: PROPOSED
 
