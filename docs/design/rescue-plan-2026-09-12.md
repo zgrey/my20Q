@@ -129,6 +129,51 @@ symptom in that record.
 
 ---
 
+## 2a. Bench A/B — run, and it confirms R1
+
+Three revisions, `gemma4:e4b`, seed 7, scenarios `foot-pain` / `rob-kitchen` /
+`call-daughter`, `--max-queries 25`. Revision C is `cockpit-shell` with **only**
+the R1 revert applied, built in a throwaway worktree.
+
+| metric | A `main` | B `cockpit-shell` | C `shell + R1 revert` |
+|---|---|---|---|
+| **converged** | 1/3 | **0/3** | **1/3** |
+| **queries to converge** | 24 | — | **11** |
+| **ready_at_query** | **5** | **14** | 11 |
+| queries_after_ready | 19 | 11 | **0** |
+| gate rejections | 2.00 | 3.33 | **0.67** |
+| re-asks | 6 | 10 | **2** |
+| checks | 2.00 | 3.67 | 1.33 |
+| clarifications | 1 | 4 | 2 |
+| diagnostics | 3.33 | 2.67 | 3.00 |
+| latency p50 | 3436 ms | 3231 ms | **2957 ms** |
+
+**B is vetoed.** Convergence 1 → 0, re-asks +67%, gate rejections +67%, and the
+draft takes until q14 to become offerable instead of q5. The focus histogram
+says where the questions went: `main` spent them on `what` (13 vs 5), B spent
+them on `who` (**25** vs 9) — churning candidates in one slot instead of
+building a draft, which is the signature R1 predicts and the same shape as
+trial 2's `why` thrash.
+
+**C rescues it, and keeps the gains.** Reverting R1 alone restores convergence
+and does it in **11 questions against main's 24**, with a third of main's gate
+rejections, no wasted questions after the draft was ready, and lower latency.
+The changes worth keeping (K1–K5) are net positive once R1 is out of the way —
+which is the evidence for keeping them rather than reverting the day wholesale.
+
+**The one honest exception: `ready_at_query` is 11 on C against 5 on `main`.**
+C still takes six questions longer to put a first draft on screen; it simply
+stops wasting the next nineteen. That residue is not explained by R1 and is the
+next thing to attribute — most likely R2 (the W2-Z gate costing early turns) or
+the untrialled W2-Y widening making the first slot harder to fill. It is listed
+as open, not fixed.
+
+**Weight of evidence.** Three rounds. This is veto-grade — enough to say "do
+not ship B" and "C is worth trialling" — and not an effect size. A wider
+scenario set is cheap to run and should precede any claim stronger than that.
+
+---
+
 ## 3. The rescue — decision list
 
 One line per item. **Nothing here is implemented until the owner marks it.**
@@ -140,8 +185,8 @@ One line per item. **Nothing here is implemented until the owner marks it.**
 | **K3** | Cockpit shell (viewport, Quit, splitters, hide/expand, bigger draft, thinking animation) | no engine surface at all | **KEEP** |
 | **K4** | Diagnostic carries the board; reveal control cannot vanish | owner-reported | **KEEP** |
 | **K5** | `_ruled_out` **as fixed** + kinda surviving a restart | fix verified against live history | **KEEP** |
-| **R1** | W2-X(a) explore argument | 2217× on the real board | **REVERT to the round counter**, or combine: `decay ** (yeses + slot_depth + 1)` |
-| **R2** | W2-Z drill contract | 2 of 3 diagnostics | **REVERT**, or land W2-V with it. Not keep as-is. |
+| **R1** | W2-X(a) explore argument | 2217× on the real board; bench C restores convergence and halves the questions | **REVERT to main's rule.** Not the combined form — see below |
+| **R2** | W2-Z drill contract | 2 of 3 diagnostics in trial 2; likely part of C's residual `ready_at_query` | **REVERT**, or land W2-V with it. Not keep as-is. |
 | **R3** | Priority 3 / confirmation-inflated confidence | never narrowed `arms` in 41 q | **W2-AA** — needs design, not a quick patch |
 | **R4** | W2-Y placeholder widening | untrialled; `_NON_IDENTIFYING` grew from 1 set to 3 | **MEASURE before deciding** — no evidence either way yet |
 | **R5** | Clarify/CHK exemption from Gate 4 | `arms` farmed to 4.0 | **MEASURE** — likely wants a cap, not an exemption |
@@ -150,6 +195,16 @@ One line per item. **Nothing here is implemented until the owner marks it.**
 K1–K5. That is two reversions and returns the engine to `main`'s policy while
 retaining every change that has evidence behind it. R3/R4/R5 then get designed
 properly, one at a time, each with a bench A/B before it is trialled.
+
+**On R1, a correction to an earlier version of this plan.** It offered a choice
+between a straight revert and a combined `decay ** (yeses + slot_depth + 1)`.
+Offering both was the same mistake this document exists to stop: the combined
+form is a *new, untrialled design*, and proposing it inside a rescue breaks the
+one-change-per-trial gate in §4. It remains genuinely attractive — the round
+term sets a ceiling the slot term can only lower, so it can never explore more
+than `main` does, and it preserves the real 09-11 complaint W2-X(a) was written
+for. It is therefore a **separate candidate, benched on its own, after the
+engine is working again** — not part of the rescue.
 
 ---
 
