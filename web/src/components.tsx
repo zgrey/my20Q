@@ -612,11 +612,17 @@ export function ReasoningTile({
         ? "Connecting to the live progress channel…"
         : "Live progress channel disconnected — events may be delayed";
   const facets = event?.facets ?? [];
-  const hasBoard = facets.some((f) => f.contenders.length > 0);
   // Hide/expand, remembered. Collapsed, the head still reports how many slots
   // hold something — the board is the reason to open it again.
   const [boardOpen, toggleBoard] = useRemembered("show.board", true);
   const filled = facets.filter((f) => f.contenders.length > 0).length;
+  // The section is mounted for the whole round, contenders or not. It used to
+  // be gated on `facets.some(contenders)`, which was invisible until the board
+  // got a hide/reveal control — and then meant the CONTROL disappeared along
+  // with the thing it reveals, with no way to get either back (owner, 09-12).
+  // A round that is still seeding, or a diagnostic from an engine too old to
+  // send its board, shows the empty line below instead of vanishing.
+  const showBoard = !!event;
   return (
     <section class="tile reasoning">
       <h2>
@@ -625,7 +631,7 @@ export function ReasoningTile({
         {live && phaseLabel && <span class="phase-tag">{phaseLabel}</span>}
       </h2>
       <p class="reason-text">{text}</p>
-      {hasBoard && (
+      {showBoard && (
         <div class={`belief${boardOpen ? "" : " collapsed"}`}>
           <button
             class="belief-head section-toggle"
@@ -644,6 +650,13 @@ export function ReasoningTile({
             )}
           </button>
           <ul class="facet-list" hidden={!boardOpen}>
+            {facets.length === 0 && (
+              <li class="facet-row board-empty">
+                <span class="facet-empty">
+                  No board on this turn — the round has not seeded one yet.
+                </span>
+              </li>
+            )}
             {facets.map((f) => (
               <li class={`facet-row${f.focus ? " focus" : ""}`} key={f.category}>
                 <span class="facet-cat" title={f.focus ? "Current question targets this slot" : ""}>

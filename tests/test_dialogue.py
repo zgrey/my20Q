@@ -765,6 +765,14 @@ async def test_persistent_failure_surfaces_diagnostic_and_retry_works(
     assert ev.diagnostic["restart_attempted"] is True
     assert "diagnostic" in [h["kind"] for h in rnd.history]
     assert not rnd.is_terminal
+    # The REASONING failed; the belief did not. A diagnostic carries the board,
+    # because a failure is exactly when the caregiver wants to see what the
+    # round is holding — and because the cockpit's reasoning tile (and the
+    # board's hide/reveal control with it) emptied out without this. Found in
+    # the 09-12 trial, where diagnosing the stall needed the JSONL export
+    # precisely because the screen had nothing on it.
+    assert ev.facets, "a diagnostic must still report the board"
+    assert {f["category"] for f in ev.facets} >= {"who", "what", "where"}
     # No pending action while diagnosed — answering is a state error.
     try:
         await rnd.answer(Answer.YES)

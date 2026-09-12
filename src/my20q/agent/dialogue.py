@@ -2566,11 +2566,24 @@ class Round:
             {"kind": "diagnostic", "text": reason[:300], "answer": None}
         )
         self._pending = None
+        # Carry the board on the failure event too. The REASONING failed; the
+        # belief did not — and a failure is exactly when the caregiver wants to
+        # see what the round currently holds. Without this the cockpit's
+        # reasoning tile empties out on a diagnostic, which is also what made
+        # the board's hide/reveal control disappear with it (owner, 09-12).
+        # `focus` is "": there is no pending action, so no slot is targeted.
+        board_view: list[dict] = []
+        if self._seed_values is not None:
+            try:
+                board_view = facets.facet_view(self._replay_board(), "", self._edges)
+            except Exception:  # the recovery path must never raise
+                log.exception("could not build the board view for a diagnostic")
         return RoundEvent(
             kind="diagnostic",
             text=text,
             engine=self.engine,
             query_index=self.query_count,
+            facets=board_view,
             diagnostic={
                 "reason": reason[:300],
                 "consecutive_failures": self._consec_failures,
