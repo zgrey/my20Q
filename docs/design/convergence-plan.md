@@ -1200,9 +1200,19 @@ focus='why'  directive='probe'
 
 Priority 3: *every core slot is confident → probe an empty modifier slot*. Both
 core slots (`what`, `where`) pass `_family_confident`, so the controller leaves
-them and goes to fill `why` — which for *"I broke my wrist"* does not exist.
-q22 and q31–q34 are all `why` attempts, all failing Gate 4, feeding the stall
-detector, feeding the restarts. **Nine restarts.**
+them and goes to fill `why`. q22 and q31–q34 are all `why` attempts, all
+failing to score, feeding the stall detector, feeding the restarts. **Nine
+restarts.**
+
+> **Correction (owner, 09-13).** An earlier version of this section said `why`
+> *"does not exist"* for an injury. That is wrong, and the error mattered —
+> it pointed the whole analysis at "detect the unfillable slot" instead of at
+> the real defect. The owner's framing: a target utterance omits detail that is
+> still relevant and still explorable. *"I think I broke my wrist"* has a
+> complete context behind it — who: me · what: broken wrist · when: last week ·
+> where: on a farm · **why: accident** · how: a horse bucked me off. `why` is
+> not absent; it is **less important than the core slots**, which is a question
+> of PRIORITY, not of existence. See W3-N for what the record actually shows.
 
 So the loop is: clarify re-confirms a coarse value → the slot looks confident →
 priority 3 leaves it for an unfillable modifier → stall → restart → repeat.
@@ -2974,6 +2984,55 @@ leader sends the turn to `drill` instead, which is the move that reaches
 narrow-ability of the slot, not a blanket rule — likely per-topic data
 (`facet_priority` already lives in the topic file) rather than logic. Replay it
 against the 09-09 rounds that converged before it goes anywhere near a trial.
+
+### W3-N · `why` cannot be RECORDED, which is why it never fills — Status: PROPOSED (owner correction, 09-13)
+
+**The owner's correction, and what checking it found.** An injury has a `why`;
+it is simply less important than the core slots. So the question is not *"how
+do we detect a slot that cannot be filled"* but *"why did a fillable slot stay
+at 0.0 for 41 questions?"* The record answers it. Trial 2's six `why` attempts:
+
+| q | question | slots actually recorded |
+|---|---|---|
+| 22 | "Is the tingling related to poor circulation?" | `what`, **`why`** ✓ → *not_sure* |
+| 23 | "…related to something outside of your body?" | `what` only |
+| 31 | "Is this dull ache connected to your recovery?" | `what`, **`why`** ✓ → *not_sure* |
+| 32 | "…related to how your muscles are working right now?" | `what` only |
+| 33 | "…**because of using them too much**?" | `what`, `where` |
+| 34 | "…**because of holding your arms in one position**?" | `what`, `where` |
+
+**Four of six never recorded a `why` at all**, and the two that did were
+answered *not_sure*, which scores nothing. The engine was asking perfectly good
+why-questions and could not write the answers down.
+
+The cause is structural, not a bug in any one gate. A reason is naturally
+phrased as a **clause** — *"because of using them too much"*, *"related to how
+your muscles are working"* — and `_anchored_slots` wants a value that is a
+board contender the question SAYS. A clause anchors to nothing, so the `why`
+pair is dropped, W2-P re-attributes `focus` to `what`, and the turn is recorded
+as another `what` question. That is also the entry shape that broke my
+`_ruled_out` (see `33bc272`): `focus=what, focus_requested=why`.
+
+Three consequences worth separating:
+
+1. `why` stays at 0.0 no matter how often it is asked, so it keeps being
+   selected as "the empty modifier slot" — the loop in §1n R2.
+2. The `what` slot gets credited for questions that were about `why`, which
+   inflates its apparent confidence.
+3. Any future rule keying on `focus` inherits the same trap.
+
+**Proposal (not built).** Let a `why`/`how` value anchor on the clause's
+head — *"using them too much"* → `overuse`; *"holding your arms in one
+position"* → `position` — or seed those slots with clause-shaped contenders so
+there is something for the anchor to match. Needs design; the Aaron rule
+(values stay text-anchored to what the question said) is the constraint, and
+the cheap version — credit the seeded contender whose gloss the clause
+mentions — may satisfy it.
+
+**Do not confuse this with the priority question.** `why` being *less
+important* than `what`/`where` for a symptom topic is correctly expressed today
+by `facet_priority` in the topic file. This item is about the slot being
+unrecordable, which is a different defect and the one the data shows.
 
 ### W2-AB · Replay recorded rounds against the engine — Status: PROPOSED (09-12, §1n)
 

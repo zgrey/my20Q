@@ -1,5 +1,12 @@
 # Rescue plan — 2026-09-12
 
+> **STATUS 2026-09-13.** Owner approved the recommended minimum. K1–K5 kept,
+> **R1 reverted** (explore decay back to the round counter). **R2 was reverted
+> and then RESTORED the same day: the bench vetoed my own recommendation** —
+> see §2b. The branch now differs from `main` by R1 only, plus every KEEP item.
+> Open and unfixed: the residual `ready_at_query`, W3-N (`why` cannot be
+> recorded), W2-V (the missing handoff W2-Z still needs), R3/R4/R5.
+
 **One document, one branch, one decision list.** `convergence-plan.md` is the
 long-form record (now ~2,900 lines of queue and autopsies) and stays that. This
 is the short operational plan that supersedes the scattered proposals from
@@ -90,10 +97,21 @@ effectively off, and the round exploits what it knows.
 therefore explores at the opening rate forever.
 
 An exploratory probe *drops the patient profile and reaches for a brand-new
-on-topic value*. Trial 2 spent its back half probing `why` — which does not
-exist for an injury — at 67%, producing a fresh wrong guess every time (q22,
-q31–q34, all rejected by Gate 4), feeding the stall detector, feeding the
-restarts. **Nine restarts.**
+on-topic value*. Trial 2 spent its back half probing `why` at 67%, producing a
+fresh guess every time (q22, q31–q34), none of which stuck, feeding the stall
+detector, feeding the restarts. **Nine restarts.**
+
+> **Correction (owner, 09-13).** This section originally said `why` *"does not
+> exist"* for an injury. Wrong, and it sent the analysis in the wrong
+> direction. An injury has a `why` — *"I think I broke my wrist"* sits on a
+> full context (who: me · what: broken wrist · when: last week · where: on a
+> farm · **why: accident** · how: a horse bucked me off); it is simply less
+> important than the core slots. Checking the record against the correction
+> found the actual defect: **four of the six `why` questions never recorded a
+> `why` slot at all**, because a reason is phrased as a clause and slot
+> anchoring wants a noun. The slot could not be written to, so it never
+> filled, so it kept being chosen as the empty one. Filed as **W3-N**. R1
+> stands on its own evidence — the bench A/B — and is unaffected.
 
 The per-slot idea is *right* — the 09-11 complaint it fixed was real (the round
 looked settled while a slot knew nothing). The error is that it replaced the
@@ -171,6 +189,49 @@ as open, not fixed.
 **Weight of evidence.** Three rounds. This is veto-grade — enough to say "do
 not ship B" and "C is worth trialling" — and not an effect size. A wider
 scenario set is cheap to run and should precede any claim stronger than that.
+
+---
+
+## 2b. The bench vetoed R2 — my recommendation, not the owner's
+
+R2 (remove the W2-Z drill contract) was implemented on approval and benched as
+revision **D**. The only functional difference between C and D is that gate.
+
+| metric | A `main` | C `+R1` | **D `+R1 +R2`** |
+|---|---|---|---|
+| converged | 1/3 | **1/3** | **0/3** |
+| queries to converge | 24 | **11** | — |
+| gate rejections | 2.00 | **0.67** | **5.00** |
+| re-asks | 6 | **2** | **15** |
+| ready_at_query | 5 | 11 | **6** |
+| queries after ready | 19 | **0** | 19 |
+
+Removing a gate raising the gate-rejection count reads backwards until the
+mechanism is clear: **without W2-Z the bogus refinements are accepted.** "hand
+refines arm" enters the belief as real structure, the board is then wrong, and
+the round hits other gates harder downstream. The gate was doing more work than
+its two diagnostics in trial 2 suggested.
+
+So both hold at once, and they are not in tension:
+
+- W2-Z **prevents belief corruption** — measurable, and it is why C beats both
+  A and D.
+- W2-Z **has no fallback directive**, so a correct rejection can still kill a
+  round. That is W2-V, a missing handoff — not a reason to accept corrupt
+  structure in the meantime.
+
+**R2 is withdrawn.** Per §4, anything that benches worse than `main` does not
+ship; D does, C does not. The branch is back at C. Recorded here because the
+recommendation was mine, the owner approved it on my reasoning, and the
+measurement said otherwise — which is the whole point of having the gate.
+
+D's one genuine advantage is `ready_at_query` 6 against C's 11, close to
+`main`'s 5. That is evidence toward the §2a residue: **W2-Z is part of what
+delays the first offerable draft.** It does not justify removal — D wastes the
+next 19 questions where C wastes none — but it does aim W2-V at something
+specific. Worth noting that the mechanism differs from what I assumed: the
+gate is not merely *failing* sometimes, it is *costing early turns* every time
+it fires.
 
 ---
 

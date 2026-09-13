@@ -537,12 +537,21 @@ class Reasoner:
             # the frontier"; nothing checked that the value actually is
             # narrower, and dialogue.py stamps `drill_parent` on whatever comes
             # back. So a SIBLING or the PARENT ITSELF was recorded as a
-            # refinement of the parent — "leg refines arm" would have gone into
-            # the belief as structure. In the 09-12 round a drill of "arm"
-            # returned "hands" and then "arm"; both were caught only
-            # incidentally, by the repeat gate, because both had been asked.
+            # refinement of the parent — "hand refines arm" would go into the
+            # belief as structure. In the 09-12 round a drill of "arm" returned
+            # "hands" and then "arm"; both were caught only incidentally, by
+            # the repeat gate, because both had been asked.
             #
-            # The correction NAMES THE PARENT. Today's rejections say what not
+            # REVERTED ON 09-13 AND RESTORED THE SAME DAY. I recommended
+            # removing it because it has no fallback directive — a rejection
+            # with nowhere to go killed two rounds in the 09-12 trial — and the
+            # bench A/B disagreed: removing it took convergence 1/3 -> 0/3 and
+            # gate rejections 0.67 -> 5.00, because the bogus refinements it
+            # was blocking corrupt the board and the damage surfaces downstream.
+            # Both things are true. It stays, and it still needs W2-V; that is
+            # a missing handoff, not a reason to accept corrupt structure.
+            #
+            # The correction NAMES THE PARENT — today's rejections say what not
             # to do and never what to do, which is how the model ended up
             # cycling between two blocked moves (§1m).
             if directive == "drill" and focus in slots:

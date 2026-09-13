@@ -2167,11 +2167,26 @@ def test_explore_probability_decays_with_yeses(topics: list[Topic]) -> None:
     assert rnd._explore_probability(0) > rnd._explore_probability(4)  # decays
 
 
-async def test_a_slot_that_keeps_minting_values_keeps_exploring(
+async def test_exploration_winds_down_as_the_round_commits(
     topics: list[Topic],
 ) -> None:
-    # RNG pinned just under the initial rate. (min_yes is huge so the round
-    # never synthesizes.)
+    """R1 (owner, 09-13): the explore decay follows the ROUND, not the slot.
+
+    This test previously asserted the opposite — W2-X(a)'s property, that a
+    slot which keeps minting new contenders keeps exploring however long the
+    round has run. That property is why it was written, and it is exactly what
+    made the engine unable to settle: a slot with nothing in it has a depth of
+    0 forever, so it explores at the OPENING rate at question 38. Priced on the
+    09-12 board that is 0.6667 against 0.0003 (`scripts/explore_delta.py`), and
+    the bench A/B put convergence at 0/3 against main's 1/3.
+
+    The concern W2-X(a) was written for is real and is NOT addressed by this
+    revert: a round can look settled while one slot knows nothing. The form
+    that serves both — `decay ** (yeses + slot_depth + 1)`, where the round
+    term sets a ceiling the slot term can only lower — is a separate candidate
+    that has to earn its own bench A/B. Do not re-introduce the per-slot
+    argument alone without one.
+    """
     seen: list[bool] = []
     state = {"q": 0}
 
@@ -2203,17 +2218,19 @@ async def test_a_slot_that_keeps_minting_values_keeps_exploring(
         tuning=ReasoningTuning(explore_decay=2 / 3),
         rng=_FixedRandom(0.4),  # pinned just under the initial 0.667 rate
     )
-    await rnd.open()  # the focus slot knows nothing -> p=0.667 > 0.4 -> explore
+    await rnd.open()  # nothing confirmed yet -> p=0.667 > 0.4 -> explore
     assert seen[0] is True
-    # W2-X: the decay follows what the FOCUS SLOT knows, not how long the round
-    # has run — and this mock confirms a DIFFERENT value every turn, so the
-    # slot's leading family never accumulates however many yeses arrive. A slot
-    # that keeps producing new contenders has not converged, and exploration
-    # correctly stays on. Under the old round-level rule these same answers
-    # would have driven it to ~0, which is the §1i failure in miniature.
+    # Each yes raises the round's commitment, so the rate falls past the pinned
+    # RNG and exploration switches off — even though this mock confirms a
+    # DIFFERENT value every turn and no slot ever accumulates. That is the
+    # point: commitment is a property of the round, and a round that has taken
+    # several yeses should be narrowing rather than reaching for new material.
     while len(seen) < 4 and not rnd.is_terminal and rnd._pending is not None:
         await rnd.answer(Answer.YES)
-    assert all(seen), seen
+    assert seen[0] is True and not all(seen), seen
+    assert rnd._explore_probability(0) > rnd._explore_probability(len(seen)), (
+        "exploration must decay as the round accumulates yeses"
+    )
 
 
 def test_rejecting_the_placeholder_is_what_frees_the_starved_slot(

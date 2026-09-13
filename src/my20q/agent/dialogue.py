@@ -1265,10 +1265,27 @@ class Round:
         # old argument was the round's yes count, so by q32 of the 09-11 round
         # it had decayed to ~0 — at exactly the moment `where` still had no real
         # answer. The round looked settled; the slot did not.
-        depth = self._slot_confirmation_depth(board, focus)
+        # R1 REVERT (owner, 09-13) — back to the ROUND-level decay.
+        #
+        # W2-X(a) replaced the argument with a per-slot ratio. The idea was
+        # right and the complaint it fixed was real (a round can look settled
+        # while one slot knows nothing), but a per-slot ratio is 0 for an EMPTY
+        # slot however long the round has run — so an empty slot explores at
+        # the opening rate forever. Priced on the 09-12 trial-2 board that is
+        # 0.6667 against 0.0003, a 2217x increase at question 38
+        # (`scripts/explore_delta.py`), and the bench A/B says it costs the
+        # round: convergence 1/3 -> 0/3, draft not offerable until q14 against
+        # main's q5, re-asks +67%. Reverting this alone restores convergence
+        # and halves the questions (see rescue-plan-2026-09-12.md §2a).
+        #
+        # A form that keeps both terms — `decay ** (yeses + slot_depth + 1)`,
+        # where the round term sets a ceiling the slot term can only lower — is
+        # a SEPARATE candidate to bench on its own, deliberately not folded
+        # into a rescue.
+        yeses = self._yes_since_last_synth(seg)
         exploratory = (
-            directive == "probe"
-            and self._rng.random() < self._explore_probability(depth)
+            directive not in ("split",)
+            and self._rng.random() < self._explore_probability(yeses)
         )
         # Each asked entry carries its asserted slot categories so the repeat
         # gate can tell a same-anchor DRILL (new category) from a reword;
@@ -2240,6 +2257,32 @@ class Round:
         if len(seg) == len(self._history):  # no restart marker exists yet
             return False
         return not any(h.get("kind") == "query" and h.get("answer") for h in seg)
+
+    @staticmethod
+    def _yes_since_last_synth(seg: list[dict]) -> int:
+        """Count INFORMATIVE query yeses after the segment's last synthesis.
+
+        The argument to `_explore_probability`, restored with the R1 revert.
+        It was removed in the 09-11 simplification pass because W2-X(a) had
+        taken its last caller — which is worth recording as a caution: a
+        helper going unused can mean the mechanism that needed it was deleted,
+        not that it was dead.
+
+        A yes that merely re-confirmed an established leader carries no new
+        information and does not count (entries without the flag — older
+        recordings — count as informative).
+        """
+        n = 0
+        for h in reversed(seg):
+            if h.get("kind") == "synthesis":
+                break
+            if (
+                h.get("kind") == "query"
+                and h.get("answer") == Answer.YES.value
+                and h.get("informative", True)
+            ):
+                n += 1
+        return n
 
     def _consec_no_streak(self) -> int:
         """Consecutive 'no'-answered queries at the tail of the history.
