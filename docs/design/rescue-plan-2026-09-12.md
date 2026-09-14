@@ -42,6 +42,16 @@ plus seven merged PR branches nobody deleted, and one June relic. The mess is
 real but it is litter, not divergence. Clearing it is one command per branch
 and loses nothing.
 
+> **DONE 2026-09-13.** The repo now holds exactly **`main` and
+> `cockpit-shell`**. Worth recording that most of the litter was never on the
+> remote at all: GitHub had auto-deleted the merged PR branches, and my
+> `git branch -a` was listing *stale remote-tracking refs* — `git fetch
+> --prune` removed five of them without a single delete. Only three were real:
+> `augmented-reasoning` (tagged `archive/augmented-reasoning` first, so the
+> abandoned zoom work stays reachable forever), `phase2-cockpit`, and
+> `w2-board-refinements`. If a future listing looks alarming, prune before
+> concluding anything.
+
 ---
 
 ## 1. What the data says
@@ -285,6 +295,18 @@ test harness twice in one day. Before any further live round:
    real caregiver and the gap is structural. Only the **delta** between two
    revisions carries information, which is why both sides are run at the same
    seed, model and scenario set.
+
+   **"Wider scenario set" means bench breadth, not more live trials.** Every
+   number in §2a/§2b rests on three bench scenarios — `foot-pain`,
+   `rob-kitchen`, `call-daughter` — which is **two thirds `my_people`** and
+   covers two of the four high-level topics. That sampling bias is visible in
+   the result I leaned on: `who` dominating B's focus histogram (25 vs 9) is
+   partly just two `my_people` scenarios out of three. The bench ships nine
+   scenarios spanning `physical_health`, `mental_health`, `my_people` and
+   `general`; running all of them costs machine time and none of the owner's,
+   and should precede any claim stronger than a veto. Live trials stay for
+   what a bench cannot simulate — a real person's answers, the cockpit, and
+   whether the utterance is one they would actually say.
 2. **W2-AB replay harness** — feed recorded ANSWERS back through a live
    `Round` and report where the controller diverges. Trial 2's dominant failure
    was reproducible offline from trial 1's record in under a second; it cost a
