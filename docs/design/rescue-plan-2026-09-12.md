@@ -245,6 +245,85 @@ it fires.
 
 ---
 
+## 2c. The WIDE bench (2026-09-14) — and a correction to §2a
+
+All nine scenarios, both batches, same model and seed. Four topics:
+`physical_health` ×3, `my_people` ×3, `mental_health` ×2, `general` ×1.
+
+| scenario | A `main` | B pre-revert | C rescued |
+|---|---|---|---|
+| anxious-noise | ✓ 22 | ✗ 25 | **✓ 16** |
+| call-daughter | ✗ 14 | **✓ 6** | **✓ 9** |
+| cold | ✗ 25 | **✓ 19** | ✗ 25 |
+| foot-pain | ✗ 5 | ✗ 4 | **✓ 8** |
+| leg-laterality | ✗ 4 | ✗ 3 | ✗ 5 |
+| lonely | ✓ 3 | ✗ 25 | ✓ 11 |
+| move-picture | ✗ 8 | ✗ 2 | ✗ 20 |
+| rob-kitchen | ✗ 10 | ✗ 8 | ✗ 11 |
+| thirsty | ✓ 12 | ✓ 14 | ✗ 25 |
+| **converged** | **3/9** | **3/9** | **4/9** |
+
+### The correction: §2a's veto does not survive a proper sample
+
+§2a said *"B is vetoed"* on a 3-scenario run showing 1/3 against 0/3. **At nine
+scenarios A and B both converge 3/9**, and the aggregate says B is marginally
+*better* than `main`, not worse:
+
+```
+A main -> B pre-revert:  converged 3 -> 3   ready_at_query 14 -> 11
+                         diagnostics 2.22 -> 1.78   queries_after_ready 4 -> 1.5
+```
+
+I presented a 3-round result as if it settled the question, and it did not. The
+three scenarios I happened to pick (`foot-pain`, `rob-kitchen`,
+`call-daughter`) are two-thirds `my_people` and all three are ones `main` fails;
+on that slice the difference looked decisive and it was sampling.
+
+**What this does NOT overturn.** The R1 revert still stands, on the two things
+that were never bench-derived:
+
+1. **The live-trial record.** 09-09 and 09-10 on `main`'s policy: 3/4 and 1/2
+   rounds accepted, jobB 7.90 and 6.17. 09-12 on B: **0/3 accepted, 13
+   restarts, jobB 1.05.** That is the owner's real time and a real caregiver's
+   answers, not a simulator.
+2. **The mechanism.** `explore_delta.py`'s 2217× is computed from the recorded
+   board, not sampled — it is arithmetic about what the code does, and it does
+   not become less true at n=9.
+
+**What it does overturn** is my saying *"the bench confirms R1"*. It does not.
+The bench cannot separate these revisions, and I conflated "the bench agrees"
+with "the bench cannot tell", which are very different claims.
+
+### C is the best of the three, on the metric closest to the point
+
+```
+A main -> C rescued:  converged 3 -> 4      reached_ready 2 -> 4
+                      ready_at_query 14 -> 7.25   diagnostics 2.22 -> 1.44
+                      gate_rejections 4.33 -> 7.33   latency +536 ms
+```
+
+**`reached_ready` doubling is the strongest single result in the run.** The
+branch puts an acceptable draft in front of the caregiver in 4 of 9 rounds
+against `main`'s 2, and at question 7 instead of 14. That is nearer to what the
+tool is for than "converged" is — the caregiver accepts a draft, they do not
+grade a simulator. It costs more gate rejections, more clarifications, and half
+a second per question.
+
+### The gate in §4 needs amending, and this is why
+
+§4 says *"anything that benches worse than `main` does not ship"*. As written
+that is unusable: at n=3 it produced a confident wrong answer, and at n=9 the
+convergence counts of all three revisions sit within one of each other while
+landing on **different scenarios each time**. The metric is close to a coin
+flip per scenario at this sample size.
+
+Amended: **a bench veto requires the full nine-scenario set, and rests on the
+aggregate metrics (`reached_ready`, `ready_at_query`, `gate_rejections`,
+`diagnostics`) rather than the binary convergence count.** A convergence
+difference of ±1 at n=9 is not evidence of anything.
+
+---
+
 ## 3. The rescue — decision list
 
 One line per item. **Nothing here is implemented until the owner marks it.**
@@ -284,10 +363,18 @@ engine is working again** — not part of the rescue.
 Owner's time is the scarcest input in this project and it has been spent as a
 test harness twice in one day. Before any further live round:
 
-1. **Bench A/B** — `bench_reasoning.py --compare` between the candidate and
-   `main`. It is a good veto and a poor endorser (a "no effect" result is no
-   evidence; a "worse" result is evidence). Any candidate that benches worse
-   than `main` does not go to a trial.
+1. **Bench A/B, on the FULL nine-scenario set** —
+   `bench_reasoning.py --compare` between the candidate and `main`, run in two
+   batches per revision and merged with `scripts/merge_bench_json.py` (a
+   9-scenario run does not fit one background-task window).
+
+   **A veto rests on the aggregate metrics, not on the convergence count.**
+   §2c is the evidence: three revisions all landed 3–4 of 9, converging on
+   *different scenarios each time*, so ±1 convergence at n=9 means nothing. Use
+   `reached_ready`, `ready_at_query`, `gate_rejections` and `diagnostics`,
+   which aggregate over all nine rounds. **Never run fewer than the full set**
+   — §2a is a worked example of a 3-scenario run giving a confident wrong
+   answer.
 
    **How to read the absolute numbers: don't.** `main` itself benches 1/3
    converged at 24 queries, while the same engine took 3 of 4 rounds live on
