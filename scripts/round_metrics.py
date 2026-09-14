@@ -60,9 +60,10 @@ def main(paths: list[str]) -> None:
 
     print(
         f"{'date':<12}{'real':>5}{'acc':>5}{'aband':>6}"
-        f"{'med q':>7}{'diag':>6}{'restart':>8}{'chk':>5}{'clar':>6}{'jobB':>7}"
+        f"{'med q':>7}{'diag':>6}{'restart':>8}{'chk':>5}{'clar':>6}"
+        f"{'expl%':>7}{'jobB':>7}"
     )
-    print("-" * 67)
+    print("-" * 74)
     for d in sorted(by_day):
         # A 0-query round is a topic switch, not an attempt — it drags the
         # median to 0 and says nothing about the engine.
@@ -83,15 +84,25 @@ def main(paths: list[str]) -> None:
         acc = len([r for r in rs if r.get("outcome") == "synthesized"])
         aband = len([r for r in rs if r.get("outcome") == "abandoned"])
         jb = [r.get("job_b", 0.0) for r in rs]
+        # Recorded from 2026-09-14 only; earlier rounds read as 0% because the
+        # flag was never written, NOT because they never explored.
+        asked = sum(len([q for q in r["queries"] if q.get("kind") == "query"]) for r in rs)
+        expl = sum(
+            len([q for q in r["queries"] if q.get("exploratory")]) for r in rs
+        )
         print(
             f"{d:<12}{len(rs):>5}{acc:>5}{aband:>6}"
             f"{median(qs) if qs else 0:>7.0f}{diag:>6}{restarts:>8}"
-            f"{chk:>5}{clar:>6}{(sum(jb) / len(jb) if jb else 0):>7.2f}"
+            f"{chk:>5}{clar:>6}{(100 * expl / asked if asked else 0):>6.0f}%"
+            f"{(sum(jb) / len(jb) if jb else 0):>7.2f}"
         )
 
     print()
     print("acc = rounds the caregiver ACCEPTED (the only real success measure).")
     print("med q = median questions per round.  diag/restart/chk/clar = totals.")
+    print("expl% = share of questions that DROPPED THE PROFILE to guess fresh.")
+    print("        Instrumented 2026-09-14; earlier dates read 0% for lack of")
+    print("        the flag, not for lack of exploring.")
 
 
 if __name__ == "__main__":

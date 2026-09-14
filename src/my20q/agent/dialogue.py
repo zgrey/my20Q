@@ -380,6 +380,11 @@ class Round:
             entry["focus_requested"] = pending.focus_requested
         if pending.kind == "query" and pending.direction:
             entry["direction"] = pending.direction
+        # Whether this turn dropped the profile to reach for a new value. Only
+        # written when true, so it costs nothing on an ordinary entry and old
+        # recordings read as "not exploratory" rather than "unknown".
+        if pending.kind == "query" and pending.exploratory:
+            entry["exploratory"] = True
         if pending.kind == "query" and pending.flipped_from:
             entry["flipped_from"] = pending.flipped_from
         if pending.kind == "query" and pending.verify:
@@ -1336,6 +1341,8 @@ class Round:
         # nothing, and is simply honest bookkeeping: record the slot the
         # question actually asks about. The requested one is kept alongside so
         # the divergence stays measurable instead of being erased by its fix.
+        # Instrumentation only — nothing branches on it (see the field's note).
+        action.exploratory = exploratory
         requested = focus
         if action.kind == "query" and action.slots and focus not in action.slots:
             core = self._core_facets()

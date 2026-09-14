@@ -209,6 +209,12 @@ class ReasonerAction:
     #: never scored or added to the board, because a fragment nobody was asked
     #: about is not a text-anchored value (the Aaron rule).
     deferred_alternative: str = ""
+    #: This turn EXPLORED: the profile was dropped and the model asked to reach
+    #: for a brand-new value. Set by the controller, recorded on the entry, and
+    #: read by nothing — pure instrumentation. Added 09-14 because the 09-12
+    #: autopsy had to PRICE the explore rate from the board arithmetic
+    #: (`scripts/explore_delta.py`) when it should have been able to COUNT it.
+    exploratory: bool = False
     #: Autopsy instrumentation (W2-O) — per-phase milliseconds, LLM
     #: round-trips and gate attempts for the turn that produced this action.
     timings: dict = field(default_factory=dict)
